@@ -43,10 +43,12 @@ void CommandInput::setupUi()
     prompt->setObjectName(QStringLiteral("commandPrompt"));
 
     m_edit = new QLineEdit(this);
+    m_edit->setObjectName(QStringLiteral("commandEdit"));
     m_edit->setClearButtonEnabled(true);
     m_edit->installEventFilter(this);
 
     m_lineEndingCombo = new QComboBox(this);
+    m_lineEndingCombo->setObjectName(QStringLiteral("lineEndingCombo"));
     for (const LineEnding::Mode mode : LineEnding::allModes()) {
         m_lineEndingCombo->addItem(LineEnding::displayName(mode), static_cast<int>(mode));
     }
@@ -55,11 +57,14 @@ void CommandInput::setupUi()
     m_lineEndingCombo->setFocusPolicy(Qt::NoFocus);
 
     m_hexCheck = new QCheckBox(this);
+    m_hexCheck->setObjectName(QStringLiteral("hexCheck"));
     m_hexCheck->setFocusPolicy(Qt::NoFocus);
     m_escapeCheck = new QCheckBox(this);
+    m_escapeCheck->setObjectName(QStringLiteral("escapeCheck"));
     m_escapeCheck->setFocusPolicy(Qt::NoFocus);
 
     m_sendButton = new QPushButton(this);
+    m_sendButton->setObjectName(QStringLiteral("sendButton"));
     m_sendButton->setAutoDefault(false);
     m_sendButton->setDefault(false);
     m_sendButton->setFocusPolicy(Qt::NoFocus);

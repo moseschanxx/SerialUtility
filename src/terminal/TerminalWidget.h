@@ -38,7 +38,9 @@ class AnsiParser;
  *    strike, inverse, hidden, blink (rendered as normal - no timer).
  *
  * Input mapping (bytes sent; see docs/TERMINAL_EMULATION.md "Key mapping")
- *  - Enter/Return -> LineEnding::bytes(enterSends())   (default CR)
+ *  - Enter/Return -> LineEnding::bytes(enterSends())   (default CR; Mode::None, which means
+ *    "append nothing" for the line-mode CommandInput, falls back to CR here - an Enter key that
+ *    sends nothing is useless in a terminal). Shift+Enter -> LF.
  *  - Backspace -> 0x7F or 0x08 (backspaceSendsDelete()); Shift+Backspace sends the other one
  *  - Tab -> 0x09 (the widget must keep Tab: override focusNextPrevChild / event())
  *  - Esc -> 0x1B; Delete -> ESC[3~; Insert -> ESC[2~; Home -> ESC[H; End -> ESC[F
@@ -48,6 +50,10 @@ class AnsiParser;
  *  - Ctrl+A..Z -> 0x01..0x1A ; Ctrl+[ 0x1B ; Ctrl+\ 0x1C ; Ctrl+] 0x1D ; Ctrl+Space 0x00
  *  - Alt+<key> -> ESC + key bytes
  *  - Ctrl+Shift+C / Ctrl+Insert -> copySelection() ; Ctrl+Shift+V / Shift+Insert -> paste()
+ *  - Ctrl+Shift+<letter> is never claimed from the application's shortcut map: the main window's
+ *    actions (Hex View, Find, Send File, Clear, Replay Log, Quit, ...) stay reachable while the
+ *    terminal is connected and focused; a Ctrl+Shift+<letter> that no action uses is sent as the
+ *    Ctrl+<letter> control byte. Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, / F2 / F3 / F5 pass through too.
  *  - Ctrl+C with an active selection -> copy (and clear selection); without -> 0x03
  *  - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 -> zoom (font size) ; emits fontZoomed()
  *  - Text (incl. IME commit) -> encoded with the current encoding (QStringEncoder)
@@ -93,8 +99,9 @@ public:
     bool setEncoding(const QString& name);   ///< both decoder (parser) and encoder
     QString encoding() const;
     void setImplicitCr(bool on);
-    /// When true (disconnected), key presses are swallowed (no sendData) except
-    /// navigation/copy shortcuts; the cursor is drawn hollow.
+    /// When false (disconnected), key presses are swallowed (accepted, no sendData, never
+    /// propagated to the parent - Tab must not move the focus) except navigation/copy
+    /// shortcuts, pastes are dropped and DSR/DA replies are not sent; the cursor is drawn hollow.
     void setInputEnabled(bool on);
     bool inputEnabled() const;
 

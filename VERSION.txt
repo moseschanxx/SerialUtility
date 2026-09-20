@@ -8,3 +8,4 @@ V0.1.0
 	Send text or binary files with configurable pacing.
 	Session logging (raw / timestamped text / hex dump) and hex-dump view.
 	System log dock, About / Version dialogs, English + Simplified Chinese UI.
+	Automated GUI test suites (Qt Test, offscreen) for the terminal widget, session widget, main window and dialogs, next to the core unit tests.

@@ -24,14 +24,14 @@ class SystemLogViewer;
  *
  * MainWindow.ui defines the menu bar, tool bar, status bar and these actions (objectName):
  *   File:    actionNewSession (Ctrl+T), actionCloseSession (Ctrl+W), actionStartLogging,
- *            actionStopLogging, actionOpenLogFolder, actionReplayLog, actionStopReplay,
- *            actionQuit (Ctrl+Q)
- *   Session: actionConnect (F2), actionDisconnect (F3), actionClear (Ctrl+L),
- *            actionResetTerminal, actionSendFile (Ctrl+O), actionSendBreak,
+ *            actionStopLogging, actionOpenLogFolder, actionReplayLog (Ctrl+Shift+R),
+ *            actionStopReplay, actionQuit (Ctrl+Shift+Q)
+ *   Session: actionConnect (F2), actionDisconnect (F3), actionClear (Ctrl+Shift+L),
+ *            actionResetTerminal, actionSendFile (Ctrl+Shift+O), actionSendBreak,
  *            actionSyncTerminalSize, actionRefreshPorts (F5)
  *   Edit:    actionCopy (Ctrl+Shift+C), actionPaste (Ctrl+Shift+V), actionSelectAll,
- *            actionFind (Ctrl+F), actionQuickCommands, actionPreferences (Ctrl+,)
- *   View:    actionHexView (checkable, Ctrl+H), actionShowCommandInput (checkable),
+ *            actionFind (Ctrl+Shift+F), actionQuickCommands, actionPreferences (Ctrl+,)
+ *   View:    actionHexView (checkable, Ctrl+Shift+H), actionShowCommandInput (checkable),
  *            actionShowQuickCommands (checkable), actionSystemLog (checkable),
  *            actionZoomIn (Ctrl++), actionZoomOut (Ctrl+-), actionZoomReset (Ctrl+0),
  *            actionNextTab (Ctrl+Tab), actionPreviousTab (Ctrl+Shift+Tab)
@@ -39,6 +39,12 @@ class SystemLogViewer;
  *   Help:    actionAbout, actionVersion, actionHomepage
  * plus a central QTabWidget named tabWidget (movable, closable, document mode) with a "+"
  * corner button that creates a session.
+ *
+ * Shortcut rule: while a session is connected the terminal sends every bare Ctrl+<letter>
+ * to the device (Ctrl+C = 0x03, Ctrl+L = 0x0C, ...), so no menu action may use one. Actions
+ * that would clash use Ctrl+Shift+<letter> instead; Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, and
+ * the F-keys above are the only exceptions. TerminalWidget passes exactly these keys (and every
+ * Ctrl+Shift+<letter>) through to the application's shortcut map, even while connected.
  *
  * Behaviour:
  *  - Startup: restore geometry/state; if AppSettings::restoreLastPorts() reopen a tab per

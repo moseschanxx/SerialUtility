@@ -217,6 +217,9 @@ OSC strings are capped at 4096 characters (excess dropped).
 - Ctrl+A..Z → `0x01..0x1A`; Ctrl+[ `0x1B`; Ctrl+\ `0x1C`; Ctrl+] `0x1D`; Ctrl+Space `0x00`
 - Alt+<key> → `ESC` + key bytes
 - Ctrl+Shift+C / Ctrl+Insert → copy selection; Ctrl+Shift+V / Shift+Insert → paste
+- Ctrl+Shift+<letter> is left to the main window's actions (Hex View, Find, Send File, Clear,
+  Replay Log, Quit, ...) even while connected; one that no action uses is sent as the
+  Ctrl+<letter> control byte. Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, / F2 / F3 / F5 pass through too
 - Ctrl+C with an active selection → copy (and clear the selection); without → `0x03`
 - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 → zoom (font size); emits `fontZoomed()`
 - Text (incl. IME commit) → encoded with the current encoding (`QStringEncoder`)

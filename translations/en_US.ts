@@ -57,7 +57,7 @@
 <context>
     <name>CommandInput</name>
     <message>
-        <location filename="../src/ui/CommandInput.cpp" line="+96"/>
+        <location filename="../src/ui/CommandInput.cpp" line="+101"/>
         <source>Hex bytes, e.g. AA 55 0D</source>
         <translation>Hex bytes, e.g. AA 55 0D</translation>
     </message>
@@ -126,7 +126,7 @@
         <translation>unavailable</translation>
     </message>
     <message>
-        <location line="+182"/>
+        <location line="+193"/>
         <source>Port:</source>
         <translation>Port:</translation>
     </message>
@@ -509,6 +509,11 @@
         <translation>Replay a captured log file through the current session as if the device had sent it</translation>
     </message>
     <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+R</source>
+        <translation>Ctrl+Shift+R</translation>
+    </message>
+    <message>
         <location line="+8"/>
         <source>Stop Repla&amp;y</source>
         <translation>Stop Repla&amp;y</translation>
@@ -525,11 +530,31 @@
     </message>
     <message>
         <location line="+3"/>
-        <source>Ctrl+Q</source>
-        <translation>Ctrl+Q</translation>
+        <source>Ctrl+Shift+Q</source>
+        <translation>Ctrl+Shift+Q</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+42"/>
+        <source>Ctrl+Shift+L</source>
+        <translation>Ctrl+Shift+L</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Ctrl+Shift+O</source>
+        <translation>Ctrl+Shift+O</translation>
+    </message>
+    <message>
+        <location line="+77"/>
+        <source>Ctrl+Shift+F</source>
+        <translation>Ctrl+Shift+F</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Ctrl+Shift+H</source>
+        <translation>Ctrl+Shift+H</translation>
+    </message>
+    <message>
+        <location line="-187"/>
         <source>&amp;Connect</source>
         <translation>&amp;Connect</translation>
     </message>
@@ -569,12 +594,7 @@
         <translation>Clear the terminal screen and hex view</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+L</source>
-        <translation>Ctrl+L</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>&amp;Reset Terminal</source>
         <translation>&amp;Reset Terminal</translation>
     </message>
@@ -599,12 +619,7 @@
         <translation>Send a text or binary file to the device</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+O</source>
-        <translation>Ctrl+O</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Send &amp;Break</source>
         <translation>Send &amp;Break</translation>
     </message>
@@ -669,12 +684,7 @@
         <translation>&amp;Find...</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+F</source>
-        <translation>Ctrl+F</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>&amp;Quick Commands...</source>
         <translation>&amp;Quick Commands...</translation>
     </message>
@@ -719,12 +729,7 @@
         <translation>Show the raw RX/TX bytes as a hex dump</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+H</source>
-        <translation>Ctrl+H</translation>
-    </message>
-    <message>
-        <location line="+14"/>
+        <location line="+17"/>
         <source>Show Command &amp;Input</source>
         <translation>Show Command &amp;Input</translation>
     </message>
@@ -820,12 +825,12 @@
     </message>
     <message>
         <location filename="../src/ui/MainWindow.cpp" line="+99"/>
-        <location line="+310"/>
+        <location line="+311"/>
         <source>New Session (Ctrl+T)</source>
         <translation>New Session (Ctrl+T)</translation>
     </message>
     <message>
-        <location line="-53"/>
+        <location line="-54"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>Session %1 is still connected.
@@ -843,25 +848,25 @@ Close them anyway?</numerusform>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Close Session</source>
         <translation>Close Session</translation>
     </message>
     <message>
         <location line="+43"/>
-        <location line="+687"/>
+        <location line="+694"/>
         <source>System Log</source>
         <translation>System Log</translation>
     </message>
     <message>
-        <location line="-609"/>
-        <location line="+565"/>
+        <location line="-616"/>
+        <location line="+572"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-501"/>
+        <location line="-507"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>%n serial port found</numerusform>
@@ -900,7 +905,7 @@ Close them anyway?</numerusform>
         <translation>Logging to %1</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+96"/>
         <source>Connection state and line settings</source>
         <translation>Connection state and line settings</translation>
     </message>
@@ -1187,7 +1192,7 @@ Close them anyway?</numerusform>
 <context>
     <name>QuickCommandBar</name>
     <message>
-        <location filename="../src/ui/QuickCommandBar.cpp" line="+224"/>
+        <location filename="../src/ui/QuickCommandBar.cpp" line="+227"/>
         <source>All</source>
         <translation>All</translation>
     </message>
@@ -1203,7 +1208,7 @@ Close them anyway?</numerusform>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+112"/>
+        <location line="+113"/>
         <source>Click: send, middle-click or Alt+click: edit</source>
         <translation>Click: send, middle-click or Alt+click: edit</translation>
     </message>
@@ -1937,7 +1942,12 @@ Nothing is saved until you press OK.</translation>
         <translation>Log closed: %1 (%2 bytes)</translation>
     </message>
     <message>
-        <location line="+104"/>
+        <location line="+105"/>
+        <source>Replay: %1</source>
+        <translation>Replay: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>New Session</source>
         <translation>New Session</translation>
     </message>
@@ -1968,17 +1978,17 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+249"/>
+        <location line="+255"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>Log files (*.log *.txt);;All files (*)</translation>
     </message>
     <message>
-        <location line="-228"/>
+        <location line="-233"/>
         <source>(no port)</source>
         <translation>(no port)</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+36"/>
         <source>Sending %1...</source>
         <translation>Sending %1...</translation>
     </message>
@@ -2035,6 +2045,11 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+67"/>
+        <source>Disconnect from %1 before replaying a log file</source>
+        <translation>Disconnect from %1 before replaying a log file</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Replay Log File</source>
         <translation>Replay Log File</translation>
     </message>
@@ -2059,7 +2074,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Replay of %1 stopped</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>replaying %1</source>
         <translation>replaying %1</translation>
     </message>
@@ -2069,7 +2084,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Replaying %1...</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+26"/>
         <source>Replay Speed</source>
         <translation>Replay Speed</translation>
     </message>
@@ -2186,7 +2201,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1709"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1714"/>
         <source>&amp;Copy</source>
         <translation>&amp;Copy</translation>
     </message>

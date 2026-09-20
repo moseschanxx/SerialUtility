@@ -31,7 +31,11 @@ if(SU_BUILD_TESTS)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
 endif()
 
-qt_standard_project_setup()   # AUTOMOC / AUTOUIC / AUTORCC, CMAKE_INCLUDE_CURRENT_DIR
+qt_standard_project_setup()   # AUTOMOC / AUTOUIC, CMAKE_INCLUDE_CURRENT_DIR
+# qt_standard_project_setup() does not enable AUTORCC; resources/resources.qrc is listed as a
+# plain source of the executables (SerialUtility and the GUI tests), so it must be on for
+# :/icons/* to exist at run time.
+set(CMAKE_AUTORCC ON)
 
 # ---------------------------------------------------------------------------
 # Version header (git hash + project version)

@@ -168,11 +168,13 @@ void QuickCommandBar::setupUi()
     layout->setSpacing(4);
 
     m_groupCombo = new QComboBox(this);
+    m_groupCombo->setObjectName(QStringLiteral("groupCombo"));
     m_groupCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_groupCombo->setFocusPolicy(Qt::NoFocus);
     m_groupCombo->addItem(QString(), QString()); // "All" (text set in retranslate())
 
     m_buttonHost = new QWidget;
+    m_buttonHost->setObjectName(QStringLiteral("buttonHost"));
     m_buttonLayout = new QHBoxLayout(m_buttonHost);
     m_buttonLayout->setContentsMargins(0, 0, 0, 0);
     m_buttonLayout->setSpacing(2);
@@ -190,6 +192,7 @@ void QuickCommandBar::setupUi()
         new WheelToHorizontalFilter(m_scrollArea->horizontalScrollBar(), m_scrollArea));
 
     m_editButton = new QToolButton(this);
+    m_editButton->setObjectName(QStringLiteral("editButton"));
     m_editButton->setAutoRaise(true);
     m_editButton->setText(QStringLiteral("\u2699")); // gear
     m_editButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -324,6 +327,7 @@ void QuickCommandBar::rebuild()
         }
 
         auto* button = new QToolButton(m_buttonHost);
+        button->setObjectName(QStringLiteral("quickCommandButton"));
         button->setToolButtonStyle(Qt::ToolButtonTextOnly);
         button->setAutoRaise(true);
         button->setFocusPolicy(Qt::NoFocus);

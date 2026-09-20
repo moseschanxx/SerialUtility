@@ -91,6 +91,7 @@ void ConnectionBar::setupUi()
     // Port
     m_portLabel = new QLabel(this);
     m_portCombo = new QComboBox(this);
+    m_portCombo->setObjectName(QStringLiteral("portCombo"));
     m_portCombo->setMinimumWidth(kPortComboMinWidth);
     m_portCombo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
     m_portCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -98,6 +99,7 @@ void ConnectionBar::setupUi()
     m_portLabel->setBuddy(m_portCombo);
 
     m_refreshButton = new QToolButton(this);
+    m_refreshButton->setObjectName(QStringLiteral("refreshButton"));
     m_refreshButton->setAutoRaise(true);
     m_refreshButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
     m_refreshButton->setFocusPolicy(Qt::NoFocus);
@@ -105,6 +107,7 @@ void ConnectionBar::setupUi()
     // Baud
     m_baudLabel = new QLabel(this);
     m_baudCombo = new QComboBox(this);
+    m_baudCombo->setObjectName(QStringLiteral("baudCombo"));
     m_baudCombo->setEditable(true);
     m_baudCombo->setInsertPolicy(QComboBox::NoInsert);
     m_baudCombo->setValidator(new QIntValidator(kMinBaud, kMaxBaud, m_baudCombo));
@@ -117,6 +120,7 @@ void ConnectionBar::setupUi()
 
     // Data bits
     m_dataBitsCombo = new QComboBox(this);
+    m_dataBitsCombo->setObjectName(QStringLiteral("dataBitsCombo"));
     m_dataBitsCombo->addItem(QStringLiteral("5"), static_cast<int>(QSerialPort::Data5));
     m_dataBitsCombo->addItem(QStringLiteral("6"), static_cast<int>(QSerialPort::Data6));
     m_dataBitsCombo->addItem(QStringLiteral("7"), static_cast<int>(QSerialPort::Data7));
@@ -125,6 +129,7 @@ void ConnectionBar::setupUi()
 
     // Parity
     m_parityCombo = new QComboBox(this);
+    m_parityCombo->setObjectName(QStringLiteral("parityCombo"));
     m_parityCombo->addItem(QStringLiteral("N"), static_cast<int>(QSerialPort::NoParity));
     m_parityCombo->addItem(QStringLiteral("E"), static_cast<int>(QSerialPort::EvenParity));
     m_parityCombo->addItem(QStringLiteral("O"), static_cast<int>(QSerialPort::OddParity));
@@ -134,6 +139,7 @@ void ConnectionBar::setupUi()
 
     // Stop bits
     m_stopBitsCombo = new QComboBox(this);
+    m_stopBitsCombo->setObjectName(QStringLiteral("stopBitsCombo"));
     m_stopBitsCombo->addItem(QStringLiteral("1"), static_cast<int>(QSerialPort::OneStop));
     m_stopBitsCombo->addItem(QStringLiteral("1.5"), static_cast<int>(QSerialPort::OneAndHalfStop));
     m_stopBitsCombo->addItem(QStringLiteral("2"), static_cast<int>(QSerialPort::TwoStop));
@@ -142,6 +148,7 @@ void ConnectionBar::setupUi()
     // Flow control
     m_flowLabel = new QLabel(this);
     m_flowCombo = new QComboBox(this);
+    m_flowCombo->setObjectName(QStringLiteral("flowCombo"));
     m_flowCombo->addItem(QString(), static_cast<int>(QSerialPort::NoFlowControl)); // text set in retranslate()
     m_flowCombo->addItem(QStringLiteral("RTS/CTS"), static_cast<int>(QSerialPort::HardwareControl));
     m_flowCombo->addItem(QStringLiteral("XON/XOFF"), static_cast<int>(QSerialPort::SoftwareControl));
@@ -154,22 +161,26 @@ void ConnectionBar::setupUi()
 
     // Modem lines / break
     m_dtrButton = new QToolButton(this);
+    m_dtrButton->setObjectName(QStringLiteral("dtrButton"));
     m_dtrButton->setText(QStringLiteral("DTR"));
     m_dtrButton->setCheckable(true);
     m_dtrButton->setChecked(true);
     m_dtrButton->setFocusPolicy(Qt::NoFocus);
 
     m_rtsButton = new QToolButton(this);
+    m_rtsButton->setObjectName(QStringLiteral("rtsButton"));
     m_rtsButton->setText(QStringLiteral("RTS"));
     m_rtsButton->setCheckable(true);
     m_rtsButton->setChecked(true);
     m_rtsButton->setFocusPolicy(Qt::NoFocus);
 
     m_breakButton = new QToolButton(this);
+    m_breakButton->setObjectName(QStringLiteral("breakButton"));
     m_breakButton->setFocusPolicy(Qt::NoFocus);
 
     // Connect
     m_connectButton = new QPushButton(this);
+    m_connectButton->setObjectName(QStringLiteral("connectButton"));
     m_connectButton->setAutoDefault(false);
     m_connectButton->setDefault(false);
     m_connectButton->setFocusPolicy(Qt::NoFocus);

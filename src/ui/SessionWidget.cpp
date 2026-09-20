@@ -142,6 +142,7 @@ void SessionWidget::setupUi()
     m_bar = new ConnectionBar(this);
 
     m_stack = new QStackedWidget(this);
+    m_stack->setObjectName(QStringLiteral("viewStack"));
     m_terminal = new TerminalWidget(m_stack);
     m_hexView = new HexDumpView(m_stack);
     m_stack->addWidget(m_terminal);
@@ -202,6 +203,9 @@ SessionLogger* SessionWidget::logger() const
 
 QString SessionWidget::title() const
 {
+    if (isReplaying()) {
+        return tr("Replay: %1").arg(QFileInfo(m_replayer->options().filePath).fileName());
+    }
     const QString port = portName();
     return port.isEmpty() ? tr("New Session") : port;
 }
@@ -396,10 +400,9 @@ void SessionWidget::startLoggingTo(const QString& filePath)
 
     const AppSettings& s = AppSettings::instance();
     const SessionLogger::Format format = SessionLogger::formatFromString(s.logFormat());
+    // SessionLogger wraps this as "# BuildAI Serial Utility log - <port> <settings> - started <time>".
     const QString port = portName().isEmpty() ? tr("(no port)") : portName();
-    const QString header =
-        QStringLiteral("BuildAI Serial Utility log - %1 %2 - started %3")
-            .arg(port, m_connection->settings().summary(), QDateTime::currentDateTime().toString(Qt::ISODate));
+    const QString header = QStringLiteral("%1 %2").arg(port, m_connection->settings().summary());
 
     if (!m_logger->start(filePath, format, s.logIncludeTx(), header)) {
         // error() was emitted by the logger and is already shown in the status bar.
@@ -621,6 +624,13 @@ bool SessionWidget::isReplaying() const
 
 void SessionWidget::replayLogFile(const QString& path, qint64 bytesPerSecond)
 {
+    if (m_connection->state() != SerialConnection::State::Disconnected) {
+        // Replayed bytes would interleave with live device output; the user disconnects first.
+        emit statusMessage(tr("Disconnect from %1 before replaying a log file").arg(m_connection->portName()),
+                           kStatusLongMs);
+        return;
+    }
+
     QString file = path;
     if (file.isEmpty()) {
         file = QFileDialog::getOpenFileName(this, tr("Replay Log File"), AppSettings::instance().logDirectory(),
@@ -649,6 +659,7 @@ void SessionWidget::replayLogFile(const QString& path, qint64 bytesPerSecond)
             emit statusMessage(completed ? tr("Replay of %1 finished").arg(name) : tr("Replay of %1 stopped").arg(name),
                                kStatusShortMs);
             emit replayStateChanged(false);
+            emit titleChanged(title());   // back to the port name / "New Session"
         });
     }
     if (m_replayer->isRunning()) {
@@ -667,6 +678,7 @@ void SessionWidget::replayLogFile(const QString& path, qint64 bytesPerSecond)
     writeSystemLine(tr("replaying %1").arg(QDir::toNativeSeparators(file)));
     emit statusMessage(tr("Replaying %1...").arg(QFileInfo(file).fileName()), kStatusShortMs);
     emit replayStateChanged(true);
+    emit titleChanged(title());   // the tab shows the replayed file while it streams
     focusTerminal();
 }
 

@@ -50,9 +50,9 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 | Open another board in parallel | **Ctrl+T** new tab, **Ctrl+Tab** to switch |
 | Keep a boot log | *File > Start Logging* (or turn on auto-log in *Preferences > Logging*) |
 | Look at a log captured in the field | *File > Replay Log File...* (or `--replay boot.log --speed 1500000`) - rendered like the live session |
-| Paste a script without overrunning the console | *Session > Send File...* (**Ctrl+O**), text mode, 50 ms per line |
+| Paste a script without overrunning the console | *Session > Send File...* (**Ctrl+Shift+O**), text mode, 50 ms per line |
 | Send raw bytes | Command input in **HEX** mode (`AA 55 0D`) or a quick command with the HEX flag |
-| See exactly what goes over the wire | *View > Hex View* (**Ctrl+H**) |
+| See exactly what goes over the wire | *View > Hex View* (**Ctrl+Shift+H**) |
 | Change baud while connected | Just pick another value - it is applied to the open port |
 | Survive a board reboot | Nothing - auto-reconnect is on by default (amber tab dot while waiting) |
 | Add your own buttons | *Edit > Quick Commands...* - Add, set name / command / group / line ending, OK |
@@ -71,7 +71,9 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 
 ## 6. Shortcuts
 
-`Ctrl+T` new tab, `Ctrl+W` close, `F2`/`F3` connect/disconnect, `F5` rescan ports, `Ctrl+L` clear,
-`Ctrl+O` send file, `Ctrl+H` hex view, `Ctrl+F` find, `Ctrl+Shift+C/V` copy/paste,
-`Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences, `Ctrl+Q` quit.
-Everything else (Tab, arrows, Ctrl+letters, F-keys) goes to the device.
+`Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+Tab`/`Ctrl+Shift+Tab` next/previous tab, `F2`/`F3`
+connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear, `Ctrl+Shift+O` send file,
+`Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
+`Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,
+`Ctrl+Shift+Q` quit.
+Everything else (Tab, arrows, bare Ctrl+letters, F-keys) goes to the device.

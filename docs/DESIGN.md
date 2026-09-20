@@ -69,9 +69,10 @@ application `SerialUtility`. Per-user data (quick commands JSON, history) lives 
         ▲ AppSettings (QSettings façade)     ▲ SerialPortEnumerator (1 s poller)
 ```
 
-Two CMake targets: **`su_core`** (static lib: `src/app`, `src/core`, `src/terminal`
-minus `TerminalWidget`; links Core/Gui/SerialPort; used by tests) and
-**`SerialUtility`** (the app: widgets, dialogs, `TerminalWidget`, `main.cpp`).
+Three CMake targets: **`su_core`** (static lib: `src/app`, `src/core`, `src/terminal`
+minus `TerminalWidget`; links Core/Gui/SerialPort; used by the unit tests), **`su_app`**
+(static lib: `TerminalWidget`, every widget and dialog; linked by the GUI test suites) and
+**`SerialUtility`** (the app: `main.cpp` + `su_app` + resources).
 
 ### 4.1 Data flow
 
@@ -171,7 +172,11 @@ the selected baud rate. See the header for the exact command set. Unit tests:
 - High-rate output (1.5 Mbaud boot log ≈ 150 KB/s) must keep the UI responsive: parser
   work is O(bytes), repaints coalesced, hex view bounded, logger flushes but never fsyncs.
 - Keyboard-first: every action has a shortcut (listed in `MainWindow.h`); Tab is sent to
-  the device when the terminal has focus (never moves focus).
+  the device when the terminal has focus (never moves focus). Bare `Ctrl+<letter>` belongs
+  to the device while connected, so MainWindow actions never use one: Hex View, Find, Send
+  File, Clear, Replay Log and Quit are `Ctrl+Shift+<letter>` (H / F / O / L / R / Q). The
+  terminal leaves every `Ctrl+Shift+<letter>` plus `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+,`
+  and F2 / F3 / F5 to the application's shortcut map and claims everything else.
 
 ## 5. Build, run, test
 
@@ -186,8 +191,11 @@ the selected baud rate. See the header for the exact command set. Unit tests:
 Qt Creator: *File > Open File or Project* → `CMakeLists.txt`; choose the `Release` or
 `Debug` preset (kit "Desktop Qt 6.8.3 MSVC2022 64bit").
 
-Tests are Qt Test executables in `tests/` linked against `su_core`; run with
-`ctest --test-dir build/Release --output-on-failure`.
+Tests are Qt Test executables in `tests/`: unit suites linked against `su_core` and GUI suites
+(`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`) linked against
+`su_app`, driving the real widgets against the `SIM:` pseudo-ports. ctest runs every suite with
+`QT_QPA_PLATFORM=offscreen`, so they pass headless; run with
+`ctest --test-dir build/Release -C Release --output-on-failure`.
 
 ## 6. Implementation work packages
 

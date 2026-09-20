@@ -57,7 +57,7 @@
 <context>
     <name>CommandInput</name>
     <message>
-        <location filename="../src/ui/CommandInput.cpp" line="+96"/>
+        <location filename="../src/ui/CommandInput.cpp" line="+101"/>
         <source>Hex bytes, e.g. AA 55 0D</source>
         <translation>十六进制字节，例如 AA 55 0D</translation>
     </message>
@@ -126,7 +126,7 @@
         <translation>不可用</translation>
     </message>
     <message>
-        <location line="+182"/>
+        <location line="+193"/>
         <source>Port:</source>
         <translation>端口：</translation>
     </message>
@@ -507,6 +507,11 @@
         <translation>在当前会话中回放已捕获的日志文件，如同设备发送的一样</translation>
     </message>
     <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+R</source>
+        <translation>Ctrl+Shift+R</translation>
+    </message>
+    <message>
         <location line="+8"/>
         <source>Stop Repla&amp;y</source>
         <translation>停止回放(&amp;Y)</translation>
@@ -523,11 +528,31 @@
     </message>
     <message>
         <location line="+3"/>
-        <source>Ctrl+Q</source>
-        <translation>Ctrl+Q</translation>
+        <source>Ctrl+Shift+Q</source>
+        <translation>Ctrl+Shift+Q</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+42"/>
+        <source>Ctrl+Shift+L</source>
+        <translation>Ctrl+Shift+L</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Ctrl+Shift+O</source>
+        <translation>Ctrl+Shift+O</translation>
+    </message>
+    <message>
+        <location line="+77"/>
+        <source>Ctrl+Shift+F</source>
+        <translation>Ctrl+Shift+F</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Ctrl+Shift+H</source>
+        <translation>Ctrl+Shift+H</translation>
+    </message>
+    <message>
+        <location line="-187"/>
         <source>&amp;Connect</source>
         <translation>连接(&amp;C)</translation>
     </message>
@@ -567,12 +592,7 @@
         <translation>清除终端屏幕和十六进制视图</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+L</source>
-        <translation>Ctrl+L</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>&amp;Reset Terminal</source>
         <translation>重置终端(&amp;R)</translation>
     </message>
@@ -597,12 +617,7 @@
         <translation>向设备发送文本或二进制文件</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+O</source>
-        <translation>Ctrl+O</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Send &amp;Break</source>
         <translation>发送 Break(&amp;B)</translation>
     </message>
@@ -667,12 +682,7 @@
         <translation>查找(&amp;F)...</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+F</source>
-        <translation>Ctrl+F</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>&amp;Quick Commands...</source>
         <translation>快捷命令(&amp;Q)...</translation>
     </message>
@@ -717,12 +727,7 @@
         <translation>以十六进制转储方式显示原始收发字节</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+H</source>
-        <translation>Ctrl+H</translation>
-    </message>
-    <message>
-        <location line="+14"/>
+        <location line="+17"/>
         <source>Show Command &amp;Input</source>
         <translation>显示命令输入栏(&amp;I)</translation>
     </message>
@@ -818,12 +823,12 @@
     </message>
     <message>
         <location filename="../src/ui/MainWindow.cpp" line="+99"/>
-        <location line="+310"/>
+        <location line="+311"/>
         <source>New Session (Ctrl+T)</source>
         <translation>新建会话 (Ctrl+T)</translation>
     </message>
     <message>
-        <location line="-53"/>
+        <location line="-54"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>会话 %1 仍处于连接状态。
@@ -839,25 +844,25 @@ Close them anyway?</source>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Close Session</source>
         <translation>关闭会话</translation>
     </message>
     <message>
         <location line="+43"/>
-        <location line="+687"/>
+        <location line="+694"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-609"/>
-        <location line="+565"/>
+        <location line="-616"/>
+        <location line="+572"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-501"/>
+        <location line="-507"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -895,7 +900,7 @@ Close them anyway?</source>
         <translation>正在记录日志到 %1</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+96"/>
         <source>Connection state and line settings</source>
         <translation>连接状态和线路设置</translation>
     </message>
@@ -1182,7 +1187,7 @@ Close them anyway?</source>
 <context>
     <name>QuickCommandBar</name>
     <message>
-        <location filename="../src/ui/QuickCommandBar.cpp" line="+224"/>
+        <location filename="../src/ui/QuickCommandBar.cpp" line="+227"/>
         <source>All</source>
         <translation>全部</translation>
     </message>
@@ -1198,7 +1203,7 @@ Close them anyway?</source>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+112"/>
+        <location line="+113"/>
         <source>Click: send, middle-click or Alt+click: edit</source>
         <translation>单击：发送；中键单击或 Alt+单击：编辑</translation>
     </message>
@@ -1929,7 +1934,12 @@ Nothing is saved until you press OK.</source>
         <translation>日志已关闭：%1（%2 字节）</translation>
     </message>
     <message>
-        <location line="+104"/>
+        <location line="+105"/>
+        <source>Replay: %1</source>
+        <translation>回放：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>New Session</source>
         <translation>新建会话</translation>
     </message>
@@ -1960,17 +1970,17 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+249"/>
+        <location line="+255"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>日志文件 (*.log *.txt);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="-228"/>
+        <location line="-233"/>
         <source>(no port)</source>
         <translation>（无端口）</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+36"/>
         <source>Sending %1...</source>
         <translation>正在发送 %1...</translation>
     </message>
@@ -2027,6 +2037,11 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+67"/>
+        <source>Disconnect from %1 before replaying a log file</source>
+        <translation>回放日志文件前，请先断开与 %1 的连接</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Replay Log File</source>
         <translation>回放日志文件</translation>
     </message>
@@ -2051,7 +2066,7 @@ Nothing is saved until you press OK.</source>
         <translation>%1 回放已停止</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>replaying %1</source>
         <translation>正在回放 %1</translation>
     </message>
@@ -2061,7 +2076,7 @@ Nothing is saved until you press OK.</source>
         <translation>正在回放 %1...</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+26"/>
         <source>Replay Speed</source>
         <translation>回放速度</translation>
     </message>
@@ -2178,7 +2193,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1709"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1714"/>
         <source>&amp;Copy</source>
         <translation>复制(&amp;C)</translation>
     </message>

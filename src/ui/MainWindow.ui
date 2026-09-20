@@ -276,6 +276,9 @@
    <property name="toolTip">
     <string>Replay a captured log file through the current session as if the device had sent it</string>
    </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+R</string>
+   </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
    </property>
@@ -296,7 +299,7 @@
     <string>&amp;Quit</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+Q</string>
+    <string>Ctrl+Shift+Q</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -338,7 +341,7 @@
     <string>Clear the terminal screen and hex view</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+L</string>
+    <string>Ctrl+Shift+L</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -366,7 +369,7 @@
     <string>Send a text or binary file to the device</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+O</string>
+    <string>Ctrl+Shift+O</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -443,7 +446,7 @@
     <string>&amp;Find...</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+F</string>
+    <string>Ctrl+Shift+F</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -491,7 +494,7 @@
     <string>Show the raw RX/TX bytes as a hex dump</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+H</string>
+    <string>Ctrl+Shift+H</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>

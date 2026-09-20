@@ -114,8 +114,11 @@ bool isPassThroughShortcut(int key, Qt::KeyboardModifiers mods)
         if (!shift && (key == Qt::Key_T || key == Qt::Key_W || key == Qt::Key_Comma)) {
             return true;   // New session / Close session / Preferences
         }
-        if (shift && (key == Qt::Key_C || key == Qt::Key_V)) {
-            return true;   // Edit > Copy / Paste actions
+        if (shift && key >= Qt::Key_A && key <= Qt::Key_Z) {
+            // Ctrl+Shift+<letter>: main-window actions (Copy, Paste, Hex View, Find, Send File,
+            // Clear, Replay Log, Quit). When no action claims the key it comes back to
+            // keyPressEvent() and is sent as the Ctrl+<letter> control byte.
+            return true;
         }
     }
     return false;
@@ -1223,9 +1226,9 @@ bool TerminalWidget::event(QEvent* event)
 {
     if (event->type() == QEvent::ShortcutOverride) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
-        // Main-window actions (Ctrl+Shift+C/V, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+, F2/F3/F5...) keep
-        // working while the terminal has focus; everything else the terminal wants is claimed
-        // here so QAction shortcuts such as Ctrl+L or Ctrl+C cannot steal it.
+        // Main-window actions (Ctrl+Shift+<letter>, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+, F2/F3/F5...)
+        // keep working while the terminal has focus; everything else the terminal wants is
+        // claimed here so QAction shortcuts such as Ctrl+L or Ctrl+C cannot steal it.
         if (!isPassThroughShortcut(keyEvent->key(), keyEvent->modifiers())) {
             LocalAction action = localActionFor(keyEvent);
             if (action == LocalAction::CopyIfSelection && !hasSelection()) {
@@ -1290,9 +1293,11 @@ void TerminalWidget::keyPressEvent(QKeyEvent* event)
         event->accept();
         return;
     }
-    // (2) disconnected: swallow everything else
+    // (2) disconnected: swallow everything else. The event must be accepted, not ignored: an
+    //     ignored Tab/Backtab propagates to the parent widget, whose QWidget::event() runs the
+    //     focus-chain navigation and moves the focus away (DESIGN.md 4.7: Tab never does).
     if (!m_inputEnabled) {
-        event->ignore();
+        event->accept();
         return;
     }
     // (3)-(6) key -> bytes

@@ -91,6 +91,32 @@ The script imports the MSVC environment itself, so it works from any PowerShell,
 Useful switches: `-QtDir <prefix>` (or set `QT_ROOT`), `-Clean`, `-KeepGoing` (report every
 error), `-Jobs N`, `-VerboseBuild`.
 
+### Running the tests
+
+```powershell
+.\scripts\build.ps1 -Config Release -Test            # build everything, then ctest
+ctest --test-dir build\Release -C Release --output-on-failure            # re-run all suites
+ctest --test-dir build\Release -C Release -R tst_terminalwidget --output-on-failure   # one suite
+```
+
+There are two kinds of Qt Test suites under `tests/`:
+
+- **Unit tests** linked against `su_core` (`tst_hexutils`, `tst_lineending`, `tst_commandhistory`,
+  `tst_quickcommand`, `tst_charwidth`, `tst_terminalscreen`, `tst_ansiparser`,
+  `tst_serialsettings`, `tst_devicesimulator`, `tst_logreplayer`).
+- **GUI tests** linked against `su_app`, which drive the real widgets and dialogs
+  (`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`). They talk to the
+  built-in `SIM:` pseudo-ports, never to a real COM port, and they run **offscreen**: ctest sets
+  `QT_QPA_PLATFORM=offscreen` for every test, so no window appears and the suites also pass on a
+  headless CI runner. Each GUI suite uses its own QSettings scope (`BuildAI-Test` /
+  `SerialUtilityTest-<suite>`, INI format in a temporary directory) and a temporary log
+  directory, so running them never touches your real settings or logs. To run a suite by hand:
+
+```powershell
+$env:PATH = "D:\Qt\6.8.3\msvc2022_64\bin;$env:PATH"; $env:QT_QPA_PLATFORM = "offscreen"
+.\build\Release\tst_mainwindow.exe          # the test executables live in the build root
+```
+
 ### CMake presets (any platform)
 
 ```bash
@@ -185,7 +211,7 @@ stored at `AppSettings::dataDirectory()/quick_commands.json`.
 
 ### Sending a file
 
-*Session > Send File...* (**Ctrl+O**) or drop a file onto the terminal. **Text mode** sends the
+*Session > Send File...* (**Ctrl+Shift+O**) or drop a file onto the terminal. **Text mode** sends the
 file line by line, strips the file's own line endings and appends the chosen one, waiting
 (default 50 ms) between lines - the safe way to paste a shell script or a `setenv` block into a
 console that cannot keep up with a raw paste. **Binary mode** sends fixed-size chunks with a
@@ -208,11 +234,13 @@ the bytes too. Raw captures are streamed byte for byte; a timestamped text captu
 default logging format) is recognised from its first line: the `[timestamp] ` prefixes and the
 `TX> ` lines (your own input) are removed and every line ends in CR LF again. *File > Stop
 Replay* aborts. From the command line: `BuildAI-SerialUtility.exe --replay boot.log --speed 1500000`
-(`--speed 0` = as fast as possible). Replay works while disconnected - it never writes to the port.
+(`--speed 0` = as fast as possible). Replay only runs while the tab is disconnected - it never
+writes to the port, and a request while a port is open is refused in the status bar; while it
+streams, the tab is titled `Replay: <file>`.
 
 ### Hex view
 
-*View > Hex View* (**Ctrl+H**) replaces the terminal of the current tab with a timestamped
+*View > Hex View* (**Ctrl+Shift+H**) replaces the terminal of the current tab with a timestamped
 RX / TX hex dump. The view is bounded so it stays responsive during long sessions.
 
 ### Keyboard shortcuts
@@ -223,14 +251,15 @@ RX / TX hex dump. The view is bounded so it stays responsive during long session
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | F2 / F3 | Connect / disconnect |
 | F5 | Refresh port list |
-| Ctrl+L | Clear screen |
-| Ctrl+O | Send file... |
-| Ctrl+H | Toggle hex view |
+| Ctrl+Shift+L | Clear screen |
+| Ctrl+Shift+O | Send file... |
+| Ctrl+Shift+H | Toggle hex view |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste (plain Ctrl+C / Ctrl+V go to the device) |
-| Ctrl+F | Find in scrollback |
+| Ctrl+Shift+F | Find in scrollback |
+| Ctrl+Shift+R | Replay log file... |
 | Ctrl++ / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
 | Ctrl+, | Preferences |
-| Ctrl+Q | Quit |
+| Ctrl+Shift+Q | Quit |
 | Shift+PageUp / PageDown, mouse wheel | Scroll the scrollback |
 
 Everything else - Tab, arrows, Home / End, F-keys, Ctrl+letter - is sent to the device
@@ -250,9 +279,10 @@ MainWindow (tabs, menus, status bar, System Log dock)
 Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender)
 ```
 
-Two CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/terminal` minus the
-widget; UI-free, unit-tested) and `SerialUtility` (widgets, dialogs, `main.cpp`). Everything runs
-on the GUI thread; `QSerialPort` is asynchronous and rendering is coalesced to 16 ms.
+Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/terminal` minus the
+widget; UI-free, unit-tested), `su_app` (static library: every widget and dialog, linked by the
+GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources). Everything runs on the
+GUI thread; `QSerialPort` is asynchronous and rendering is coalesced to 16 ms.
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) - architecture, conventions, module contracts, work packages.
 - [`docs/TERMINAL_EMULATION.md`](docs/TERMINAL_EMULATION.md) - supported escape sequences and key mapping.
@@ -274,7 +304,7 @@ SerialUtility/
 │   │                   QuickCommandBar, HexDumpView, SystemLogViewer
 │   ├── dialogs/        About, Version, Preferences, QuickCommands, SendFile (.ui + .cpp)
 │   └── main.cpp
-├── tests/              Qt Test executables linked against su_core
+├── tests/              Qt Test suites: unit tests (su_core) and offscreen GUI tests (su_app)
 ├── translations/       en_US.ts, zh_CN.ts
 ├── resources/          icons, resources.qrc, resources.rc
 └── docs/               DESIGN.md, TERMINAL_EMULATION.md, QUICKSTART.md

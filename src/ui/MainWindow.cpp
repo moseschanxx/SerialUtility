@@ -355,7 +355,8 @@ bool MainWindow::confirmCloseSessions(const QList<SessionWidget*>& connected)
     if (connected.size() == 1) {
         text = tr("Session %1 is still connected.\nClose it anyway?").arg(names.first());
     } else {
-        text = tr("%n sessions are still connected (%1).\nClose them anyway?", nullptr, static_cast<int>(connected.size()))
+        text = tr("%n sessions are still connected (%1).\nClose them anyway?", nullptr,
+                  static_cast<int>(connected.size()))
                    .arg(names.join(QStringLiteral(", ")));
     }
 
@@ -492,6 +493,7 @@ void MainWindow::onSessionLoggingChanged(bool active, const QString& filePath)
         return;
     }
     qCInfo(lcUi) << "logging" << (active ? "started" : "stopped") << filePath;
+    updateTabAppearance(session);   // the tab tooltip shows "Logging to <file>" while active
     if (session == currentSession()) {
         updateActions();
         updateStatusBar();
@@ -981,10 +983,11 @@ QString MainWindow::formatBytes(quint64 bytes)
     if (bytes < kKiB) {
         return QStringLiteral("%1 B").arg(bytes);
     }
+    const double value = static_cast<double>(bytes);
     if (bytes < kMiB) {
-        return QStringLiteral("%1 KB").arg(QString::number(static_cast<double>(bytes) / static_cast<double>(kKiB), 'f', 1));
+        return QStringLiteral("%1 KB").arg(QString::number(value / static_cast<double>(kKiB), 'f', 1));
     }
-    return QStringLiteral("%1 MB").arg(QString::number(static_cast<double>(bytes) / static_cast<double>(kMiB), 'f', 2));
+    return QStringLiteral("%1 MB").arg(QString::number(value / static_cast<double>(kMiB), 'f', 2));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -996,10 +999,15 @@ void MainWindow::setupStatusBar()
     QStatusBar* bar = statusBar();
 
     m_statusConnection = new QLabel(bar);
+    m_statusConnection->setObjectName(QStringLiteral("statusConnectionLabel"));
     m_statusCounters = new QLabel(bar);
+    m_statusCounters->setObjectName(QStringLiteral("statusCountersLabel"));
     m_statusGrid = new QLabel(bar);
+    m_statusGrid->setObjectName(QStringLiteral("statusGridLabel"));
     m_statusEncoding = new QLabel(bar);
+    m_statusEncoding->setObjectName(QStringLiteral("statusEncodingLabel"));
     m_statusLogging = new QLabel(bar);
+    m_statusLogging->setObjectName(QStringLiteral("statusLoggingLabel"));
 
     for (QLabel* label : {m_statusConnection, m_statusCounters, m_statusGrid, m_statusEncoding, m_statusLogging}) {
         label->setContentsMargins(4, 0, 4, 0);

@@ -56,7 +56,8 @@ class LogReplayer;
  *
  * Title: portName when a port is selected (plus " *" while connected is NOT used; the tab
  * icon/colour conveys state instead - MainWindow reads isConnected()). "New Session" when
- * no port is selected.
+ * no port is selected. While a log replay runs the title is "Replay: <file name>" and
+ * titleChanged() is emitted when the replay starts and when it ends.
  *
  * Auto-log: when AppSettings::autoLog() is on, connectPort() starts a SessionLogger with
  * SessionLogger::suggestFileName(port, AppSettings::logDirectory()) using logFormat()/logIncludeTx().
@@ -117,7 +118,9 @@ public slots:
     /// Replay a captured log file (raw or SessionLogger text capture) through the terminal,
     /// hex view and logger as if the device sent it (core/LogReplayer.h). An empty `path`
     /// opens a file dialog; `bytesPerSecond` < 0 asks the user for the speed (LogReplayer::
-    /// standardSpeeds()), 0 = unlimited. Works while disconnected (it is RX only).
+    /// standardSpeeds()), 0 = unlimited. Only while disconnected: when the connection is
+    /// Connected or Reconnecting the request is refused with a statusMessage() (replayed
+    /// bytes would interleave with live device output).
     void replayLogFile(const QString& path = QString(), qint64 bytesPerSecond = -1);
     void stopReplay();
 
