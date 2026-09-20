@@ -127,9 +127,9 @@ su_set_compile_options(su_core)
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-set(SU_APP_SOURCES
-    src/main.cpp
-
+# su_app: every widget and dialog, as a static library so the GUI test executables can
+# link the real application code (tests/tst_terminalwidget, tst_sessionwidget, ...).
+set(SU_APP_LIB_SOURCES
     src/terminal/TerminalWidget.h
     src/terminal/TerminalWidget.cpp
 
@@ -164,7 +164,14 @@ set(SU_APP_SOURCES
     src/dialogs/SendFileDialog.h
     src/dialogs/SendFileDialog.cpp
     src/dialogs/SendFileDialog.ui
+)
 
+qt_add_library(su_app STATIC ${SU_APP_LIB_SOURCES})
+target_link_libraries(su_app PUBLIC su_core Qt6::Widgets)
+su_set_compile_options(su_app)
+
+set(SU_APP_SOURCES
+    src/main.cpp
     resources/resources.qrc
 )
 if(WIN32)
@@ -178,28 +185,35 @@ set_target_properties(SerialUtility PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER "ai.build.serialutility"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
-target_link_libraries(SerialUtility PRIVATE su_core Qt6::Widgets)
+target_link_libraries(SerialUtility PRIVATE su_app)
 su_set_compile_options(SerialUtility)
 
 # ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+set(SU_TRANSLATION_TARGETS SerialUtility)
+if(SU_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+    # GUI tests that exercise the language menu need the embedded .qm files too.
+    list(APPEND SU_TRANSLATION_TARGETS tst_mainwindow tst_dialogs)
+endif()
+
+# ---------------------------------------------------------------------------
 # Translations (embedded as resources under :/translations/<lang>.qm)
+# lupdate scans su_app + su_core + the executable; lrelease output is embedded into
+# every target listed in SU_TRANSLATION_TARGETS.
 # ---------------------------------------------------------------------------
 set(SU_TS_FILES
     translations/zh_CN.ts
     translations/en_US.ts
 )
-qt_add_translations(SerialUtility
+qt_add_translations(
+    TARGETS ${SU_TRANSLATION_TARGETS}
+    SOURCE_TARGETS su_app su_core SerialUtility
     TS_FILES ${SU_TS_FILES}
     RESOURCE_PREFIX "/translations"
     LUPDATE_OPTIONS -no-obsolete -locations relative)
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-if(SU_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
 
 # ---------------------------------------------------------------------------
 # Install / deploy  (cmake --install <build> --prefix <dist>)

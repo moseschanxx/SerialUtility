@@ -1,0 +1,11 @@
+# Normalise line endings: LF in the repository and in the working tree, except for
+# Windows-only scripts that cmd.exe / PowerShell read.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+*.qm  binary
