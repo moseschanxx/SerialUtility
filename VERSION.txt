@@ -1,0 +1,10 @@
+V0.1.0
+	Initial release of BuildAI Serial Utility.
+	Multi-tab serial terminal with VT100/ANSI emulation (colours, cursor control, scroll regions, scrollback).
+	Full serial parameter control: baud (incl. 1500000 for Rockchip), data bits, parity, stop bits, flow control, DTR/RTS, break.
+	Hot-plug aware port list with auto-reconnect when a board reboots or is re-plugged.
+	Line-mode command input with history, hex send, C-style escapes, and configurable line endings.
+	Quick-command bar with editable macros (Linux / U-Boot / MCU presets).
+	Send text or binary files with configurable pacing.
+	Session logging (raw / timestamped text / hex dump) and hex-dump view.
+	System log dock, About / Version dialogs, English + Simplified Chinese UI.

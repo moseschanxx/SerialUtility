@@ -1,0 +1,17 @@
+#pragma once
+
+// Generated from src/app/Version.h.in by CMake - do not edit the generated copy.
+
+#define APP_NAME                "@PROJECT_NAME@"
+#define APP_DISPLAY_NAME        "BuildAI Serial Utility"
+#define APP_ORGANIZATION        "BuildAI"
+#define APP_ORGANIZATION_DOMAIN "build.ai"
+#define APP_HOMEPAGE            "@PROJECT_HOMEPAGE_URL@"
+
+#define APP_VERSION             "@PROJECT_VERSION@"
+#define APP_VERSION_MAJOR       @PROJECT_VERSION_MAJOR@
+#define APP_VERSION_MINOR       @PROJECT_VERSION_MINOR@
+#define APP_VERSION_PATCH       @PROJECT_VERSION_PATCH@
+
+#define APP_GIT_HASH            "@APP_GIT_HASH@"
+#define APP_BUILD_DATE          "@APP_BUILD_DATE@"

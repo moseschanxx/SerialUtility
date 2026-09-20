@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "Win32",
+      "compileCommands": "${workspaceFolder}/build/Release/compile_commands.json",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/build/Release/generated",
+        "D:/Qt/6.8.3/msvc2022_64/include",
+        "D:/Qt/6.8.3/msvc2022_64/include/**"
+      ],
+      "defines": ["UNICODE", "_UNICODE", "NOMINMAX", "WIN32_LEAN_AND_MEAN"],
+      "compilerPath": "cl.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++20",
+      "intelliSenseMode": "windows-msvc-x64"
+    }
+  ],
+  "version": 4
+}

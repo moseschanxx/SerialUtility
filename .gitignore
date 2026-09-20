@@ -1,0 +1,26 @@
+# Build outputs
+build/
+dist/
+out/
+*.qm
+*.autosave
+
+# IDE / editor state
+CMakeLists.txt.user*
+CMakeUserPresets.json
+.qtcreator/
+.vs/
+.idea/
+*.swp
+*~
+
+# Generated
+src/app/Version.h
+compile_commands.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

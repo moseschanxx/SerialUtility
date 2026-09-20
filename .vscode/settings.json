@@ -1,0 +1,15 @@
+{
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "editor.formatOnSave": false,
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/Release/compile_commands.json",
+  "cmake.configureOnOpen": false,
+  "cmake.useCMakePresets": "always",
+  "files.associations": {
+    "*.ui": "xml",
+    "*.ts": "xml",
+    "*.qrc": "xml"
+  }
+}

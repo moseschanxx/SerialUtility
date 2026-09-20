@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>PreferencesDialog</class>
+ <widget class="QDialog" name="PreferencesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>560</width>
+    <height>460</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Preferences</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QTabWidget" name="tabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="tabTerminal">
+      <attribute name="title">
+       <string>Terminal</string>
+      </attribute>
+      <layout class="QFormLayout" name="terminalForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="fontLabel">
+         <property name="text">
+          <string>Font:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <layout class="QHBoxLayout" name="fontLayout">
+         <item>
+          <widget class="QLabel" name="fontPreviewLabel">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="frameShape">
+            <enum>QFrame::Shape::StyledPanel</enum>
+           </property>
+           <property name="text">
+            <string>Consolas 10</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="fontButton">
+           <property name="text">
+            <string>Choose...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="themeLabel">
+         <property name="text">
+          <string>Colour theme:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QComboBox" name="themeCombo"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="scrollbackLabel">
+         <property name="text">
+          <string>Scrollback lines:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QSpinBox" name="scrollbackSpin">
+         <property name="minimum">
+          <number>100</number>
+         </property>
+         <property name="maximum">
+          <number>1000000</number>
+         </property>
+         <property name="singleStep">
+          <number>1000</number>
+         </property>
+         <property name="value">
+          <number>10000</number>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QCheckBox" name="cursorBlinkCheck">
+         <property name="text">
+          <string>Blinking cursor</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QCheckBox" name="bellCheck">
+         <property name="text">
+          <string>Bell on BEL (0x07)</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="1">
+        <widget class="QCheckBox" name="implicitCrCheck">
+         <property name="toolTip">
+          <string>Treat a bare line feed as CR+LF. Fixes &quot;staircase&quot; output from MCU firmware that only sends \n.</string>
+         </property>
+         <property name="text">
+          <string>Implicit carriage return on line feed</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tabInput">
+      <attribute name="title">
+       <string>Input</string>
+      </attribute>
+      <layout class="QFormLayout" name="inputForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="enterSendsLabel">
+         <property name="text">
+          <string>Enter sends:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QComboBox" name="enterSendsCombo"/>
+       </item>
+       <item row="1" column="1">
+        <widget class="QCheckBox" name="backspaceDeleteCheck">
+         <property name="toolTip">
+          <string>Checked: Backspace sends DEL (0x7F), as Linux consoles expect. Unchecked: BS (0x08).</string>
+         </property>
+         <property name="text">
+          <string>Backspace sends DEL (0x7F) instead of BS (0x08)</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QCheckBox" name="localEchoCheck">
+         <property name="text">
+          <string>Local echo of typed characters</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="encodingLabel">
+         <property name="text">
+          <string>Text encoding:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QComboBox" name="encodingCombo"/>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tabConnection">
+      <attribute name="title">
+       <string>Connection</string>
+      </attribute>
+      <layout class="QFormLayout" name="connectionForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="defaultBaudLabel">
+         <property name="text">
+          <string>Default baud rate:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QComboBox" name="defaultBaudCombo">
+         <property name="editable">
+          <bool>true</bool>
+         </property>
+         <property name="insertPolicy">
+          <enum>QComboBox::InsertPolicy::NoInsert</enum>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="defaultDataBitsLabel">
+         <property name="text">
+          <string>Data bits:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QComboBox" name="defaultDataBitsCombo"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="defaultParityLabel">
+         <property name="text">
+          <string>Parity:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QComboBox" name="defaultParityCombo"/>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="defaultStopBitsLabel">
+         <property name="text">
+          <string>Stop bits:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QComboBox" name="defaultStopBitsCombo"/>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="defaultFlowLabel">
+         <property name="text">
+          <string>Flow control:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QComboBox" name="defaultFlowCombo"/>
+       </item>
+       <item row="5" column="1">
+        <widget class="QCheckBox" name="dtrCheck">
+         <property name="text">
+          <string>Assert DTR after connecting</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="1">
+        <widget class="QCheckBox" name="rtsCheck">
+         <property name="text">
+          <string>Assert RTS after connecting</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="1">
+        <widget class="QCheckBox" name="autoReconnectCheck">
+         <property name="toolTip">
+          <string>Re-open the port automatically when the device disappears (board reboot, USB re-plug).</string>
+         </property>
+         <property name="text">
+          <string>Reconnect automatically when the port disappears</string>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="0">
+        <widget class="QLabel" name="reconnectIntervalLabel">
+         <property name="text">
+          <string>Reconnect interval:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="1">
+        <widget class="QSpinBox" name="reconnectIntervalSpin">
+         <property name="suffix">
+          <string> ms</string>
+         </property>
+         <property name="minimum">
+          <number>200</number>
+         </property>
+         <property name="maximum">
+          <number>60000</number>
+         </property>
+         <property name="singleStep">
+          <number>100</number>
+         </property>
+         <property name="value">
+          <number>1000</number>
+         </property>
+        </widget>
+       </item>
+       <item row="9" column="1">
+        <widget class="QCheckBox" name="showSimulatedPortsCheck">
+         <property name="toolTip">
+          <string>List the built-in simulated devices (SIM:loopback, SIM:linux, SIM:uboot, SIM:mcu) in the port list so the tool can be tried without hardware.</string>
+         </property>
+         <property name="text">
+          <string>Show simulated devices (SIM:...) in the port list</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tabLogging">
+      <attribute name="title">
+       <string>Logging</string>
+      </attribute>
+      <layout class="QFormLayout" name="loggingForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="logDirLabel">
+         <property name="text">
+          <string>Log directory:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <layout class="QHBoxLayout" name="logDirLayout">
+         <item>
+          <widget class="QLineEdit" name="logDirEdit"/>
+         </item>
+         <item>
+          <widget class="QPushButton" name="logDirBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="1" column="1">
+        <widget class="QCheckBox" name="autoLogCheck">
+         <property name="text">
+          <string>Start logging automatically when a session connects</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="logFormatLabel">
+         <property name="text">
+          <string>Log format:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QComboBox" name="logFormatCombo"/>
+       </item>
+       <item row="3" column="1">
+        <widget class="QCheckBox" name="logIncludeTxCheck">
+         <property name="text">
+          <string>Include transmitted data (text and hex formats)</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tabGeneral">
+      <attribute name="title">
+       <string>General</string>
+      </attribute>
+      <layout class="QFormLayout" name="generalForm">
+       <item row="0" column="1">
+        <widget class="QCheckBox" name="confirmCloseCheck">
+         <property name="text">
+          <string>Ask before closing a connected session</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QCheckBox" name="restoreSessionsCheck">
+         <property name="text">
+          <string>Reopen the previous session tabs on start</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Orientation::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::StandardButton::Apply|QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Ok|QDialogButtonBox::StandardButton::RestoreDefaults</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
