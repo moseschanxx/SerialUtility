@@ -66,6 +66,7 @@ private slots:
     void utf8SplitAcrossFeeds();
     void invalidUtf8();
     void truncatedUtf8AtChunkBoundary();
+    void invalidUtf8ChunkEquivalence();
     void encodings();
     void sgrAttributes();
     void sgrColours();
@@ -83,9 +84,13 @@ private slots:
     void escSequences();
     void softReset();
     void alignmentPattern();
+    void decSpecialGraphics();
     void unknownSequencesIgnored_data();
     void unknownSequencesIgnored();
     void garbageNeverDesyncs();
+    void nonAsciiAbortsSequence_data();
+    void nonAsciiAbortsSequence();
+    void controlStringGarbageRecovers();
     void parserReset();
     void wideCharacters();
     void wrapAndScrollback();
@@ -198,7 +203,7 @@ void Tst_ansiparser::controlCharacters()
     QCOMPARE(t.row(0), u"aX"_s);
     QCOMPARE(t.cursorCol(), 2);
 
-    // NUL, ENQ, SO, SI, XON, XOFF are ignored.
+    // NUL, ENQ, XON, XOFF are ignored; SO/SI select G1/G0, and with both ASCII nothing changes.
     t.feed(QByteArray("\0\005\016\017\021\023", 6));
     QCOMPARE(t.row(0), u"aX"_s);
     QCOMPARE(t.cursorCol(), 2);
@@ -287,6 +292,16 @@ void Tst_ansiparser::sequenceSplitAcrossFeeds()
     QVERIFY(z.attr.has(Underline));
     QCOMPARE(z.attr.fg, Color::rgb(10, 20, 30));
     QCOMPARE(z.attr.bg, Color::indexed(99));
+
+    // A CSI cut off by non-ASCII text arriving in a later feed: the sequence is abandoned (the
+    // collected "3" is never applied as SGR 3) and the text is printed.
+    t.feed("\033[3");
+    t.feed("\xE4\xB8\xAD");
+    t.feed("ok");
+    QVERIFY(t.row(1).endsWith(u"Z中ok"_s));
+    QCOMPARE(t.cursorCol(), 7);
+    QCOMPARE(t.screen.currentAttributes(), z.attr);
+    QVERIFY(!t.screen.currentAttributes().has(Italic));
 }
 
 void Tst_ansiparser::utf8SplitAcrossFeeds()
@@ -410,6 +425,127 @@ void Tst_ansiparser::truncatedUtf8AtChunkBoundary()
     t.feed("\x80");
     QCOMPARE(t.cell(1, 0).ch, char32_t(0x1F600));
     QCOMPARE(t.cursorCol(), 2);
+
+    // A corrupted multi-byte character directly before a character that straddles the chunk
+    // boundary: the decoder must not be handed the truncated prefix (it would swallow the
+    // pending lead byte). Chunked and whole feeds must agree.
+    struct Case
+    {
+        QByteArray a, b;
+    } cases[] = {
+        {"\x41\xE4\xB8\xC3", "\xA9\x42"},         // -> "A" U+FFFD U+FFFD e-acute "B"
+        {"\xC3\xE4\xB8", "\xAD\x42"},             // -> U+FFFD U+4E2D "B"
+        {"\xF0\x9F\x98\xF0", "\x9F\x98\x80\x42"}, // -> U+FFFD x3 U+1F600 "B"
+        {"\xC2\xF0\xC1\xE0\x5A", ""},             // chain of cut-off leads: 4 x U+FFFD "Z"
+        {"\x80\xEF\xF0\xC2\xE4\xED\xE0", "\x5A"}, // chain reaching back over several leads: 'Z' survives
+        {"\xE4\xB8\xAD\xC3", "\xA9"},             // complete character right before the split stays intact
+    };
+    for (const Case& c : cases) {
+        Term chunked(2, 40);
+        Term whole(2, 40);
+        chunked.feed(c.a);
+        chunked.feed(c.b);
+        whole.feed(c.a + c.b);
+        QCOMPARE(chunked.row(0), whole.row(0));
+        QCOMPARE(chunked.cursorCol(), whole.cursorCol());
+    }
+    {
+        Term c0(2, 40);
+        c0.feed(cases[0].a);
+        c0.feed(cases[0].b);
+        QCOMPARE(c0.row(0), u"A"_s + kReplacement + kReplacement + u"éB"_s);
+        Term c1(2, 40);
+        c1.feed(cases[1].a);
+        c1.feed(cases[1].b);
+        QCOMPARE(c1.row(0), QString(kReplacement) + u"中B"_s);
+        Term c2(2, 40);
+        c2.feed(cases[2].a);
+        c2.feed(cases[2].b);
+        QCOMPARE(c2.row(0), QString(3, kReplacement) + QString::fromUcs4(U"\U0001F600B"));
+        Term c3(2, 40);
+        c3.feed(cases[3].a);
+        QCOMPARE(c3.row(0), QString(4, kReplacement) + u"Z"_s);
+        Term c5(2, 40);
+        c5.feed(cases[5].a);
+        c5.feed(cases[5].b);
+        QCOMPARE(c5.row(0), u"中é"_s);
+    }
+}
+
+void Tst_ansiparser::invalidUtf8ChunkEquivalence()
+{
+    // Invalid UTF-8 directly before a character that straddles a chunk boundary: the screen
+    // (text, cursor and every cell) must not depend on where the stream was cut. Each case is
+    // fed whole, as the two given chunks, and one byte per feed. The whole-feed result is pinned
+    // as well so the comparison cannot pass vacuously.
+    struct Case
+    {
+        QByteArray a, b;
+    };
+    const Case cases[] = {
+        {"\x41\xE4\xB8\xC3", "\xA9\x42"},         // "A" U+FFFD.. e-acute "B"
+        {"\xC3\xE4\xB8", "\xAD\x42"},             // U+FFFD.. U+4E2D "B"
+        {"\xF0\x9F\x98\xF0", "\x9F\x98\x80\x42"}, // U+FFFD.. U+1F600 "B"
+    };
+    const auto compare = [](const Term& chunked, const Term& whole) {
+        QCOMPARE(chunked.row(0), whole.row(0));
+        QCOMPARE(chunked.cursorCol(), whole.cursorCol());
+        QCOMPARE(chunked.cursorRow(), whole.cursorRow());
+        QVERIFY(chunked.screen.line(0).cells == whole.screen.line(0).cells);
+    };
+    for (const Case& c : cases) {
+        const QByteArray all = c.a + c.b;
+        Term whole(3, 20);
+        whole.feed(all);
+
+        Term chunked(3, 20);
+        chunked.feed(c.a);
+        chunked.feed(c.b);
+        compare(chunked, whole);
+
+        Term bytewise(3, 20);
+        for (const char ch : all) {
+            bytewise.feed(QByteArray(1, ch));
+        }
+        compare(bytewise, whole);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+    }
+
+    // Pin the whole-feed results.
+    {
+        Term w(3, 20);
+        w.feed(cases[0].a + cases[0].b);
+        const QString r = w.row(0);
+        QVERIFY(r.startsWith(u'A'));
+        QVERIFY(r.endsWith(u"éB"_s));
+        QVERIFY(allReplacement(r.mid(1, r.size() - 3)));
+    }
+    {
+        Term w(3, 20);
+        w.feed(cases[1].a + cases[1].b);
+        const QString r = w.row(0);
+        QVERIFY(r.endsWith(u"中B"_s));
+        QVERIFY(allReplacement(r.left(r.size() - 2)));
+    }
+    {
+        Term w(3, 20);
+        w.feed(cases[2].a + cases[2].b);
+        const QString r = w.row(0);
+        QVERIFY(r.endsWith(u'B'));
+        // The replacement run occupies one cell each; the emoji follows it as a wide character.
+        int k = 0;
+        while (k < 20 && w.cell(0, k).ch == char32_t(0xFFFD)) {
+            ++k;
+        }
+        QVERIFY(k >= 1);
+        QCOMPARE(w.cell(0, k).ch, char32_t(0x1F600));
+        QVERIFY(w.cell(0, k).attr.has(WideLead));
+        QVERIFY(w.cell(0, k + 1).isWideTrail());
+        QCOMPARE(w.cell(0, k + 2).ch, U'B');
+        QCOMPARE(w.cursorCol(), k + 3);
+    }
 }
 
 void Tst_ansiparser::encodings()
@@ -611,6 +747,14 @@ void Tst_ansiparser::sgrEdgeCases()
     t.feed("\033[0;1:2:3:4:5:6:7:8:9:10:11:12mJ");
     QCOMPARE(t.cell(0, 9).ch, U'J');
     QCOMPARE(t.cursorCol(), 10);
+
+    // Sub-parameter overflow followed by ';' must not synthesize a 0 (SGR reset): the
+    // parameters collected before the overflow stay in effect, the rest is ignored.
+    t.feed("\033[0mK\033[1;4:1:2:3:4:5:6:7:8:9;31mX");
+    QCOMPARE(t.cell(0, 11).ch, U'X');
+    QCOMPARE(t.cell(0, 11).attr.flags, quint16(Bold | Underline));
+    QVERIFY(t.cell(0, 11).attr.fg.isDefault()); // "31" after the overflow is dropped, not applied
+    QCOMPARE(t.cursorCol(), 12);
 }
 
 // ---- Cursor / erase / edit ----------------------------------------------------------------
@@ -689,6 +833,14 @@ void Tst_ansiparser::cursorMovement()
     t.feed("\033[7;7H\033[s\033[1;1H\033[u");
     QCOMPARE(t.cursorRow(), 6);
     QCOMPARE(t.cursorCol(), 6);
+
+    // CUU from below a scroll region stops at its top margin; CUD from above stops at its
+    // bottom margin (xterm CursorUp/CursorDown).
+    Term u(24, 20);
+    u.feed("\033[3;6r\033[8;1H\033[20A");
+    QCOMPARE(u.cursorRow(), 2);
+    u.feed("\033[1;1H\033[20B");
+    QCOMPARE(u.cursorRow(), 5);
 }
 
 void Tst_ansiparser::eraseSequences()
@@ -976,6 +1128,30 @@ void Tst_ansiparser::alternateScreen()
     QCOMPARE(t.cursorRow(), 0); // 1049 restores the cursor
     QCOMPARE(t.cursorCol(), 7);
 
+    // Redundant ?1049l on the primary screen still restores the saved cursor (xterm).
+    t.feed("\033[2;3H\033[?1049h\033[?1049l\033[4;5H\033[?1049l");
+    QVERIFY(!t.screen.alternateScreenActive());
+    QCOMPARE(t.cursorRow(), 1);
+    QCOMPARE(t.cursorCol(), 2);
+    QCOMPARE(t.row(0), u"primary"_s); // primary contents untouched
+
+    // Redundant ?1049h while already on the alternate screen saves the cursor
+    // (alternate slot) and clears the stale contents without moving the cursor.
+    t.feed("\033[?1049h\033[Hstale\033[2;4H\033[?1049h");
+    QVERIFY(t.screen.alternateScreenActive());
+    QVERIFY(t.row(0).isEmpty());
+    QCOMPARE(t.cursorRow(), 1);
+    QCOMPARE(t.cursorCol(), 3);
+    t.feed("\033[3;1H\033[?1048l"); // DECRC-equivalent restores the alt-slot save
+    QCOMPARE(t.cursorRow(), 1);
+    QCOMPARE(t.cursorCol(), 3);
+    t.feed("\033[?1049l");
+    QVERIFY(!t.screen.alternateScreenActive());
+    QCOMPARE(t.row(0), u"primary"_s);
+    QCOMPARE(t.cursorRow(), 1); // primary slot saved by the first ?1049h of this block
+    QCOMPARE(t.cursorCol(), 2);
+    t.feed("\033[1;8H"); // back to where the first ?1049l left the cursor for the ?47 checks
+
     t.feed("\033[?47h");
     QVERIFY(t.screen.alternateScreenActive());
     t.feed("x");
@@ -1103,6 +1279,15 @@ void Tst_ansiparser::oscTitle()
     // A title with ';' in it keeps everything after the first separator.
     t.feed("\033]0;a;b;c\007");
     QCOMPARE(t.screen.title(), u"a;b;c"_s);
+
+    // An over-long OSC is capped: the string collects at most 4096 code points including the
+    // "0;" prefix (so 4094 of the title), the excess is dropped and the terminator is still
+    // honoured, so the text after it is printed.
+    t.feed("\033]0;" + QByteArray(5000, 'x') + "\007after");
+    QCOMPARE(t.screen.title().size(), 4096 - 2);
+    QVERIFY(t.screen.title() == QString(4096 - 2, u'x'));
+    QVERIFY(t.row(0).endsWith(u"after"_s));
+    QCOMPARE(t.cursorCol(), 9);
 }
 
 // ---- ESC sequences and resets -------------------------------------------------------------
@@ -1128,7 +1313,8 @@ void Tst_ansiparser::escSequences()
     t.feed("\033[4G\033H\033[G\tX"); // HTS
     QCOMPARE(t.cell(0, 3).ch, U'X');
 
-    // Keypad and charset selections are consumed.
+    // Keypad selections are consumed; charset designations are recorded but GL stays G0 = ASCII
+    // (graphics in G1 only show after SO).
     t.feed("\033[4;1H\033=\033>\033(B\033)0\033*A\033+B\033 F\033%Gok");
     QCOMPARE(t.row(3), u"ok"_s);
 
@@ -1216,6 +1402,67 @@ void Tst_ansiparser::alignmentPattern()
     QCOMPARE(t.cursorCol(), 1);
 }
 
+void Tst_ansiparser::decSpecialGraphics()
+{
+    // a. G0 = DEC Special Graphics draws ncurses box corners; ESC ( B returns to ASCII.
+    Term t(3, 20);
+    t.feed("\033(0lqqk\033(Bx");
+    QCOMPARE(t.row(0), u"┌──┐x"_s);
+    QCOMPARE(t.cursorCol(), 5);
+
+    // b. Graphics designated into G1: SO switches to G1, SI back to G0.
+    Term u(3, 20);
+    u.feed("\033)0\016lqk\017lqk");
+    QCOMPARE(u.row(0), u"┌─┐lqk"_s);
+
+    // c. Only 0x5F..0x7E are remapped; space, digits, upper case and UTF-8 pass through.
+    Term v(3, 20);
+    v.feed("\033(0 A1z~");
+    QCOMPARE(v.row(0), u" A1≥·"_s);
+    v.feed("\xE4\xB8\xAD");
+    QCOMPARE(v.row(0), u" A1≥·中"_s);
+    QVERIFY(v.cell(0, 5).attr.has(WideLead));
+    QCOMPARE(v.cursorCol(), 7);
+
+    // d. RIS, DECSTR and AnsiParser::reset() all go back to ASCII in G0.
+    Term r1(3, 20);
+    r1.feed("\033(0\033cq");
+    QCOMPARE(r1.row(0), u"q"_s);
+    Term r2(3, 20);
+    r2.feed("\033(0\033[!pq");
+    QCOMPARE(r2.row(0), u"q"_s);
+    Term r3(3, 20);
+    r3.feed("\033(0");
+    r3.parser.reset();
+    r3.feed("q");
+    QCOMPARE(r3.row(0), u"q"_s);
+    Term r4(3, 20);
+    r4.feed("\033)0\016\033cq"); // RIS also selects G0 again
+    QCOMPARE(r4.row(0), u"q"_s);
+
+    // e. DECSC / DECRC save and restore the designations and the active set.
+    Term s1(3, 20);
+    s1.feed("\033(0\033" "7\033(B\033" "8q");
+    QCOMPARE(s1.row(0), u"─"_s);
+    Term s2(3, 20);
+    s2.feed("\033)0\016\033" "7\017\033" "8q");
+    QCOMPARE(s2.row(0), u"─"_s);
+
+    // f. A designation split across feed() calls.
+    Term f(3, 20);
+    f.feed("\033(");
+    f.feed("0q");
+    QCOMPARE(f.row(0), u"─"_s);
+
+    // Other designations (UK, alternate ROM standard, DEC Supplemental) are ASCII; G2/G3 never
+    // reach GL.
+    Term o(3, 20);
+    o.feed("\033(Aq\033(1q\033(%5q\033*0q\033+0q");
+    QCOMPARE(o.row(0), u"qqqqq"_s);
+    o.feed("\033(2q"); // alternate ROM special graphics
+    QCOMPARE(o.row(0), u"qqqqq─"_s);
+}
+
 // ---- Robustness ---------------------------------------------------------------------------
 
 void Tst_ansiparser::unknownSequencesIgnored_data()
@@ -1255,6 +1502,7 @@ void Tst_ansiparser::unknownSequencesIgnored_data()
     QTest::newRow("too many sub-parameters") << "\033[1:2:3:4:5:6:7:8:9:10:11:12:13t"_ba;
     QTest::newRow("huge parameter") << "\033[99999999999999999999t"_ba;
     QTest::newRow("charset G0") << "\033(B"_ba;
+    QTest::newRow("charset G0 graphics then back") << "\033(0\033(B"_ba;
     QTest::newRow("charset G1") << "\033)0"_ba;
     QTest::newRow("charset G2") << "\033*A"_ba;
     QTest::newRow("charset G3") << "\033+B"_ba;
@@ -1334,6 +1582,13 @@ void Tst_ansiparser::garbageNeverDesyncs()
     t.feed(all);
     t.feed("\033_");
     t.feed(reversed);
+    // A stray DCS introducer followed by non-ASCII text: the string is abandoned and the text
+    // printed, so the parser is back in Ground before the RIS below (the CRLF only pins the
+    // column so the assertion does not depend on where the garbage left the cursor).
+    t.feed("\r\n\033P");
+    t.feed("\xC3\xA9");
+    t.feed("z");
+    QVERIFY(t.row(t.cursorRow()).endsWith(u"éz"_s));
     t.feed("\xF0\x9F"); // truncated 4-byte sequence
 
     // RIS is always a valid resynchronisation point.
@@ -1351,6 +1606,92 @@ void Tst_ansiparser::garbageNeverDesyncs()
     for (int r = 1; r < 5; ++r) {
         QVERIFY(t.row(r).isEmpty());
     }
+}
+
+void Tst_ansiparser::nonAsciiAbortsSequence_data()
+{
+    QTest::addColumn<QByteArray>("sequence");
+    QTest::addColumn<QString>("expected");
+    QTest::addColumn<int>("cursorCol");
+
+    // A printable code point >= U+00A0 inside an ESC / CSI sequence (or a DCS string) is line
+    // noise: the sequence is abandoned and the character printed. OSC keeps collecting it.
+    QTest::newRow("CSI param") << "\033[3\xE4\xB8\xADok"_ba << u"中ok"_s << 4;
+    QTest::newRow("CSI entry") << "\033[\xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("CSI private") << "\033[?25\xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("CSI intermediate") << "\033[ \xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("CSI ignore") << "\033[1?2\xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("ESC") << "\033\xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("ESC intermediate") << "\033#\xC3\xA9ok"_ba << u"éok"_s << 3;
+    QTest::newRow("NBSP") << "\033[3\xC2\xA0ok"_ba << QString(QChar(0xA0)) + u"ok"_s << 3;
+    QTest::newRow("OSC not aborted") << "\033]0;\xE4\xB8\xAD\007ok"_ba << u"ok"_s << 2;
+    QTest::newRow("DCS aborted") << "\033P\xE4\xB8\xAD\033\\ok"_ba << u"中ok"_s << 4;
+}
+
+void Tst_ansiparser::nonAsciiAbortsSequence()
+{
+    QFETCH(QByteArray, sequence);
+    QFETCH(QString, expected);
+    QFETCH(int, cursorCol);
+
+    Term t(3, 20);
+    t.feed(sequence);
+    QCOMPARE(t.row(0), expected);
+    QCOMPARE(t.cursorRow(), 0);
+    QCOMPARE(t.cursorCol(), cursorCol);
+    // Nothing of the abandoned sequence took effect.
+    QCOMPARE(t.screen.currentAttributes(), Attributes());
+    QVERIFY(t.screen.cursorVisible());
+    QVERIFY(t.screen.autoWrap());
+    QVERIFY(!t.screen.alternateScreenActive());
+    if (sequence.startsWith("\033]"_ba)) {
+        QCOMPARE(t.screen.title(), u"中"_s);
+    } else {
+        QVERIFY(t.screen.title().isEmpty());
+    }
+}
+
+void Tst_ansiparser::controlStringGarbageRecovers()
+{
+    // A garbage ESC P / ESC X / ESC ^ / ESC _ from line noise must not swallow the console
+    // until an ST arrives: a non-ASCII printable aborts the string and is printed.
+    Term t(3, 40);
+    t.feed("\033P\xC3\xA9ok"); // non-ASCII in DcsEntry
+    QCOMPARE(t.row(0), u"éok"_s);
+    t.feed("\r\n\033_apc\xFFmore"); // invalid UTF-8 -> U+FFFD aborts SosPmApcString
+    QCOMPARE(t.row(1), QString(kReplacement) + u"more"_s);
+    t.feed("\r\n\033Pq#0;2;0\xE2\x82\xACrest"); // non-ASCII in DcsPassthrough
+    QCOMPARE(t.row(2), u"€rest"_s);
+
+    // 8-bit encoding: a raw C1 introducer, then a Latin-1 letter aborts it.
+    Term l(3, 40);
+    QVERIFY(l.parser.setEncoding(u"ISO-8859-1"_s));
+    l.feed("\x9Ejunk\xE9ok"); // 0x9E = PM
+    QCOMPARE(l.row(0), u"éok"_s);
+
+    // Length cap: ASCII-only garbage after a stray ESC X eventually prints again. The 4097th
+    // code point ('\r') leaves the string; CR/LF and "visible" are then processed normally.
+    Term c(3, 60);
+    c.feed("\033X" + QByteArray(4096, 'x') + "\r\nvisible");
+    QVERIFY(c.row(0).isEmpty());
+    QCOMPARE(c.row(1), u"visible"_s);
+    QCOMPARE(c.cursorRow(), 1);
+
+    // Exactly at the cap the string is still open: the 4096th 'x' is consumed, ST closes it.
+    Term d(3, 60);
+    d.feed("\033X" + QByteArray(4096, 'x') + "\033\\ok");
+    QCOMPARE(d.row(0), u"ok"_s);
+
+    // C0 inside a well-formed string does not abort it (unchanged behaviour).
+    Term k(3, 40);
+    k.feed("\033Pdata\r\nmore\033\\ok");
+    QCOMPARE(k.row(0), u"ok"_s);
+
+    // OSC is deliberately excluded: titles may contain non-ASCII text.
+    Term o(3, 40);
+    o.feed("\033]0;\xC3\xA9t\xC3\xA9\007x");
+    QCOMPARE(o.screen.title(), u"été"_s);
+    QCOMPARE(o.row(0), u"x"_s);
 }
 
 void Tst_ansiparser::parserReset()

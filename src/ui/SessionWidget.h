@@ -39,13 +39,16 @@ class LogReplayer;
  *    dim system line "--- port COM8 disappeared, waiting to reconnect ---" / "--- reconnected ---"
  *    (written via terminal()->parser()->feed() with SGR dim so it is visually distinct).
  *  - terminal.sendData        -> sendBytes()
- *  - input.sendRequested      -> sendBytes(payload)   (encoding applied when not UTF-8)
- *  - quickBar.commandTriggered-> sendBytes(command.payload()) (error -> statusMessage)
+ *  - input.sendRequested      -> sendBytes(payload) (HEX: verbatim; Esc: text runs transcoded to the
+ *                                session encoding, \xHH bytes verbatim; plain: transcoded when not UTF-8)
+ *  - quickBar.commandTriggered-> sendBytes(command.payload()) with the same HEX / escapes / plain
+ *                                rules as the command input (payload error -> statusMessage)
  *  - bar.connectRequested/disconnectRequested/settingsChanged/dtr/rts/break -> connection
  *  - bar.refreshRequested     -> SerialPortEnumerator::instance().refresh()
  *  - SerialPortEnumerator.portsChanged -> bar.setPorts
  *  - terminal.fileDropped     -> sendFile(path)
- *  - terminal.syncSizeRequested -> syncTerminalSize(); terminal.gridSizeChanged -> gridSizeChanged()
+ *  - terminal.syncSizeRequested -> syncTerminalSize(); terminal.gridSizeChanged -> gridSizeChanged();
+ *    terminal.findRequested -> findRequested()
  *  - terminal.titleChanged    -> statusMessage(title, 3000) (OSC titles from the device)
  *  - connection.countersChanged -> countersChanged()
  *  - logger.started/stopped/error -> loggingChanged() + statusMessage()
@@ -60,7 +63,9 @@ class LogReplayer;
  * titleChanged() is emitted when the replay starts and when it ends.
  *
  * Auto-log: when AppSettings::autoLog() is on, connectPort() starts a SessionLogger with
- * SessionLogger::suggestFileName(port, AppSettings::logDirectory()) using logFormat()/logIncludeTx().
+ * SessionLogger::suggestFileName(port, AppSettings::logDirectory()) using logFormat()/logIncludeTx()
+ * unless a log is already active; an auto-started log for a different port is closed and
+ * replaced, a log started by the user (startLogging()/startLoggingTo()) is kept.
  */
 class SessionWidget : public QWidget
 {
@@ -99,6 +104,9 @@ public:
     void applyPreferences();
 
 public slots:
+    /// Open the port selected in the ConnectionBar with its settings; returns success (true when
+    /// already open). A running log replay is stopped first (its usual "stopped" status line is
+    /// emitted) so replayed and live bytes never interleave; see replayLogFile().
     bool connectPort();
     void disconnectPort();
     void toggleConnection();
@@ -109,6 +117,8 @@ public slots:
     void stopLogging();
     void toggleLogging();
     void sendFile(const QString& path = QString());   ///< opens SendFileDialog (modeless, parented to this)
+    /// statusMessage("BREAK sent") only when the connection asserted BREAK; failures surface via
+    /// errorOccurred -> statusMessage.
     void sendBreak();
     /// Sends "stty cols <cols> rows <rows>\r" so a Linux shell over UART matches the widget.
     void syncTerminalSize();
@@ -133,6 +143,7 @@ signals:
     void viewModeChanged(SessionWidget::ViewMode mode);
     void gridSizeChanged(int rows, int cols);
     void quickCommandsEditRequested();
+    void findRequested();   ///< terminal context menu "Find..."
     /// A log replay started (true) or finished/stopped (false); MainWindow refreshes its actions.
     void replayStateChanged(bool active);
 
@@ -148,7 +159,13 @@ private slots:
 private:
     void setupUi();
     void writeSystemLine(const QString& text);   ///< dim informational line in the terminal
-    QByteArray encodeForDevice(const QByteArray& utf8) const;   ///< transcode when encoding != UTF-8
+    /// Plain-text payloads only (UTF-8 in): transcoded to the session encoding when it is not
+    /// UTF-8. Never use it on bytes that may contain \xHH escapes; see unescapeForDevice().
+    QByteArray encodeForDevice(const QByteArray& utf8) const;
+    /// HexUtils::unescape(text, encodeText, error) with encodeText = the session encoding
+    /// (UTF-8 when the encoding is empty, "UTF-8" or has no encoder): text runs are transcoded,
+    /// \xHH bytes are appended verbatim. No line ending is added.
+    QByteArray unescapeForDevice(const QString& text, QString* error) const;
     bool askReplaySpeed(qint64& bytesPerSecond);                 ///< QInputDialog over LogReplayer::standardSpeeds()
 
     SerialConnection* m_connection = nullptr;
@@ -164,6 +181,9 @@ private:
     SendFileDialog* m_sendFileDialog = nullptr;
     LogReplayer* m_replayer = nullptr;       ///< created on the first replayLogFile(); QObject child
     ViewMode m_viewMode = ViewMode::Terminal;
+    /// Port the active log was auto-started for; empty when the log was started by the user or
+    /// no log is active.
+    QString m_autoLogPort;
     bool m_preferencesApplied = false;   ///< first applyPreferences() also seeds the command input line ending
     QFont m_appliedFont;                 ///< terminal font last pushed by applyPreferences() (keeps user zoom otherwise)
 };

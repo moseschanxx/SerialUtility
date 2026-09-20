@@ -32,6 +32,7 @@ private slots:
     // QuickCommandStore
     void storeStartsWithDefaults();
     void storeGroups();
+    void storeGroupsWhitespaceIsGeneral();
     void storeSetCommandsEmitsChanged();
     void storeLoadMissingFile();
     void storeSaveAndLoad();
@@ -332,6 +333,29 @@ void Tst_quickcommand::storeGroups()
     QCOMPARE(store.groups(), QStringList({QStringLiteral("Zeta"), QStringLiteral("General"), QStringLiteral("Alpha")}));
     store.setCommands({});
     QVERIFY(store.groups().isEmpty());
+}
+
+void Tst_quickcommand::storeGroupsWhitespaceIsGeneral()
+{
+    QCOMPARE(QuickCommandStore::generalGroupKey(), QStringLiteral("General"));
+
+    QuickCommandStore store;
+    QuickCommand a;
+    a.name = QStringLiteral("a");
+    a.group = QStringLiteral("  	 "); // whitespace-only -> the general group
+    QuickCommand b;
+    b.name = QStringLiteral("b");
+    b.group = QStringLiteral("Alpha");
+    QuickCommand c;
+    c.name = QStringLiteral("c"); // empty -> the general group as well
+    store.setCommands({a, b, c});
+    QCOMPARE(store.groups(), QStringList({QStringLiteral("General"), QStringLiteral("Alpha")}));
+    QCOMPARE(QuickCommandStore::effectiveGroup(a), QuickCommandStore::generalGroupKey());
+    QCOMPARE(QuickCommandStore::effectiveGroup(b), QStringLiteral("Alpha"));
+    QCOMPARE(QuickCommandStore::effectiveGroup(c), QuickCommandStore::generalGroupKey());
+    // Without a translator the display name is the key itself; other groups pass through.
+    QCOMPARE(QuickCommandStore::groupDisplayName(QuickCommandStore::generalGroupKey()), QStringLiteral("General"));
+    QCOMPARE(QuickCommandStore::groupDisplayName(QStringLiteral("Alpha")), QStringLiteral("Alpha"));
 }
 
 void Tst_quickcommand::storeSetCommandsEmitsChanged()

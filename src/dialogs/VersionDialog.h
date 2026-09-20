@@ -16,6 +16,7 @@ QT_END_NAMESPACE
  * Layout in VersionDialog.ui: labelAppVersion, labelGitHash, labelBuildDate, labelQtVersion,
  * labelCompiler, labelBuildType, labelOS, labelArchitecture, textAdditionalInfo,
  * buttonCopy, buttonBox (Close).
+ * Retranslates itself on QEvent::LanguageChange (it can stay open across a language switch).
  */
 class VersionDialog : public QDialog
 {
@@ -27,6 +28,9 @@ public:
     static QString compilerInfo();
     static QString buildType();
     QString plainTextReport() const;
+
+protected:
+    void changeEvent(QEvent* event) override;   ///< LanguageChange -> retranslateUi + setupVersionInfo()
 
 private slots:
     void copyToClipboard();

@@ -2,6 +2,7 @@
 #include "ui_SendFileDialog.h"
 
 #include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QPushButton>
@@ -94,6 +95,30 @@ SendFileDialog::~SendFileDialog()
     delete ui;
 }
 
+void SendFileDialog::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        retranslate();
+    }
+    QDialog::changeEvent(event);
+}
+
+void SendFileDialog::retranslate()
+{
+    // .ui strings: labels, group boxes, radios, checks, spin suffixes, buttons, tooltips. The
+    // lineEndingCombo is left alone: LineEnding::displayName() is untranslated technical text.
+    ui->retranslateUi(this);
+    setWindowTitle(tr("Send File"));
+    // retranslateUi() reset statusLabel to the .ui default "Ready."; rebuild it from the sender
+    // state. A finished/error message shown while idle is transient and simply replaced.
+    if (m_sender->isRunning()) {
+        onProgress(m_sender->sentBytes(), m_sender->totalBytes(), m_sender->sentLines(), m_sender->totalLines());
+    } else {
+        ui->statusLabel->setText(m_connected ? tr("Ready.") : tr("Not connected."));
+    }
+    updateControls();   // re-applies tr("&Pause") / tr("&Resume") and the Start tooltip
+}
+
 void SendFileDialog::setFilePath(const QString& path)
 {
     ui->filePathEdit->setText(QDir::toNativeSeparators(path));
@@ -130,12 +155,16 @@ void SendFileDialog::setConnected(bool connected)
         return;
     }
     m_connected = connected;
-    if (!m_connected && m_sender->isRunning() && !m_sender->isPaused()) {
-        // Do not pour bytes into a closed port; the user can resume once reconnected.
+    if (!m_connected && m_sender->isRunning() && !m_userPaused) {
+        // Do not pour bytes into a closed port; the user can resume once reconnected. This is
+        // a "user" pause: a drain hold must not silently resume it when the queue empties.
+        m_userPaused = true;
+        m_drainHold = false;
         m_sender->pause();
         ui->statusLabel->setText(tr("Paused: the session is not connected. Press Resume once it is back."));
         qCInfo(lcUi) << "File send paused because the session disconnected";
     } else if (!m_connected && !m_sender->isRunning()) {
+        m_awaitingDrain = false;   // the queued tail was discarded with the port
         ui->statusLabel->setText(tr("Not connected."));
     } else if (m_connected && !m_sender->isRunning()) {
         ui->statusLabel->setText(tr("Ready."));
@@ -189,6 +218,11 @@ void SendFileDialog::onStart()
     }
     saveOptions();
 
+    m_drainHold = false;
+    m_userPaused = false;
+    m_awaitingDrain = false;
+    m_lastPending = 0;
+    m_finishedMessage.clear();
     ui->progressBar->setValue(0);
     if (!m_sender->start(opts)) {
         const QString error = m_sender->lastError();
@@ -210,14 +244,19 @@ void SendFileDialog::onPauseResume()
     if (!m_sender->isRunning()) {
         return;
     }
-    if (m_sender->isPaused()) {
+    if (m_userPaused) {
         if (!m_connected) {
             ui->statusLabel->setText(tr("Cannot resume: the session is not connected."));
             return;
         }
+        m_userPaused = false;
+        // Only the user's pause is lifted; the next updatePendingTx() re-holds if the port is
+        // still congested.
         m_sender->resume();
         ui->statusLabel->setText(tr("Resumed."));
     } else {
+        m_userPaused = true;
+        m_drainHold = false;
         m_sender->pause();
         ui->statusLabel->setText(tr("Paused."));
     }
@@ -253,7 +292,7 @@ void SendFileDialog::onProgress(qint64 sentBytes, qint64 totalBytes, int sentLin
                    .arg(sentLines)
                    .arg(totalLines);
     }
-    if (m_sender->isPaused()) {
+    if (m_userPaused) {
         text += QLatin1Char(' ') + tr("[paused]");
     }
     ui->statusLabel->setText(text);
@@ -261,13 +300,56 @@ void SendFileDialog::onProgress(qint64 sentBytes, qint64 totalBytes, int sentLin
 
 void SendFileDialog::onFinished(bool completed, const QString& message)
 {
+    m_drainHold = false;
+    m_userPaused = false;
+    QString shown = message;
     if (completed) {
-        ui->progressBar->setValue(100);
+        if (m_lastPending > 0) {
+            // Every chunk was handed to the port but the driver has not sent them all yet:
+            // hold the bar at 99% until updatePendingTx(0) reports the wire has caught up.
+            m_awaitingDrain = true;
+            m_finishedMessage = message;
+            shown = message + tr(" - %1 still leaving the port").arg(formatBytes(m_lastPending));
+            ui->progressBar->setValue(99);
+        } else {
+            ui->progressBar->setValue(100);
+        }
+    } else if (m_lastPending > 0) {
+        shown = message + tr(" (%1 already queued will still be sent)").arg(formatBytes(m_lastPending));
     }
-    ui->statusLabel->setText(message);
-    qCInfo(lcUi) << "File send finished:" << (completed ? "completed" : "aborted") << message;
+    ui->statusLabel->setText(shown);
+    qCInfo(lcUi) << "File send finished:" << (completed ? "completed" : "aborted") << shown;
     emit sendingFinished(completed, message);
     updateControls();
+}
+
+void SendFileDialog::updatePendingTx(qint64 pendingBytes)
+{
+    m_lastPending = pendingBytes;
+    if (!m_sender->isRunning()) {
+        if (m_awaitingDrain && pendingBytes <= 0) {
+            m_awaitingDrain = false;
+            ui->progressBar->setValue(100);
+            ui->statusLabel->setText(m_finishedMessage);
+            qCInfo(lcUi) << "File send fully delivered to the port";
+        }
+        return;
+    }
+    if (m_userPaused) {
+        return;   // the user's pause wins; onPauseResume() lifts it
+    }
+    const FileSender::Options opts = m_sender->options();
+    const qint64 unit = (opts.mode == FileSender::Mode::Binary) ? opts.chunkSize : 512;
+    if (!m_drainHold && pendingBytes > 2 * unit) {
+        m_drainHold = true;
+        m_sender->pause();
+        ui->statusLabel->setText(tr("Waiting for the port to drain (%1 queued)...").arg(formatBytes(pendingBytes)));
+        qCDebug(lcUi) << "File send held:" << pendingBytes << "bytes queued in the port";
+    } else if (m_drainHold && pendingBytes <= unit) {
+        m_drainHold = false;
+        m_sender->resume();
+        qCDebug(lcUi) << "File send released:" << pendingBytes << "bytes queued in the port";
+    }
 }
 
 void SendFileDialog::loadOptions()
@@ -311,7 +393,7 @@ void SendFileDialog::saveOptions() const
 void SendFileDialog::updateControls()
 {
     const bool sending = m_sender->isRunning();
-    const bool paused = sending && m_sender->isPaused();
+    const bool paused = sending && m_userPaused;   // a drain hold is not shown as "paused"
     const bool textMode = ui->modeTextRadio->isChecked();
 
     ui->filePathEdit->setEnabled(!sending);

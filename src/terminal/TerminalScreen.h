@@ -48,8 +48,10 @@ public:
     /// Resize the grid. Columns: lines are truncated or padded (no reflow). Rows: when
     /// shrinking, lines above the cursor are moved into the scrollback first so the cursor
     /// stays visible; when growing, lines are pulled back from the scrollback while any
-    /// exist, otherwise blank lines are appended at the bottom. Scroll region is reset to
-    /// full screen. Cursor is clamped. Emits sizeChanged() and contentChanged().
+    /// exist, otherwise blank lines are appended at the bottom. The same policy is applied
+    /// to the saved primary screen (anchored on its ?1049 saved cursor) while the alternate
+    /// screen is active. Scroll region is reset to full screen. Cursor is clamped. Emits
+    /// sizeChanged() and contentChanged().
     void resize(int rows, int cols);
     int scrollbackMax() const;
     void setScrollbackMax(int lines);   ///< trims the buffer if needed
@@ -57,6 +59,11 @@ public:
     // ---- Read access ----------------------------------------------------------------
     const Terminal::Line& line(int row) const;              ///< visible row 0..rows()-1
     int scrollbackSize() const;
+    /// Monotonic count of history lines discarded because the buffer exceeded scrollbackMax()
+    /// (LF pushes, resize shrink, pushScreenToScrollback, setScrollbackMax). Not affected by
+    /// clearScrollback()/reset(). Consumers turn the difference between two readings into an
+    /// absolute-index shift.
+    qint64 scrollbackDropped() const;
     const Terminal::Line& scrollbackLine(int index) const;  ///< 0 = oldest
     int totalLines() const;                                 ///< scrollbackSize() + rows()
     const Terminal::Line& absoluteLine(int index) const;
@@ -108,11 +115,14 @@ public:
 
     // ---- Cursor movement (clamped to screen / to scroll region in origin mode) --------
     void moveCursorTo(int row, int col);            ///< CUP/HVP (0-based; in origin mode row is relative to scrollTop)
-    void moveCursorBy(int dRow, int dCol);          ///< CUU/CUD/CUF/CUB (stays inside the scroll region vertically when inside it)
+    /// CUU/CUD/CUF/CUB. Vertical moves stop at the scroll-region margin they move toward (top
+    /// margin when moving up, bottom margin when moving down) unless the cursor starts on the
+    /// far side of that margin, in which case they stop at the screen edge (DEC STD 070 / xterm).
+    void moveCursorBy(int dRow, int dCol);
     void setCursorRow(int row);                     ///< VPA
     void setCursorColumn(int col);                  ///< CHA
-    void cursorNextLine(int n);                     ///< CNL
-    void cursorPreviousLine(int n);                 ///< CPL
+    void cursorNextLine(int n);                     ///< CNL: same vertical clamp as moveCursorBy, then column 0
+    void cursorPreviousLine(int n);                 ///< CPL: same vertical clamp as moveCursorBy, then column 0
     void saveCursor();                              ///< DECSC: position + attributes + origin/autowrap state
     void restoreCursor();                           ///< DECRC
     void setCursorVisible(bool visible);            ///< DECTCEM
@@ -182,6 +192,9 @@ private:
     Terminal::Line blankLine() const;
     Terminal::Cell blankCell() const;   ///< ' ' with current bg colour only
     void clampCursor();
+    /// Row reached by a relative vertical move of dRow with the DEC/xterm margin rules
+    /// (see moveCursorBy()); does not modify the cursor.
+    int clampRelativeRow(int dRow) const;
 
     // Internal (non-emitting) helpers so that every public call emits contentChanged() once.
     void notifyChanged(const Terminal::Cursor& before);    ///< emits contentChanged/cursorMoved/scrollbackChanged
@@ -217,4 +230,5 @@ private:
     bool m_allDirty = true;
     QBitArray m_dirtyRows;
     bool m_scrollbackDirty = false;   ///< scrollbackChanged() pending for the current public call
+    qint64 m_scrollbackDropped = 0;   ///< see scrollbackDropped()
 };

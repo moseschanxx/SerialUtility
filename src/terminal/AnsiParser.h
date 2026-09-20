@@ -18,11 +18,14 @@ struct Color;
  * TerminalScreen. Implements the state machine of Paul Williams' VT500-series parser
  * (https://vt100.net/emu/dec_ansi_parser) so malformed input never desynchronises the
  * output: unknown sequences are consumed and ignored (logged at debug level on lcTerminal).
+ * Non-OSC control strings abort on a non-ASCII code point or after 4096 code points so line
+ * noise cannot silence the console.
  *
  * Supported (see docs/TERMINAL_EMULATION.md for the full table):
- *  C0:  BEL BS HT LF VT FF CR SO/SI(ignored) ESC; other C0 ignored. DEL ignored.
- *  ESC: 7 (DECSC) 8 (DECRC) D (IND) E (NEL) H (HTS) M (RI) c (RIS) = > (keypad, ignored)
- *       ( ) * + <charset> (ignored), # 8 (DECALN: fill screen with 'E')
+ *  C0:  BEL BS HT LF VT FF CR SO/SI (select G1/G0) ESC; other C0 ignored. DEL ignored.
+ *  ESC: 7 (DECSC, also saves the charset state) 8 (DECRC) D (IND) E (NEL) H (HTS) M (RI)
+ *       c (RIS) = > (keypad, ignored), ( ) <charset> (B = ASCII, 0 = DEC Special Graphics;
+ *       G2/G3 and 96-sets ignored), # 8 (DECALN: fill screen with 'E')
  *  CSI: @ ICH, A CUU, B CUD, C CUF, D CUB, E CNL, F CPL, G CHA, H CUP, I CHT, J ED, K EL,
  *       L IL, M DL, P DCH, S SU, T SD, X ECH, Z CBT, ` HPA, a HPR, b REP, c DA (reply
  *       "\e[?1;2c"), d VPA, e VPR, f HVP, g TBC, h/l SM/RM (4 IRM, 20 LNM),
@@ -103,6 +106,8 @@ private:
     void setMode(int mode, bool on, bool isPrivate);     ///< SM/RM and DECSET/DECRST for one parameter
     void softReset();                                    ///< DECSTR
     void alignmentPattern();                             ///< DECALN
+    char32_t mapCharset(char32_t cp) const;              ///< GL mapping (DEC Special Graphics) of a printable
+    void resetCharsets();                                ///< G0/G1 = ASCII, GL = G0, saved copies too
     void setCursorKeyApplicationMode(bool on);           ///< updates m_cursorKeyApp, emits on change
     void setBracketedPaste(bool on);                     ///< updates m_bracketedPaste, emits on change
     bool extendedColor(int index, Terminal::Color& out, int& consumed) const;   ///< SGR 38/48/58 sub-sequence
@@ -129,5 +134,13 @@ private:
     bool m_lineFeedNewLine = false;  ///< LNM (mode 20): LF also performs CR
     bool m_inSubParam = false;       ///< digits currently go to the last sub-parameter
     bool m_paramOverflow = false;    ///< more than the supported number of parameters: ignore the rest
+    qsizetype m_stringLength = 0;    ///< code points consumed by the current DCS/SOS/PM/APC string
     QString m_textRun;               ///< consecutive printable code points awaiting putText()
+
+    // VT100 character sets: 'B' = US-ASCII, '0' = DEC Special Graphics (parser-side only, the
+    // screen always stores Unicode). One DECSC slot, not duplicated per alternate screen.
+    char m_charset[2] = {'B', 'B'};  ///< G0, G1 designations
+    int m_glCharset = 0;             ///< 0 = G0 (SI/LS0), 1 = G1 (SO/LS1)
+    char m_savedCharset[2] = {'B', 'B'};
+    int m_savedGl = 0;
 };

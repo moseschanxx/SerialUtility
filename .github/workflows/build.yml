@@ -44,7 +44,7 @@ jobs:
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSU_BUILD_TESTS=ON
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSU_BUILD_TESTS=ON -DSU_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build build --config Release
@@ -54,19 +54,29 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure -C Release
 
-      - name: Verify executable
+      - name: Install and deploy (Qt deploy script)
         run: |
-          test -x build/BuildAI-SerialUtility
-          file build/BuildAI-SerialUtility
+          cmake --install build --prefix dist --config Release
+          test -x dist/bin/BuildAI-SerialUtility
+          test -f dist/bin/qt.conf
+          # NO_UNSUPPORTED_PLATFORM_ERROR in CMakeLists.txt would let a no-op deploy pass silently,
+          # so check that the Qt libraries and the xcb platform plugin really were copied.
+          test -f dist/lib/libQt6Core.so.6
+          test -f dist/lib/libQt6SerialPort.so.6
+          test -f dist/lib/libQt6Widgets.so.6
+          test -f dist/plugins/platforms/libqxcb.so
+          # every Qt lib must resolve from dist/lib via the $ORIGIN/../lib RPATH, nothing may be unresolved
+          ldd dist/bin/BuildAI-SerialUtility
+          ! ldd dist/bin/BuildAI-SerialUtility | grep -q 'not found'
+          ldd dist/bin/BuildAI-SerialUtility | grep libQt6Core | grep -q "$PWD/dist/lib/"
+          file dist/bin/BuildAI-SerialUtility
+          find dist -type f | sort
 
-      - name: Upload Linux binary
+      - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: BuildAI-SerialUtility-linux-x64
-          path: |
-            build/BuildAI-SerialUtility
-            README.md
-            VERSION.txt
+          path: dist
           if-no-files-found: error
           retention-days: 14
 
@@ -99,7 +109,7 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl.exe -DSU_BUILD_TESTS=ON
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl.exe -DSU_BUILD_TESTS=ON -DSU_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         shell: pwsh
@@ -153,7 +163,8 @@ jobs:
       - name: Create release archives
         run: |
           mkdir -p release
-          chmod +x artifacts/linux/build/BuildAI-SerialUtility || true
+          # upload-artifact does not preserve the execute bit; fail loudly if the package layout regressed
+          chmod +x artifacts/linux/bin/BuildAI-SerialUtility
           tar -czf "release/BuildAI-SerialUtility-${{ github.ref_name }}-linux-x64.tar.gz" -C artifacts/linux .
           (cd artifacts/windows && zip -r "../../release/BuildAI-SerialUtility-${{ github.ref_name }}-windows-x64.zip" .)
           ls -la release

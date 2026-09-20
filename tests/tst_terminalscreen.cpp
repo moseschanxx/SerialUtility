@@ -71,6 +71,7 @@ private slots:
     void resizeShrinkMovesLinesToScrollback();
     void resizeGrowPullsLinesBack();
     void resizeShrinkDropsBlankBottomLines();
+    void resizeInAlternateScreenPreservesPrimary();
     void resizeColumns();
     void wideCharPlacement();
     void wideCharOverwrite();
@@ -85,6 +86,7 @@ private slots:
     void clearScreenAndScrollback();
     void pushScreenToScrollback();
     void setScrollbackMaxTrims();
+    void scrollbackDroppedCounts();
     void titleAndBell();
     void cursorVisibility();
     void setScrollRegionValidation();
@@ -163,6 +165,7 @@ void Tst_terminalscreen::putCharIgnoresControls()
     s.putChar(0x1B);
     s.putChar(0x9B);
     s.putChar(0x0301); // combining acute: zero width, ignored
+    s.putChar(0xFEFF); // BOM / ZWNBSP: zero width, ignored
     QCOMPARE(content.count(), 0);
     QCOMPARE(s.cursor().col, 0);
     QVERIFY(rowText(s, 0).isEmpty());
@@ -427,6 +430,19 @@ void Tst_terminalscreen::moveCursorByStaysInRegion()
     s.moveCursorTo(15, 0);
     s.moveCursorBy(50, 0);
     QCOMPARE(s.cursor().row, 23);
+    // Moving toward the region from outside stops at the margin being approached (xterm).
+    s.moveCursorTo(15, 0);
+    s.moveCursorBy(-20, 0);
+    QCOMPARE(s.cursor().row, 5); // up from below stops at the top margin
+    s.moveCursorTo(2, 0);
+    s.moveCursorBy(20, 0);
+    QCOMPARE(s.cursor().row, 10); // down from above stops at the bottom margin
+    s.moveCursorTo(2, 0);
+    s.moveCursorBy(2, 0);
+    QCOMPARE(s.cursor().row, 4); // a short move that does not reach the margin is unaffected
+    s.moveCursorTo(15, 0);
+    s.moveCursorBy(-3, 0);
+    QCOMPARE(s.cursor().row, 12);
 }
 
 void Tst_terminalscreen::originMode()
@@ -794,6 +810,21 @@ void Tst_terminalscreen::cursorLineOps()
     QCOMPARE(s.cursor().row, 5);
     s.cursorPreviousLine(50);
     QCOMPARE(s.cursor().row, 2);
+    // From outside the region: stop at the margin being approached, the screen edge otherwise.
+    s.moveCursorTo(8, 4);
+    s.cursorPreviousLine(50);
+    QCOMPARE(s.cursor().row, 2);
+    QCOMPARE(s.cursor().col, 0);
+    s.moveCursorTo(0, 4);
+    s.cursorNextLine(50);
+    QCOMPARE(s.cursor().row, 5);
+    QCOMPARE(s.cursor().col, 0);
+    s.moveCursorTo(0, 0);
+    s.cursorPreviousLine(5);
+    QCOMPARE(s.cursor().row, 0);
+    s.moveCursorTo(8, 0);
+    s.cursorNextLine(5);
+    QCOMPARE(s.cursor().row, 9);
 }
 
 void Tst_terminalscreen::repeatLastChar()
@@ -1005,6 +1036,42 @@ void Tst_terminalscreen::resizeShrinkDropsBlankBottomLines()
     alt.setAlternateScreen(false);
     QCOMPARE(alt.rows(), 2);
     QCOMPARE(alt.line(0).length(), 5);
+}
+
+void Tst_terminalscreen::resizeInAlternateScreenPreservesPrimary()
+{
+    TerminalScreen s(4, 10, 10);
+    fillRows(s, {QStringLiteral("l0"), QStringLiteral("l1"), QStringLiteral("l2"), QStringLiteral("prompt$")});
+    QCOMPARE(s.cursor().row, 3);
+    QCOMPARE(s.cursor().col, 7);
+    s.setAlternateScreen(true, true);
+    s.putText(QStringLiteral("top")); // alternate content must never reach the scrollback
+    QSignalSpy sbChanged(&s, &TerminalScreen::scrollbackChanged);
+
+    s.resize(2, 10);
+    QCOMPARE(s.scrollbackSize(), 2); // primary l0, l1 moved to the scrollback
+    QCOMPARE(s.scrollbackLine(0).text(), QStringLiteral("l0"));
+    QCOMPARE(s.scrollbackLine(1).text(), QStringLiteral("l1"));
+    QCOMPARE(sbChanged.count(), 1);
+
+    // Grow back while still on the alternate screen: the lines are pulled back.
+    s.resize(4, 10);
+    QCOMPARE(s.scrollbackSize(), 0);
+    s.setAlternateScreen(false, true);
+    QCOMPARE(rowText(s, 0), QStringLiteral("l0"));
+    QCOMPARE(rowText(s, 3), QStringLiteral("prompt$"));
+    QCOMPARE(s.cursor().row, 3);
+    QCOMPARE(s.cursor().col, 7);
+
+    // Shrink and leave: the prompt line and cursor survive, older lines are in the scrollback.
+    s.setAlternateScreen(true, true);
+    s.resize(2, 10);
+    s.setAlternateScreen(false, true);
+    QCOMPARE(s.scrollbackSize(), 2);
+    QCOMPARE(rowText(s, 0), QStringLiteral("l2"));
+    QCOMPARE(rowText(s, 1), QStringLiteral("prompt$"));
+    QCOMPARE(s.cursor().row, 1);
+    QCOMPARE(s.cursor().col, 7);
 }
 
 void Tst_terminalscreen::resizeColumns()
@@ -1455,6 +1522,32 @@ void Tst_terminalscreen::setScrollbackMaxTrims()
     s.setScrollbackMax(-5);
     QCOMPARE(s.scrollbackMax(), 0);
     QCOMPARE(s.scrollbackSize(), 0);
+}
+
+void Tst_terminalscreen::scrollbackDroppedCounts()
+{
+    TerminalScreen s(2, 5, 10);
+    QCOMPARE(s.scrollbackDropped(), qint64(0));
+    // 12 lines pushed into a 10-line buffer: the two oldest are dropped. (The first nextLine()
+    // on the 2-row grid only moves to row 1; every following one scrolls and pushes a line.)
+    for (int i = 0; i < 13; ++i) {
+        s.putText(QString::number(i));
+        s.nextLine();
+    }
+    QCOMPARE(s.scrollbackSize(), 10);
+    QCOMPARE(s.scrollbackDropped(), qint64(2));
+    QCOMPARE(s.scrollbackLine(0).text(), QStringLiteral("2"));
+
+    s.setScrollbackMax(3);   // trims 7 more
+    QCOMPARE(s.scrollbackSize(), 3);
+    QCOMPARE(s.scrollbackDropped(), qint64(9));
+    s.setScrollbackMax(100);   // growing drops nothing
+    QCOMPARE(s.scrollbackDropped(), qint64(9));
+    s.clearScrollback();   // clearing is not a trim
+    QCOMPARE(s.scrollbackSize(), 0);
+    QCOMPARE(s.scrollbackDropped(), qint64(9));
+    s.reset();
+    QCOMPARE(s.scrollbackDropped(), qint64(9));
 }
 
 void Tst_terminalscreen::titleAndBell()

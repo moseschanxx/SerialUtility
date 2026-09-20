@@ -25,15 +25,21 @@ class AnsiParser;
  *
  * Rendering
  *  - Monospace font; cell size = horizontalAdvance("M") x lineSpacing (wide chars = 2 cells).
- *  - Paints only the rows the screen marked dirty (or everything after a scroll/resize);
- *    repaints are coalesced with a 16 ms single-shot timer so 1.5 Mbaud boot logs do not
- *    starve the event loop.
+ *  - Paints only the rows the screen marked dirty (or everything after a scroll/resize; the
+ *    view repaints everything while scrolled up); repaints are coalesced with a 16 ms
+ *    single-shot timer so 1.5 Mbaud boot logs do not starve the event loop. Scrollbar-driven
+ *    repaints (follow-output and user scrolling) go through the same coalescer.
  *  - Vertical scrollbar: range 0..scrollbackSize(), value = first visible absolute line.
- *    While the view is at the bottom it follows new output; scrolling up freezes it
- *    (shows a small "N new lines" hint is optional). Any key press jumps back to the bottom.
+ *    While the view is at the bottom it follows new output; scrolling up freezes it, including
+ *    while a full scrollback drops its oldest lines (the scrollbar value is shifted so the same
+ *    text stays in view); selection anchors are shifted the same way and cleared once they fall
+ *    off the top. Any key press jumps back to the bottom.
  *  - Cursor: block when focused (blinking if enabled), hollow when unfocused, hidden when
  *    DECTCEM off. Selection uses palette.selection.
- *  - Bell: flashes the background briefly (visual) and calls QApplication::beep() when enabled.
+ *  - Bell: flashes the background briefly (visual) and calls QApplication::beep() when enabled;
+ *    bells arriving within 250 ms of the last accepted one are suppressed (xterm
+ *    bellSuppressTime) so garbage/binary streams do not beep continuously or keep the
+ *    background tinted. bellRang() is still emitted for every BEL.
  *  - Attributes: bold (bright + bold font), dim (blend fg 50% into bg), italic, underline,
  *    strike, inverse, hidden, blink (rendered as normal - no timer).
  *
@@ -66,6 +72,9 @@ class AnsiParser;
  * Selection: click-drag (cell granularity), double-click selects a word
  * (TerminalScreen::wordBoundsAt), triple-click selects the line; Shift+click extends.
  * Selection anchors are absolute line coordinates so they survive scrollback growth.
+ * Dragging past the top/bottom edge of the viewport auto-scrolls one line per 50 ms (no
+ * acceleration) and keeps extending the selection until the pointer returns or the button is
+ * released.
  *
  * Optional (nice to have if time permits): incremental find in scrollback via
  * findNext()/findPrevious() with highlighted matches.
@@ -121,6 +130,9 @@ public slots:
     void copySelection();
     void paste();
     void pasteText(const QString& text);
+    /// Selects from the first scrollback line to the last non-blank line; trailing blank rows are
+    /// left out so the copied text never ends in a run of empty lines. Clears the selection when
+    /// the whole buffer is blank.
     void selectAll();
     void clearSelection();
     void scrollToBottom();
@@ -145,6 +157,8 @@ signals:
     void fontZoomed(const QFont& font);
     /// Context-menu request for actions the widget does not own (e.g. Sync Terminal Size).
     void syncSizeRequested();
+    /// Context-menu "Find..." chosen; the owner (MainWindow) shows the find prompt and calls findNext().
+    void findRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -172,6 +186,7 @@ private slots:
     void onScrollbackChanged(int size);
     void onBell();
     void onBlinkTimeout();
+    void onDragScrollTimeout();
     void scheduleRepaint();
     void performRepaint();
 
@@ -212,6 +227,8 @@ private:
     void publishSelection();                  ///< X11 PRIMARY selection when the platform supports it
     void ensureLineVisible(int absoluteLine);
     bool handleLocalShortcut(QKeyEvent* event);   ///< copy/paste/zoom/scroll keys that never reach the device
+    void scheduleFullRepaint();               ///< coalesced repaint of every row (view scrolled, no dirty rows)
+    void extendDragSelectionTo(const QPoint& viewportPos);   ///< drag in progress: selection from the press cell
 
     TerminalScreen* m_screen;
     AnsiParser* m_parser;
@@ -236,8 +253,13 @@ private:
     QTimer m_repaintTimer;
     QTimer m_blinkTimer;
     QTimer m_bellTimer;
+    QElapsedTimer m_bellSuppress;             ///< since the last accepted (audible/visual) bell; invalid until the first
+    QTimer m_dragScrollTimer;                 ///< repeats edge auto-scroll while a drag holds the pointer outside the view
+    QPoint m_dragScrollPos;                   ///< last viewport pointer position of the drag (may be outside the viewport)
     bool m_repaintPending = false;
+    bool m_repaintAll = false;                ///< the pending repaint must cover every row regardless of dirty state
     bool m_followOutput = true;
+    qint64 m_seenScrollbackDropped = 0;       ///< TerminalScreen::scrollbackDropped() already accounted for
     QString m_lastFind;
 
     // ---- Implementation state (private; added by the term-widget package) --------------

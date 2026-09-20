@@ -248,10 +248,11 @@ void SerialPortEnumerator::refresh()
         fresh.append(entryFromInfo(info));
     }
     if (AppSettings::instance().showSimulatedPorts()) {
-        // Built-in simulated devices; one that is "rebooting" is absent, like an unplugged board.
+        // Built-in simulated devices; one that is "rebooting" is absent, like an unplugged board;
+        // a powered-off one stays listed (reopening it powers it on).
         const QList<SerialPortEntry> simulated = DeviceSimulator::entries();
         for (const SerialPortEntry& entry : simulated) {
-            if (DeviceSimulator::isPresent(entry.portName)) {
+            if (DeviceSimulator::isListed(entry.portName)) {
                 fresh.append(entry);
             }
         }

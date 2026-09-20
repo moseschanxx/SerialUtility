@@ -15,13 +15,16 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QIntValidator>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSerialPort>
 #include <QSettings>
 #include <QSpinBox>
@@ -31,6 +34,7 @@
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTimer>
+#include <QTranslator>
 
 #include "Version.h"
 #include "app/AppSettings.h"
@@ -42,6 +46,7 @@
 #include "dialogs/AboutDialog.h"
 #include "dialogs/PreferencesDialog.h"
 #include "dialogs/QuickCommandsDialog.h"
+#include "dialogs/SendFileDialog.h"
 #include "dialogs/VersionDialog.h"
 #include "terminal/AnsiParser.h"
 #include "terminal/TerminalTheme.h"
@@ -129,16 +134,12 @@ bool selectData(QComboBox* combo, const QVariant& value)
 
 QString defaultFontFamily()
 {
-#if defined(Q_OS_WIN)
-    return QStringLiteral("Consolas");
-#else
-    return QStringLiteral("Monospace");
-#endif
+    return AppSettings::defaultTerminalFont().family();
 }
 
 QString documentsLogDirectory()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/BuildAI/SerialLogs");
+    return AppSettings::defaultLogDirectory();
 }
 
 /// Every control of PreferencesDialog.ui, looked up by objectName.
@@ -273,6 +274,7 @@ private slots:
     void preferencesDependentControls();
     void preferencesEmptyLogDirFallsBack();
     void preferencesInvalidBaudIgnored();
+    void preferencesKeepsUnlistedEncodingAndTheme();
 
     // ---- QuickCommandModel ----------------------------------------------------------
     void modelRowsAndColumns();
@@ -299,7 +301,12 @@ private slots:
     void storeExportImportRoundTrip();
     void storeImportErrors();
 
+    // ---- SendFileDialog -------------------------------------------------------------
+    void sendFileBackpressure();
+    void sendFileRetranslates();
+
     // ---- AboutDialog / VersionDialog ------------------------------------------------
+    void helpDialogsRetranslate();
     void aboutDialogContent();
     void aboutDialogLogoResource();
     void aboutDialogCloseButton();
@@ -824,6 +831,50 @@ void Tst_dialogs::preferencesInvalidBaudIgnored()
     c.buttons->button(QDialogButtonBox::Apply)->click();
     QCOMPARE(AppSettings::instance().defaultSerialSettings().baudRate, 250000);
     QCOMPARE(c.baud->currentText(), QStringLiteral("250000"));
+
+    // ...and so does a rate outside SerialSettings::kMinBaudRate..kMaxBaudRate (the range the
+    // ConnectionBar accepts), so a default the bar would silently replace can never be stored.
+    c.baud->setEditText(QStringLiteral("20000000"));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(AppSettings::instance().defaultSerialSettings().baudRate, 250000);
+    QCOMPARE(c.baud->currentText(), QStringLiteral("250000"));
+
+    c.baud->setEditText(QStringLiteral("20"));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(AppSettings::instance().defaultSerialSettings().baudRate, 250000);
+    QCOMPARE(c.baud->currentText(), QStringLiteral("250000"));
+
+    // The editor's validator shares the same range.
+    const auto* validator = qobject_cast<const QIntValidator*>(c.baud->validator());
+    QVERIFY(validator);
+    QCOMPARE(validator->bottom(), SerialSettings::kMinBaudRate);
+    QCOMPARE(validator->top(), SerialSettings::kMaxBaudRate);
+}
+
+void Tst_dialogs::preferencesKeepsUnlistedEncodingAndTheme()
+{
+    AppSettings& s = AppSettings::instance();
+    s.setEncoding(QStringLiteral("ISO-8859-15"));   // valid for QStringDecoder with ICU, never in availableEncodings()
+    s.setThemeName(QStringLiteral("no-such-theme"));
+    s.setScrollbackLines(5000);
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+
+    // The stored values are appended to the lists and selected instead of falling back to item 0.
+    QCOMPARE(c.encoding->currentData().toString(), QStringLiteral("ISO-8859-15"));
+    QCOMPARE(c.encoding->count(), AnsiParser::availableEncodings().size() + 1);
+    QCOMPARE(c.theme->currentData().toString(), QStringLiteral("no-such-theme"));
+    QCOMPARE(c.theme->count(), TerminalTheme::names().size() + 1);
+
+    // Changing an unrelated control and applying leaves the untouched settings untouched.
+    c.scrollback->setValue(20000);
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.scrollbackLines(), 20000);
+    QCOMPARE(s.encoding(), QStringLiteral("ISO-8859-15"));
+    QCOMPARE(s.themeName(), QStringLiteral("no-such-theme"));
 }
 
 // =======================================================================================
@@ -908,6 +959,28 @@ void Tst_dialogs::modelDataEveryColumn()
     QCOMPARE(model.index(0, C::Shortcut).data(Qt::EditRole).toString(), QStringLiteral("Ctrl+1"));
     QCOMPARE(model.index(1, C::Shortcut).data(Qt::DisplayRole).toString(), QString());
     QVERIFY(!model.index(1, C::Shortcut).data(Qt::ToolTipRole).toString().isEmpty());
+    QVERIFY(!model.index(0, C::Shortcut).data(Qt::ForegroundRole).isValid());   // Ctrl+1 is terminal-safe
+    QVERIFY(!model.index(1, C::Shortcut).data(Qt::ForegroundRole).isValid());   // empty: nothing to flag
+    // Shortcuts the connected, focused terminal would swallow before the shortcut map.
+    const auto safe = [](const char* text) {
+        return QuickCommandModel::isTerminalSafeShortcut(
+            QKeySequence(QLatin1String(text), QKeySequence::PortableText));
+    };
+    QVERIFY(safe("Ctrl+1"));
+    QVERIFY(safe("Ctrl+Shift+2"));
+    QVERIFY(safe("Meta+R"));
+    QVERIFY(!safe("Alt+Shift+R"));
+    QVERIFY(!safe("Ctrl+R"));
+    QVERIFY(!safe("Ctrl+0"));
+    QVERIFY(!safe("F5"));
+    QVERIFY(!safe("Ctrl+F5"));
+    QVERIFY(!safe("R"));
+    QVERIFY(!safe("Shift+R"));
+    QVERIFY(!safe("Ctrl+T"));
+    QVERIFY(!safe("Ctrl+Tab"));
+    QVERIFY(!safe("Ctrl+Ins"));
+    QVERIFY(!safe(""));
+    QVERIFY(!safe("Ctrl+1, Ctrl+2"));   // multi-stroke sequences are not offered
     // Tooltip
     QCOMPARE(model.index(0, C::Tooltip).data(Qt::DisplayRole).toString(), QStringLiteral("kernel info"));
     QCOMPARE(model.index(0, C::Tooltip).data(Qt::EditRole).toString(), QStringLiteral("kernel info"));
@@ -937,11 +1010,19 @@ void Tst_dialogs::modelSetDataEveryColumn()
     QVERIFY(!model.commands().first().escapes);
     QVERIFY(model.setData(model.index(0, C::Shortcut), QStringLiteral("ctrl+2")));
     QCOMPARE(model.commands().first().shortcut, QStringLiteral("Ctrl+2"));   // normalised portable text
+    // A terminal-unsafe shortcut is accepted but flagged (tooltip + warning colour); a safe one is not.
+    QVERIFY(model.setData(model.index(0, C::Shortcut), QStringLiteral("Alt+Shift+R")));
+    QCOMPARE(model.commands().first().shortcut, QStringLiteral("Alt+Shift+R"));
+    QVERIFY(model.index(0, C::Shortcut).data(Qt::ToolTipRole).toString().contains(QStringLiteral("consumed")));
+    QVERIFY(model.index(0, C::Shortcut).data(Qt::ForegroundRole).isValid());
+    QVERIFY(model.setData(model.index(0, C::Shortcut), QStringLiteral("Ctrl+1")));
+    QVERIFY(!model.index(0, C::Shortcut).data(Qt::ToolTipRole).toString().contains(QStringLiteral("consumed")));
+    QVERIFY(!model.index(0, C::Shortcut).data(Qt::ForegroundRole).isValid());
     QVERIFY(model.setData(model.index(0, C::Shortcut), QString()));
     QCOMPARE(model.commands().first().shortcut, QString());
     QVERIFY(model.setData(model.index(0, C::Tooltip), QStringLiteral("tip")));
     QCOMPARE(model.commands().first().tooltip, QStringLiteral("tip"));
-    QCOMPARE(changed.count(), 10);
+    QCOMPARE(changed.count(), 12);
 
     // Checking HEX also refreshes the Command / Line Ending cells (two dataChanged emissions).
     changed.clear();
@@ -1431,8 +1512,217 @@ void Tst_dialogs::storeImportErrors()
 }
 
 // =======================================================================================
+// SendFileDialog
+// =======================================================================================
+
+void Tst_dialogs::sendFileBackpressure()
+{
+    const QString path = tempPath(QStringLiteral("backpressure.bin"));
+    QByteArray blob(64 * 1024, '\0');
+    for (qsizetype i = 0; i < blob.size(); ++i) {
+        blob[i] = static_cast<char>(i & 0xFF);
+    }
+    QVERIFY(writeFile(path, blob));
+
+    SendFileDialog dialog;
+    QVERIFY(expose(&dialog));
+    dialog.setConnected(true);
+    dialog.setFilePath(path);
+    auto* binaryRadio = child<QRadioButton>(&dialog, "modeBinaryRadio");
+    auto* chunkSize = child<QSpinBox>(&dialog, "chunkSizeSpin");
+    auto* chunkDelay = child<QSpinBox>(&dialog, "chunkDelaySpin");
+    auto* startButton = child<QPushButton>(&dialog, "startButton");
+    auto* pauseButton = child<QPushButton>(&dialog, "pauseButton");
+    auto* progressBar = child<QProgressBar>(&dialog, "progressBar");
+    auto* statusLabel = child<QLabel>(&dialog, "statusLabel");
+    QVERIFY(binaryRadio && chunkSize && chunkDelay && startButton && pauseButton && progressBar && statusLabel);
+    binaryRadio->setChecked(true);
+    chunkSize->setValue(256);
+    chunkDelay->setValue(0);
+    QCOMPARE(dialog.options().mode, FileSender::Mode::Binary);
+    QCOMPARE(dialog.options().chunkSize, 256);
+
+    qint64 sentBytes = 0;
+    connect(&dialog, &SendFileDialog::sendChunk, this,
+            [&sentBytes](const QByteArray& chunk) { sentBytes += chunk.size(); });
+    QSignalSpy finishedSpy(&dialog, &SendFileDialog::sendingFinished);
+
+    // 1) A congested port (far more than two chunks queued) holds the sender before its first chunk.
+    QVERIFY(startButton->isEnabled());
+    startButton->click();
+    QVERIFY(dialog.isSending());
+    dialog.updatePendingTx(100000);
+    QVERIFY(dialog.isSending());
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Pause"));   // the hold is not a user pause
+    QVERIFY2(statusLabel->text().contains(QStringLiteral("drain")), qPrintable(statusLabel->text()));
+    QTest::qWait(100);
+    QCOMPARE(sentBytes, qint64(0));
+    QCOMPARE(progressBar->value(), 0);
+    QVERIFY(dialog.isSending());
+    QCOMPARE(finishedSpy.count(), 0);
+
+    // Still above one chunk: the hold stays.
+    dialog.updatePendingTx(300);
+    QTest::qWait(50);
+    QCOMPARE(sentBytes, qint64(0));
+
+    // Drained: the transfer resumes and runs to completion.
+    dialog.updatePendingTx(0);
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 10000);
+    QCOMPARE(finishedSpy.at(0).at(0).toBool(), true);
+    QCOMPARE(sentBytes, qint64(blob.size()));
+    QCOMPARE(progressBar->value(), 100);
+    QVERIFY(!dialog.isSending());
+    QVERIFY(startButton->isEnabled());
+
+    // 2) A user Pause wins: a drained port must not resume it.
+    sentBytes = 0;
+    finishedSpy.clear();
+    startButton->click();
+    QVERIFY(dialog.isSending());
+    pauseButton->click();
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Resume"));
+    dialog.updatePendingTx(0);
+    QTest::qWait(100);
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Resume"));
+    QVERIFY(dialog.isSending());
+    QCOMPARE(sentBytes, qint64(0));
+    QCOMPARE(finishedSpy.count(), 0);
+    pauseButton->click();   // Resume
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Pause"));
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 10000);
+    QCOMPARE(finishedSpy.at(0).at(0).toBool(), true);
+    QCOMPARE(sentBytes, qint64(blob.size()));
+
+    // 3) Bytes still queued when the last chunk was handed over: 99% until the port reports 0.
+    sentBytes = 0;
+    finishedSpy.clear();
+    const QMetaObject::Connection tail =
+        connect(&dialog, &SendFileDialog::sendChunk, &dialog, [&dialog]() { dialog.updatePendingTx(100); });
+    startButton->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 10000);
+    QCOMPARE(finishedSpy.at(0).at(0).toBool(), true);
+    QCOMPARE(sentBytes, qint64(blob.size()));
+    QCOMPARE(progressBar->value(), 99);
+    QVERIFY2(statusLabel->text().contains(QStringLiteral("still leaving the port")), qPrintable(statusLabel->text()));
+    disconnect(tail);
+    dialog.updatePendingTx(0);
+    QCOMPARE(progressBar->value(), 100);
+    QVERIFY2(!statusLabel->text().contains(QStringLiteral("still leaving")), qPrintable(statusLabel->text()));
+    QVERIFY(!dialog.isSending());
+}
+
+// The dialog is long-lived (SessionWidget reuses it for the lifetime of the tab), so it must
+// retranslate itself on QEvent::LanguageChange, and a running transfer must keep its progress
+// text instead of falling back to the .ui default "Ready.".
+void Tst_dialogs::sendFileRetranslates()
+{
+    const QString path = tempPath(QStringLiteral("retranslate.bin"));
+    QVERIFY(writeFile(path, QByteArray(16 * 1024, 'x')));
+
+    SendFileDialog dialog;
+    QVERIFY(expose(&dialog));
+    dialog.setConnected(true);
+    dialog.setFilePath(path);
+    auto* startButton = child<QPushButton>(&dialog, "startButton");
+    auto* pauseButton = child<QPushButton>(&dialog, "pauseButton");
+    auto* statusLabel = child<QLabel>(&dialog, "statusLabel");
+    auto* binaryRadio = child<QRadioButton>(&dialog, "modeBinaryRadio");
+    QVERIFY(startButton && pauseButton && statusLabel && binaryRadio);
+    binaryRadio->setChecked(true);
+
+    const QString englishTitle = QStringLiteral("Send File");
+    const QString englishStart = QStringLiteral("&Start");
+    const QString englishReady = QStringLiteral("Ready.");
+    QCOMPARE(dialog.windowTitle(), englishTitle);
+    QCOMPARE(startButton->text(), englishStart);
+    QCOMPARE(statusLabel->text(), englishReady);
+
+    QTranslator translator;
+    QVERIFY(translator.load(QStringLiteral(":/translations/zh_CN.qm")));
+
+    // 1) Idle: every string flips to Chinese and back.
+    QVERIFY(qApp->installTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QVERIFY2(dialog.windowTitle() != englishTitle, qPrintable(dialog.windowTitle()));
+    QVERIFY2(startButton->text() != englishStart, qPrintable(startButton->text()));
+    QVERIFY2(statusLabel->text() != englishReady, qPrintable(statusLabel->text()));
+    const QString chineseTitle = dialog.windowTitle();
+    const QString chineseReady = statusLabel->text();
+
+    QVERIFY(qApp->removeTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QCOMPARE(dialog.windowTitle(), englishTitle);
+    QCOMPARE(startButton->text(), englishStart);
+    QCOMPARE(statusLabel->text(), englishReady);
+
+    // 2) While a (paused) transfer is running the progress text survives the switch.
+    startButton->click();
+    QVERIFY(dialog.isSending());
+    pauseButton->click();
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Resume"));
+
+    QVERIFY(qApp->installTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QVERIFY(dialog.isSending());
+    QCOMPARE(dialog.windowTitle(), chineseTitle);
+    QVERIFY2(pauseButton->text() != QStringLiteral("&Resume"), qPrintable(pauseButton->text()));
+    QVERIFY2(statusLabel->text() != englishReady, qPrintable(statusLabel->text()));
+    QVERIFY2(statusLabel->text() != chineseReady, qPrintable(statusLabel->text()));
+    QVERIFY2(statusLabel->text().contains(QStringLiteral(" / ")), qPrintable(statusLabel->text()));   // "a / b (n%)"
+
+    QVERIFY(qApp->removeTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QCOMPARE(dialog.windowTitle(), englishTitle);
+    QCOMPARE(pauseButton->text(), QStringLiteral("&Resume"));
+    QVERIFY2(statusLabel->text().contains(QStringLiteral("[paused]")), qPrintable(statusLabel->text()));
+
+    child<QPushButton>(&dialog, "cancelButton")->click();
+    QVERIFY(!dialog.isSending());
+}
+
+// =======================================================================================
 // AboutDialog / VersionDialog
 // =======================================================================================
+
+// Both help dialogs are modeless and can stay open across Language > ...: they retranslate.
+void Tst_dialogs::helpDialogsRetranslate()
+{
+    AboutDialog about;
+    VersionDialog version;
+    QVERIFY(expose(&about));
+    QVERIFY(expose(&version));
+    const QString englishAbout = about.windowTitle();
+    const QString englishVersion = QStringLiteral("Version Information");
+    QVERIFY(englishAbout.startsWith(QStringLiteral("About ")));
+    QCOMPARE(version.windowTitle(), englishVersion);
+    auto* versionLabel = child<QLabel>(&version, "labelAppVersion");
+    QVERIFY(versionLabel);
+    const QString englishVersionLabel = versionLabel->text();
+    QVERIFY(englishVersionLabel.contains(QStringLiteral("Application Version:")));
+
+    QTranslator translator;
+    QVERIFY(translator.load(QStringLiteral(":/translations/zh_CN.qm")));
+    QVERIFY(qApp->installTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QVERIFY2(about.windowTitle() != englishAbout, qPrintable(about.windowTitle()));
+    QVERIFY2(about.windowTitle().contains(QStringLiteral(APP_DISPLAY_NAME)), qPrintable(about.windowTitle()));
+    QVERIFY2(version.windowTitle() != englishVersion, qPrintable(version.windowTitle()));
+    QVERIFY2(versionLabel->text() != englishVersionLabel, qPrintable(versionLabel->text()));
+    QVERIFY2(versionLabel->text().contains(QStringLiteral(APP_VERSION)), qPrintable(versionLabel->text()));
+
+    QVERIFY(qApp->removeTranslator(&translator));
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    QCOMPARE(about.windowTitle(), englishAbout);
+    QCOMPARE(version.windowTitle(), englishVersion);
+    QCOMPARE(versionLabel->text(), englishVersionLabel);
+}
 
 void Tst_dialogs::aboutDialogContent()
 {

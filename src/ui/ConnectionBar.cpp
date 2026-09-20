@@ -21,8 +21,6 @@ namespace {
 
 constexpr int kPortComboMinWidth = 220;
 constexpr int kDotSizePx = 10;
-constexpr int kMinBaud = 50;
-constexpr int kMaxBaud = 10000000;
 constexpr qint32 kFallbackBaud = 115200;
 
 /// Item data roles used by the port combo (Qt::UserRole holds the port name).
@@ -110,7 +108,8 @@ void ConnectionBar::setupUi()
     m_baudCombo->setObjectName(QStringLiteral("baudCombo"));
     m_baudCombo->setEditable(true);
     m_baudCombo->setInsertPolicy(QComboBox::NoInsert);
-    m_baudCombo->setValidator(new QIntValidator(kMinBaud, kMaxBaud, m_baudCombo));
+    m_baudCombo->setValidator(
+        new QIntValidator(SerialSettings::kMinBaudRate, SerialSettings::kMaxBaudRate, m_baudCombo));
     m_baudCombo->setMinimumContentsLength(8);
     m_baudCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     for (const qint32 baud : SerialSettings::standardBaudRates()) {
@@ -300,7 +299,7 @@ SerialSettings ConnectionBar::settings() const
 
     bool ok = false;
     const qint32 baud = m_baudCombo->currentText().trimmed().toInt(&ok);
-    s.baudRate = (ok && baud >= kMinBaud && baud <= kMaxBaud) ? baud : kFallbackBaud;
+    s.baudRate = (ok && SerialSettings::isValidBaudRate(baud)) ? baud : kFallbackBaud;
 
     s.dataBits = static_cast<QSerialPort::DataBits>(m_dataBitsCombo->currentData().toInt());
     s.parity = static_cast<QSerialPort::Parity>(m_parityCombo->currentData().toInt());

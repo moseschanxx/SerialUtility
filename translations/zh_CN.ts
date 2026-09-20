@@ -29,12 +29,13 @@
         <translation>许可</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/AboutDialog.cpp" line="+15"/>
+        <location filename="../src/dialogs/AboutDialog.cpp" line="+16"/>
+        <location line="+17"/>
         <source>About %1</source>
         <translation>关于 %1</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+14"/>
         <source>Version %1</source>
         <translation>版本 %1</translation>
     </message>
@@ -57,9 +58,14 @@
 <context>
     <name>CommandInput</name>
     <message>
-        <location filename="../src/ui/CommandInput.cpp" line="+101"/>
+        <location filename="../src/ui/CommandInput.cpp" line="+106"/>
         <source>Hex bytes, e.g. AA 55 0D</source>
         <translation>十六进制字节，例如 AA 55 0D</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Command with C escapes, e.g. \x1b[A or AT\tOK (\\ for a literal backslash)</source>
+        <translation>带 C 转义的命令，例如 \x1b[A 或 AT\tOK（\\ 表示字面反斜杠）</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -121,12 +127,12 @@
 <context>
     <name>ConnectionBar</name>
     <message>
-        <location filename="../src/ui/ConnectionBar.cpp" line="+56"/>
+        <location filename="../src/ui/ConnectionBar.cpp" line="+54"/>
         <source>unavailable</source>
         <translation>不可用</translation>
     </message>
     <message>
-        <location line="+193"/>
+        <location line="+194"/>
         <source>Port:</source>
         <translation>端口：</translation>
     </message>
@@ -369,7 +375,7 @@
         <translation>无法读取 %1：%2</translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+182"/>
         <source>%1 baud</source>
         <translation>%1 波特</translation>
     </message>
@@ -748,8 +754,8 @@
     </message>
     <message>
         <location line="+8"/>
-        <source>Zoom &amp;In</source>
-        <translation>放大(&amp;I)</translation>
+        <source>&amp;Zoom In</source>
+        <translation>放大(&amp;Z)</translation>
     </message>
     <message>
         <location line="+3"/>
@@ -822,20 +828,20 @@
         <translation>BuildAI 主页(&amp;H)</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+99"/>
-        <location line="+311"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+100"/>
+        <location line="+322"/>
         <source>New Session (Ctrl+T)</source>
         <translation>新建会话 (Ctrl+T)</translation>
     </message>
     <message>
-        <location line="-54"/>
+        <location line="-53"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>会话 %1 仍处于连接状态。
 仍要关闭吗？</translation>
     </message>
     <message numerus="yes">
-        <location line="+2"/>
+        <location line="+1"/>
         <source>%n sessions are still connected (%1).
 Close them anyway?</source>
         <translation>
@@ -844,25 +850,49 @@ Close them anyway?</source>
         </translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="-2"/>
         <source>Close Session</source>
         <translation>关闭会话</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <location line="+694"/>
+        <location line="-6"/>
+        <source>Quit %1</source>
+        <translation>退出 %1</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n session(s) are still connected (%1).
+Quit anyway? All tabs will be closed and logging stopped.</source>
+        <translation>
+            <numerusform>%n 个会话仍处于连接状态（%1）。
+仍要退出吗？所有标签页将被关闭并停止记录。</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Quit</source>
+        <translation>退出</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <location line="+709"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-616"/>
-        <location line="+572"/>
+        <location line="-631"/>
+        <location line="+587"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-507"/>
+        <location line="-522"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -875,12 +905,17 @@ Close them anyway?</source>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+273"/>
+        <location line="+288"/>
         <source>Cannot open %1</source>
         <translation>无法打开 %1</translation>
     </message>
     <message>
-        <location line="-208"/>
+        <location line="-245"/>
+        <source>Not connected</source>
+        <translation>未连接</translation>
+    </message>
+    <message>
+        <location line="+28"/>
         <source>Find</source>
         <translation>查找</translation>
     </message>
@@ -895,7 +930,7 @@ Close them anyway?</source>
         <translation>未找到</translation>
     </message>
     <message>
-        <location line="+267"/>
+        <location line="+276"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -934,7 +969,7 @@ Close them anyway?</source>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+74"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+68"/>
         <source>Preferences</source>
         <translation>首选项</translation>
     </message>
@@ -1134,7 +1169,7 @@ Close them anyway?</source>
         <translation>启动时重新打开上次的会话标签页</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+60"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+61"/>
         <source>None</source>
         <translation>无</translation>
     </message>
@@ -1187,12 +1222,12 @@ Close them anyway?</source>
 <context>
     <name>QuickCommandBar</name>
     <message>
-        <location filename="../src/ui/QuickCommandBar.cpp" line="+227"/>
+        <location filename="../src/ui/QuickCommandBar.cpp" line="+223"/>
         <source>All</source>
         <translation>全部</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+4"/>
         <source>Quick command group</source>
         <translation>快捷命令分组</translation>
     </message>
@@ -1203,20 +1238,25 @@ Close them anyway?</source>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+113"/>
+        <location line="+112"/>
         <source>Click: send, middle-click or Alt+click: edit</source>
         <translation>单击：发送；中键单击或 Alt+单击：编辑</translation>
     </message>
     <message>
-        <location line="-4"/>
+        <location line="-7"/>
         <source>Shortcut: %1</source>
         <translation>快捷键：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source> (not available while the terminal has focus)</source>
+        <translation>（终端获得焦点时不可用）</translation>
     </message>
 </context>
 <context>
     <name>QuickCommandModel</name>
     <message>
-        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="+186"/>
+        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="+286"/>
         <source>Error: %1</source>
         <translation>错误：%1</translation>
     </message>
@@ -1228,12 +1268,7 @@ Close them anyway?</source>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
-        <source>General</source>
-        <translation>常规</translation>
-    </message>
-    <message>
-        <location line="+14"/>
+        <location line="+19"/>
         <source>No line ending is appended to HEX commands.</source>
         <translation>HEX 命令不附加行结束符。</translation>
     </message>
@@ -1248,12 +1283,17 @@ Close them anyway?</source>
         <translation>解释命令中的 C 风格转义序列（\n、\r、\t、\xHH）。</translation>
     </message>
     <message>
-        <location line="+16"/>
-        <source>Optional keyboard shortcut, e.g. Ctrl+1 or Alt+Shift+R.</source>
-        <translation>可选的键盘快捷键，例如 Ctrl+1 或 Alt+Shift+R。</translation>
+        <location line="+24"/>
+        <source>Optional keyboard shortcut, e.g. Ctrl+1 or Ctrl+Shift+2. While connected the terminal consumes plain keys, Alt+&lt;key&gt;, Ctrl+&lt;letter&gt;, Ctrl+0 and F1-F12; use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</source>
+        <translation>可选的键盘快捷键，例如 Ctrl+1 或 Ctrl+Shift+2。连接期间终端会占用普通按键、Alt+&lt;键&gt;、Ctrl+&lt;字母&gt;、Ctrl+0 和 F1-F12；请使用 Ctrl+&lt;数字 1-9&gt;，可按需加上 Shift。</translation>
     </message>
     <message>
-        <location line="+112"/>
+        <location line="+4"/>
+        <source>%1 is consumed by the connected terminal and will not trigger this command while the terminal has focus. Use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</source>
+        <translation>%1 会被已连接的终端占用，终端获得焦点时不会触发此命令。请使用 Ctrl+&lt;数字 1-9&gt;，可按需加上 Shift。</translation>
+    </message>
+    <message>
+        <location line="+125"/>
         <source>Name</source>
         <translation>名称</translation>
     </message>
@@ -1322,12 +1362,12 @@ Close them anyway?</source>
         <translation>无法写入 %1：%2</translation>
     </message>
     <message>
-        <location line="+149"/>
+        <location line="+169"/>
         <source>General</source>
         <translation>常规</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+38"/>
         <source>Interrupt (ETX, 0x03)</source>
         <translation>中断（ETX，0x03）</translation>
     </message>
@@ -1412,12 +1452,12 @@ Close them anyway?</source>
         <translation>恢复默认(&amp;F)</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="-404"/>
+        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="-526"/>
         <source>The file contains no quick commands.</source>
         <translation>该文件不包含任何快捷命令。</translation>
     </message>
     <message>
-        <location line="+405"/>
+        <location line="+527"/>
         <source>The quick commands could not be saved to
 %1
 
@@ -1506,7 +1546,8 @@ Nothing is saved until you press OK.</source>
     <name>SendFileDialog</name>
     <message>
         <location filename="../src/dialogs/SendFileDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+56"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+57"/>
+        <location line="+54"/>
         <source>Send File</source>
         <translation>发送文件</translation>
     </message>
@@ -1603,7 +1644,8 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+42"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+85"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+6"/>
+        <location line="+53"/>
         <source>Ready.</source>
         <translation>就绪。</translation>
     </message>
@@ -1614,7 +1656,7 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+10"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+185"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+238"/>
         <source>&amp;Pause</source>
         <translation>暂停(&amp;P)</translation>
     </message>
@@ -1629,12 +1671,13 @@ Nothing is saved until you press OK.</source>
         <translation>关闭(&amp;O)</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="-190"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="-244"/>
         <source>Paused: the session is not connected. Press Resume once it is back.</source>
         <translation>已暂停：会话未连接。恢复连接后请按“继续”。</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-47"/>
+        <location line="+51"/>
         <location line="+39"/>
         <source>Not connected.</source>
         <translation>未连接。</translation>
@@ -1660,7 +1703,7 @@ Nothing is saved until you press OK.</source>
         <translation>找不到文件：%1</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+13"/>
         <source>The file could not be sent.</source>
         <translation>无法发送该文件。</translation>
     </message>
@@ -1675,12 +1718,12 @@ Nothing is saved until you press OK.</source>
         <translation>无法继续：会话未连接。</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+7"/>
         <source>Resumed.</source>
         <translation>已继续。</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+5"/>
         <source>Paused.</source>
         <translation>已暂停。</translation>
     </message>
@@ -1695,7 +1738,22 @@ Nothing is saved until you press OK.</source>
         <translation>[已暂停]</translation>
     </message>
     <message>
-        <location line="+69"/>
+        <location line="+16"/>
+        <source> - %1 still leaving the port</source>
+        <translation> - 仍有 %1 正在从端口发出</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source> (%1 already queued will still be sent)</source>
+        <translation>（已排队的 %1 仍会被发送）</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Waiting for the port to drain (%1 queued)...</source>
+        <translation>等待端口发送完毕（已排队 %1）...</translation>
+    </message>
+    <message>
+        <location line="+62"/>
         <source>&amp;Resume</source>
         <translation>继续(&amp;R)</translation>
     </message>
@@ -1713,42 +1771,42 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SerialConnection</name>
     <message>
-        <location filename="../src/core/SerialConnection.cpp" line="+250"/>
-        <location line="+410"/>
+        <location filename="../src/core/SerialConnection.cpp" line="+281"/>
+        <location line="+485"/>
         <source>baud rate %1</source>
         <translation>波特率 %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-481"/>
+        <location line="+484"/>
         <source>data bits %1</source>
         <translation>数据位 %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-479"/>
+        <location line="+482"/>
         <source>parity %1</source>
         <translation>校验位 %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-477"/>
+        <location line="+480"/>
         <source>stop bits %1</source>
         <translation>停止位 %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-475"/>
+        <location line="+478"/>
         <source>flow control %1</source>
         <translation>流控制 %1</translation>
     </message>
     <message>
-        <location line="-407"/>
+        <location line="-471"/>
         <source>Cannot apply %1 to %2: %3</source>
         <translation>无法将 %1 应用到 %2：%3</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+115"/>
         <source>Connected</source>
         <translation>已连接</translation>
     </message>
@@ -1763,29 +1821,34 @@ Nothing is saved until you press OK.</source>
         <translation>已断开</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+27"/>
         <source>No serial port selected</source>
         <translation>未选择串口</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <source>Port %1 is busy or access denied</source>
         <translation>端口 %1 被占用或访问被拒绝</translation>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+282"/>
+        <location line="+332"/>
         <location line="+5"/>
         <source>Port %1 not found</source>
         <translation>找不到端口 %1</translation>
     </message>
     <message>
-        <location line="-284"/>
+        <location line="-334"/>
         <source>Cannot open %1: %2</source>
         <translation>无法打开 %1：%2</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+17"/>
+        <source>Port %1 is back but %2</source>
+        <translation>端口 %1 已恢复，但%2</translation>
+    </message>
+    <message>
+        <location line="+78"/>
         <source>Write to %1 failed: %2</source>
         <translation>写入 %1 失败：%2</translation>
     </message>
@@ -1805,17 +1868,17 @@ Nothing is saved until you press OK.</source>
         <translation>无法在 %1 上发送 BREAK：%2</translation>
     </message>
     <message>
-        <location line="+205"/>
+        <location line="+231"/>
         <source>Port %1 disconnected</source>
         <translation>端口 %1 已断开</translation>
     </message>
     <message>
-        <location line="-145"/>
+        <location line="-159"/>
         <source>Port %1: %2</source>
         <translation>端口 %1：%2</translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+62"/>
         <source>Cannot set %1 on %2: %3</source>
         <translation>无法在 %2 上设置 %1：%3</translation>
     </message>
@@ -1916,7 +1979,8 @@ Nothing is saved until you press OK.</source>
         <translation>无法打开日志文件 %1：%2</translation>
     </message>
     <message>
-        <location line="+167"/>
+        <location line="+190"/>
+        <location line="+10"/>
         <source>Write to log file %1 failed: %2</source>
         <translation>写入日志文件 %1 失败：%2</translation>
     </message>
@@ -1924,12 +1988,12 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+97"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+98"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Log closed: %1 (%2 bytes)</source>
         <translation>日志已关闭：%1（%2 字节）</translation>
     </message>
@@ -1949,17 +2013,27 @@ Nothing is saved until you press OK.</source>
         <translation>请先选择串口</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+23"/>
         <source>Connected to %1 (%2)</source>
         <translation>已连接到 %1（%2）</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+29"/>
+        <source>%1 unsent bytes discarded on disconnect</source>
+        <translation>断开时丢弃了 %1 个未发送字节</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Disconnected from %1 (%2 unsent bytes discarded)</source>
+        <translation>已断开与 %1 的连接（丢弃了 %2 个未发送字节）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Disconnected from %1</source>
         <translation>已断开与 %1 的连接</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+24"/>
         <source>Terminal reset</source>
         <translation>终端已重置</translation>
     </message>
@@ -1970,23 +2044,23 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+255"/>
+        <location line="+320"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>日志文件 (*.log *.txt);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="-233"/>
+        <location line="-298"/>
         <source>(no port)</source>
         <translation>（无端口）</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+43"/>
         <source>Sending %1...</source>
         <translation>正在发送 %1...</translation>
     </message>
     <message>
         <location line="+23"/>
-        <location line="+24"/>
+        <location line="+27"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
@@ -2006,7 +2080,7 @@ Nothing is saved until you press OK.</source>
         <translation>快捷命令 &quot;%1&quot;：%2</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+65"/>
         <source>port %1 disappeared, waiting to reconnect</source>
         <translation>端口 %1 已消失，等待重连</translation>
     </message>
@@ -2036,7 +2110,7 @@ Nothing is saved until you press OK.</source>
         <translation>已重新连接到 %1</translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="+106"/>
         <source>Disconnect from %1 before replaying a log file</source>
         <translation>回放日志文件前，请先断开与 %1 的连接</translation>
     </message>
@@ -2089,7 +2163,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SystemLogViewer</name>
     <message>
-        <location filename="../src/ui/SystemLogViewer.cpp" line="+214"/>
+        <location filename="../src/ui/SystemLogViewer.cpp" line="+248"/>
         <source>Level:</source>
         <translation>级别：</translation>
     </message>
@@ -2149,7 +2223,7 @@ Nothing is saved until you press OK.</source>
         <translation>丢弃所有消息</translation>
     </message>
     <message>
-        <location line="+132"/>
+        <location line="+138"/>
         <location line="+8"/>
         <source>Save System Log</source>
         <translation>保存系统日志</translation>
@@ -2193,7 +2267,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1714"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1765"/>
         <source>&amp;Copy</source>
         <translation>复制(&amp;C)</translation>
     </message>
@@ -2227,12 +2301,18 @@ Nothing is saved until you press OK.</source>
         <source>Sync Terminal Size (stty)</source>
         <translation>同步终端尺寸 (stty)</translation>
     </message>
+    <message>
+        <location line="+5"/>
+        <source>&amp;Find...</source>
+        <translation>查找(&amp;F)...</translation>
+    </message>
 </context>
 <context>
     <name>VersionDialog</name>
     <message>
         <location filename="../src/dialogs/VersionDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/VersionDialog.cpp" line="+68"/>
+        <location filename="../src/dialogs/VersionDialog.cpp" line="+69"/>
+        <location line="+19"/>
         <source>Version Information</source>
         <translation>版本信息</translation>
     </message>
@@ -2248,7 +2328,7 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+6"/>
-        <location filename="../src/dialogs/VersionDialog.cpp" line="+45"/>
+        <location filename="../src/dialogs/VersionDialog.cpp" line="+37"/>
         <location line="+30"/>
         <source>Application Version:</source>
         <translation>应用程序版本：</translation>

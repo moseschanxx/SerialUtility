@@ -77,12 +77,16 @@ private slots:
     void linuxSleepAndProgress();
     void linuxLogout();
     void linuxLineTerminators();
+    void linuxCtrlCDiscardsPendingOutput();
     void linuxRebootVanishes();
+    void linuxRebootDrainsOutputAtLowBaud();
     void linuxPoweroffStaysDown();
 
     // U-Boot
     void ubootCountdownAndPrompt();
     void ubootCountdownTicks();
+    void ubootCountdownWaitsForBanner();
+    void ubootResetCrlfKeepsCountdown();
     void ubootCommands();
     void ubootBootsToLinux();
     void ubootAutoboot();
@@ -202,6 +206,7 @@ void Tst_devicesimulator::presence()
 
     DeviceSimulator::markAbsent(linux, -1);
     QVERIFY(!DeviceSimulator::isPresent(linux));
+    QVERIFY(DeviceSimulator::isListed(linux));   // powered off: still enumerable
     QTest::qWait(20);
     QVERIFY(!DeviceSimulator::isPresent(linux));   // stays down until markPresent()
     DeviceSimulator::markPresent(linux);
@@ -209,8 +214,14 @@ void Tst_devicesimulator::presence()
 
     DeviceSimulator::markAbsent(linux, 150);
     QVERIFY(!DeviceSimulator::isPresent(linux));
+    QVERIFY(!DeviceSimulator::isListed(linux));   // timed reboot: unplugged
     QTRY_VERIFY_WITH_TIMEOUT(DeviceSimulator::isPresent(linux), 2000);
     QVERIFY(DeviceSimulator::isPresent(linux));   // the entry was dropped, still present
+    QVERIFY(DeviceSimulator::isListed(linux));
+    DeviceSimulator::markAbsent(linux, 300);
+    QVERIFY(!DeviceSimulator::isListed(linux));
+    QTRY_VERIFY_WITH_TIMEOUT(DeviceSimulator::isListed(linux), 2000);
+    QVERIFY(!DeviceSimulator::isListed(QStringLiteral("COM8")));
 
     // Other ports are unaffected.
     DeviceSimulator::markAbsent(QStringLiteral("SIM:mcu"), -1);
@@ -560,6 +571,7 @@ void Tst_devicesimulator::linuxSleepAndProgress()
     out = exchange(*sim, "\x03");
     QVERIFY(out.contains("^C\r\n"));
     QVERIFY(out.endsWith(kLinuxPrompt));
+    QVERIFY(!out.contains("Downloading firmware"));   // bar redraws queued before Ctrl+C are dropped
     QVERIFY(exchange(*sim, "pwd\r").contains("/root"));   // shell is usable again
 }
 
@@ -612,9 +624,13 @@ void Tst_devicesimulator::linuxRebootVanishes()
     DeviceSimulator::markPresent(QStringLiteral("SIM:linux"));
 
     QSignalSpy vanished(sim, &DeviceSimulator::vanished);
-    QByteArray out = exchange(*sim, "reboot\r");
+    // Bytes following the reboot in the same write are lost (the device is already down):
+    // no echo of "pwd" and no "\r\n" after the kernel line.
+    QByteArray out = exchange(*sim, "reboot\rpwd\r");
     QVERIFY(out.contains("The system is going down for reboot NOW!"));
     QVERIFY(out.contains("reboot: Restarting system"));
+    QVERIFY2(out.endsWith("reboot: Restarting system\r\n"), out.constData());
+    QVERIFY(!out.mid(out.indexOf("Restarting system")).contains("pwd"));
     QCOMPARE(vanished.count(), 0);   // the message gets a head start
     QVERIFY(vanished.wait(2000));
     QCOMPARE(vanished.count(), 1);
@@ -628,6 +644,37 @@ void Tst_devicesimulator::linuxRebootVanishes()
     QVERIFY(DeviceSimulator::isPresent(QStringLiteral("SIM:linux")));
 }
 
+void Tst_devicesimulator::linuxRebootDrainsOutputAtLowBaud()
+{
+    QObject parent;
+    DeviceSimulator* sim = loggedInLinux(&parent);   // logs in at 4 Mbaud (fast)
+    QVERIFY(sim);
+    DeviceSimulator::markPresent(QStringLiteral("SIM:linux"));
+    sim->setBaudRate(2400);   // ~190 B of shutdown text at 4 B/tick: ~1 s, longer than the 400 ms grace
+    Collector out(*sim);
+    QSignalSpy vanished(sim, &DeviceSimulator::vanished);
+    sim->receive("reboot\r");   // paced path, no flush()
+    QVERIFY(vanished.wait(6000));
+    QVERIFY2(out.data.endsWith("reboot: Restarting system\r\n"), out.data.constData());
+    QVERIFY(sim->pendingOutput().isEmpty());
+    QCOMPARE(vanished.first().first().toInt(), 3000);
+    DeviceSimulator::markPresent(QStringLiteral("SIM:linux"));
+}
+
+void Tst_devicesimulator::linuxCtrlCDiscardsPendingOutput()
+{
+    QObject parent;
+    DeviceSimulator* sim = loggedInLinux(&parent);
+    QVERIFY(sim);
+
+    sim->setBaudRate(9600);
+    sim->receive("dmesg\r");
+    QVERIFY(sim->pendingOutput().size() > 2000);   // a lot still queued at 9600 baud
+    sim->receive("\x03");
+    QCOMPARE(sim->pendingOutput(), QByteArrayLiteral("^C\r\n") + kLinuxPrompt);
+    QVERIFY(exchange(*sim, "pwd\r").contains("/root"));
+}
+
 void Tst_devicesimulator::linuxPoweroffStaysDown()
 {
     QObject parent;
@@ -638,6 +685,7 @@ void Tst_devicesimulator::linuxPoweroffStaysDown()
     QVERIFY(vanished.wait(2000));
     QCOMPARE(vanished.first().first().toInt(), -1);
     QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:linux")));
+    QVERIFY(DeviceSimulator::isListed(QStringLiteral("SIM:linux")));   // powered off, still in the port list
     QTest::qWait(30);
     QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:linux")));
     DeviceSimulator::markPresent(QStringLiteral("SIM:linux"));
@@ -676,6 +724,39 @@ void Tst_devicesimulator::ubootCountdownTicks()
     QVERIFY(!out.data.contains("\b1"));
     sim.receive(" ");
     QTRY_VERIFY_WITH_TIMEOUT(out.data.endsWith("=> "), 1000);
+}
+
+void Tst_devicesimulator::ubootCountdownWaitsForBanner()
+{
+    // At 2400 baud the banner streams for ~3 s: the seconds must not start counting before
+    // the "3" has actually been delivered.
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 2400);
+    Collector out(sim);
+    sim.start();
+    QTRY_VERIFY_WITH_TIMEOUT(out.data.contains("autoboot:  3"), 8000);
+    QVERIFY(!out.data.contains("\b2"));
+    QTest::qWait(700);
+    QVERIFY(!out.data.contains("\b2"));
+    QTRY_VERIFY_WITH_TIMEOUT(out.data.contains("\b2"), 1500);
+}
+
+void Tst_devicesimulator::ubootResetCrlfKeepsCountdown()
+{
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 4000000);
+    sim.start();
+    flush(sim);
+    exchange(sim, " ");   // stop the initial autoboot -> "=> "
+
+    // The LF of a CRLF-terminated "reset" must not count as the "any key" that stops the
+    // countdown the CR just started.
+    QByteArray out = exchange(sim, "reset\r\n");
+    QVERIFY(out.contains("resetting ..."));
+    QVERIFY2(out.endsWith("Hit any key to stop autoboot:  3"), out.constData());
+    Collector ticks(sim);   // the paced "\b2" is delivered by the timer, not by flush()
+    QTRY_VERIFY_WITH_TIMEOUT(ticks.data.contains("\b2"), 2500);   // the countdown is still running
+
+    // Stopping the countdown with Enter in CRLF mode prints a single prompt.
+    QCOMPARE(exchange(sim, "\r\n"), QByteArrayLiteral("\r\n=> "));
 }
 
 void Tst_devicesimulator::ubootCommands()
@@ -850,8 +931,9 @@ void Tst_devicesimulator::mcuResetAndVanish()
     QVERIFY(out.endsWith("> "));
 
     QSignalSpy vanished(&sim, &DeviceSimulator::vanished);
-    out = exchange(sim, "AT+RST\r");
+    out = exchange(sim, "AT+RST\rAT\r");   // the second command arrives at a device that is already down
     QVERIFY(out.contains("OK"));
+    QVERIFY2(out.endsWith("OK\r\n"), out.constData());   // no echoed "AT", no extra "\r\n"
     QVERIFY(vanished.wait(2000));
     QCOMPARE(vanished.first().first().toInt(), 1500);
     QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:mcu")));
@@ -956,12 +1038,23 @@ void Tst_devicesimulator::connectionReconnectsAfterSimulatedReset()
     QCOMPARE(c.write(QByteArrayLiteral("x")), qint64(-1));
     QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:mcu")));
 
-    // The device comes back after 1.5 s and the connection reopens it (new banner).
+    // An explicit open() while Reconnecting is a forced, non-quiet attempt: it re-powers the
+    // simulated device, reports success through reconnected() and stops the retry timer.
     rx.clear();
-    QTRY_COMPARE_WITH_TIMEOUT(reconnected.count(), 1, 6000);
+    QVERIFY(c.open());
     QCOMPARE(c.state(), SerialConnection::State::Connected);
+    QCOMPARE(reconnected.count(), 1);
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(DeviceSimulator::isPresent(QStringLiteral("SIM:mcu")));
     QTRY_VERIFY_WITH_TIMEOUT(rx.data.contains("BuildAI MCU shell v1.0"), 2000);
-    QCOMPARE(errors.count(), 1);   // reconnect attempts never spam errorOccurred()
+    QTest::qWait(2000);
+    QCOMPARE(reconnected.count(), 1);   // no second reconnect fires after an explicit open
+    QCOMPARE(errors.count(), 1);        // reconnect attempts never spam errorOccurred()
+
+    // Note: the real-port outage paths (Windows ERROR_GEN_FAILURE -> UnknownError with the port
+    // no longer enumerated, SerialPortEnumerator::portRemoved for the open port, and a driver
+    // rejecting the stored baud rate on reopen) cannot be provoked without hardware; they need
+    // a manual unplug test with a CH34x/FTDI adapter and are verified by review only.
 
     // Cancelling a reconnect: open again, vanish again, then close() while Reconnecting.
     QCOMPARE(c.write(QByteArrayLiteral("AT+RST\r")), qint64(7));
@@ -993,7 +1086,7 @@ void Tst_devicesimulator::enumeratorListsSimulatedPorts()
     // A "rebooting" device disappears from the list and comes back.
     QSignalSpy removed(&e, &SerialPortEnumerator::portRemoved);
     QSignalSpy added(&e, &SerialPortEnumerator::portAdded);
-    DeviceSimulator::markAbsent(QStringLiteral("SIM:uboot"), -1);
+    DeviceSimulator::markAbsent(QStringLiteral("SIM:uboot"), 60000);
     e.refresh();
     QVERIFY(!e.contains(QStringLiteral("SIM:uboot")));
     QCOMPARE(removed.count(), 1);
@@ -1002,6 +1095,14 @@ void Tst_devicesimulator::enumeratorListsSimulatedPorts()
     e.refresh();
     QVERIFY(e.contains(QStringLiteral("SIM:uboot")));
     QCOMPARE(added.count(), 1);
+
+    // A powered-off device (poweroff / AT+RST with no return) stays listed so it can be reopened.
+    DeviceSimulator::markAbsent(QStringLiteral("SIM:uboot"), -1);
+    e.refresh();
+    QVERIFY(e.contains(QStringLiteral("SIM:uboot")));
+    QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:uboot")));
+    QCOMPARE(removed.count(), 1);
+    DeviceSimulator::markPresent(QStringLiteral("SIM:uboot"));
 
     // Hidden by preference.
     settings.setShowSimulatedPorts(false);

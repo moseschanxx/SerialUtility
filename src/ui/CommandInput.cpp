@@ -93,12 +93,20 @@ void CommandInput::setupUi()
         clearError();
         retranslate();
     });
+    connect(m_escapeCheck, &QCheckBox::toggled, this, [this](bool) {
+        clearError(); // a stale "invalid escape" mark no longer applies once the mode flips
+        retranslate();
+    });
 }
 
 void CommandInput::retranslate()
 {
+    // Hex first: it takes precedence in send() even when the (disabled) escape box is still checked.
     if (hexMode()) {
         m_edit->setPlaceholderText(tr("Hex bytes, e.g. AA 55 0D"));
+    } else if (escapeMode()) {
+        m_edit->setPlaceholderText(
+            tr("Command with C escapes, e.g. \\x1b[A or AT\\tOK (\\\\ for a literal backslash)"));
     } else {
         m_edit->setPlaceholderText(tr("Type a command and press Enter (Up/Down for history)"));
     }

@@ -64,12 +64,35 @@ bool SessionLogger::start(const QString& filePath, Format format, bool includeTx
     m_bytesWritten = 0;
 
     if (m_format != Format::Raw) {
+        // Appending to an existing capture: the previous log usually ends in an unterminated
+        // prompt line, so make sure the header starts on a fresh line (Raw stays verbatim).
+        bool needsNewline = false;
+        const qint64 existing = m_file->size();
+        if (existing > 0) {
+            // Separate read-only handle: the Append-mode handle has no useful seek semantics.
+            QFile tail(filePath);
+            if (tail.open(QIODevice::ReadOnly) && tail.seek(existing - 1)) {
+                char last = '\n';
+                if (tail.read(&last, 1) == 1) {
+                    needsNewline = (last != '\n');
+                }
+            }
+        }
+
         QString line = QStringLiteral("# BuildAI Serial Utility log");
         if (!header.trimmed().isEmpty()) {
             line += QStringLiteral(" - ") + header.trimmed();
         }
         line += QStringLiteral(" - started %1\n").arg(timestamp());
-        writeRaw(line.toUtf8());
+        QByteArray bytes = line.toUtf8();
+        if (needsNewline) {
+            bytes.prepend('\n');
+        }
+        writeRaw(bytes);
+    }
+    if (!m_file) {
+        // writeRaw() failed: it already called stop() and emitted error(); do not report success.
+        return false;
     }
 
     qCInfo(lcSerial) << "logging to" << QDir::toNativeSeparators(filePath) << "format" << formatToString(m_format)
@@ -225,8 +248,17 @@ void SessionLogger::writeRaw(const QByteArray& bytes)
         emit error(message);
         return;
     }
-    m_bytesWritten += written;
-    m_file->flush();   // survive a crash; no fsync (see DESIGN.md 4.6)
+    // Survive a crash; no fsync (see DESIGN.md 4.6). Qt buffers small writes, so a full disk or
+    // read-only share surfaces here rather than from write().
+    if (!m_file->flush()) {
+        const QString message = tr("Write to log file %1 failed: %2")
+                                    .arg(QDir::toNativeSeparators(m_file->fileName()), m_file->errorString());
+        qCWarning(lcSerial) << message;
+        stop();
+        emit error(message);
+        return;
+    }
+    m_bytesWritten += written;   // only count data that reached the OS
 }
 
 QString SessionLogger::timestamp()

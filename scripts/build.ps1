@@ -11,7 +11,8 @@
 .PARAMETER Config      Debug | Release | RelWithDebInfo (default Release)
 .PARAMETER QtDir       Qt installation prefix (default: $env:QT_ROOT or D:\Qt\6.8.3\msvc2022_64)
 .PARAMETER BuildDir    Build directory (default: build\<Config>)
-.PARAMETER Target      CMake target(s) to build (default: all)
+.PARAMETER Target      CMake target(s) to build (default: all). Cannot be combined with -Test, -Deploy or -Run,
+                       which need every target built.
 .PARAMETER Clean       Remove the build directory first
 .PARAMETER Test        Run ctest after building
 .PARAMETER Deploy      cmake --install into dist\<Config> (runs windeployqt)
@@ -42,6 +43,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# --- Guard: -Test / -Deploy / -Run need the full build ---------------------------
+# A restricted -Target build leaves the test executables (tests/CMakeLists.txt) and/or
+# BuildAI-SerialUtility.exe unbuilt or stale; ctest / cmake --install / Start-Process
+# would then fail with 'Could not find executable' or, worse, silently use old binaries.
+if ($Target.Count -gt 0 -and ($Test -or $Deploy -or $Run)) {
+    throw '-Test, -Deploy and -Run require a full build; drop -Target (or run them in a separate invocation without -Target).'
+}
+
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not $BuildDir) { $BuildDir = Join-Path $root "build\$Config" }
 elseif (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $root $BuildDir }

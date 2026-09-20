@@ -188,12 +188,18 @@ QString printableAscii(const QByteArray& data)
 
 QByteArray unescape(const QString& text, QString* error)
 {
-    QByteArray out;
-    QString pending;   // decoded text not yet converted to UTF-8 (so surrogate pairs stay intact)
+    return unescape(
+        text, [](const QString& s) { return s.toUtf8(); }, error);
+}
 
-    auto flush = [&out, &pending]() {
+QByteArray unescape(const QString& text, const std::function<QByteArray(const QString&)>& encodeText, QString* error)
+{
+    QByteArray out;
+    QString pending;   // decoded text not yet encoded (so surrogate pairs stay intact)
+
+    auto flush = [&out, &pending, &encodeText]() {
         if (!pending.isEmpty()) {
-            out.append(pending.toUtf8());
+            out.append(encodeText(pending));
             pending.clear();
         }
     };

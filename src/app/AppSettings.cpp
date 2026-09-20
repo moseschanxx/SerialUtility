@@ -50,20 +50,6 @@ QVariant readValue(const char* key, const QVariant& fallback = QVariant())
     return settings.value(QLatin1String(key), fallback);
 }
 
-QFont defaultTerminalFont()
-{
-#if defined(Q_OS_WIN)
-    QFont font(QStringLiteral("Consolas"), 10);
-#elif defined(Q_OS_MACOS)
-    QFont font(QStringLiteral("Menlo"), 10);
-#else
-    QFont font(QStringLiteral("Monospace"), 10);
-#endif
-    font.setStyleHint(QFont::Monospace);
-    font.setFixedPitch(true);
-    return font;
-}
-
 QString defaultLanguage()
 {
     const QLocale locale = QLocale::system();
@@ -71,15 +57,6 @@ QString defaultLanguage()
         return QStringLiteral("zh_CN");
     }
     return QStringLiteral("en_US");
-}
-
-QString defaultLogDirectory()
-{
-    QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    if (docs.isEmpty()) {
-        docs = QDir::homePath();
-    }
-    return docs + QStringLiteral("/BuildAI/SerialLogs");
 }
 
 QString normalizeLogFormat(const QString& format)
@@ -102,6 +79,27 @@ AppSettings& AppSettings::instance()
 AppSettings::AppSettings(QObject* parent)
     : QObject(parent)
 {
+}
+
+QFont AppSettings::defaultTerminalFont()
+{
+#if defined(Q_OS_WIN)
+    QFont font(QStringLiteral("Consolas"), 10);
+#else
+    QFont font(QStringLiteral("Monospace"), 10);
+#endif
+    font.setStyleHint(QFont::Monospace);
+    font.setFixedPitch(true);
+    return font;
+}
+
+QString AppSettings::defaultLogDirectory()
+{
+    QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (docs.isEmpty()) {
+        docs = QDir::homePath();
+    }
+    return docs + QStringLiteral("/BuildAI/SerialLogs");
 }
 
 // Writes `value` under `key` and emits changed(key).
@@ -130,7 +128,7 @@ void AppSettings::setLanguage(const QString& code)
 QFont AppSettings::terminalFont() const
 {
     const QString spec = readValue(kTerminalFont).toString();
-    QFont font = defaultTerminalFont();
+    QFont font = AppSettings::defaultTerminalFont();
     if (!spec.isEmpty()) {
         QFont stored;
         if (stored.fromString(spec)) {
@@ -308,7 +306,7 @@ void AppSettings::setShowSimulatedPorts(bool on)
 QString AppSettings::logDirectory() const
 {
     const QString dir = readValue(kLogDirectory).toString().trimmed();
-    return dir.isEmpty() ? defaultLogDirectory() : dir;
+    return dir.isEmpty() ? AppSettings::defaultLogDirectory() : dir;
 }
 
 void AppSettings::setLogDirectory(const QString& dir)

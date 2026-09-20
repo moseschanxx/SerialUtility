@@ -8,8 +8,10 @@ Not a terminfo-complete xterm; unknown input is consumed silently (logged at deb
 
 The parser is Paul Williams' VT500-series state machine (<https://vt100.net/emu/dec_ansi_parser>)
 with two deliberate extensions: colon sub-parameters in CSI (for `SGR 38:2::r:g:b`), and any
-non-ASCII printable inside an ESC/CSI sequence aborts the sequence and is printed (real devices
-emit garbage between sequences after a reset; swallowing the text that follows is worse).
+non-ASCII printable (`U+00A0` and above, including `U+FFFD`) inside an ESC/CSI sequence or a
+DCS/SOS/PM/APC string aborts it and is printed (real devices emit garbage between sequences after
+a reset; swallowing the text that follows is worse). OSC strings are exempt: titles may contain
+non-ASCII text.
 
 ## 1. Bytes to characters
 
@@ -19,7 +21,7 @@ emit garbage between sequences after a reset; swallowing the text that follows i
 | Split input | Multi-byte characters and escape sequences split across `feed()` calls are handled (decoder state + parser state persist). |
 | Invalid UTF-8 | Each invalid byte or truncated sequence decodes to `U+FFFD` (one cell); decoding resumes at the next byte, so a stray `0x9B` prints `�` and does **not** act as CSI. At a chunk boundary only a valid-so-far incomplete sequence is carried over; an invalid lead byte at the end of a chunk becomes `U+FFFD` and the bytes after it (e.g. the ESC of the next sequence) are processed normally. |
 | C1 controls | Code points `U+0080..U+009F` (reachable via 8-bit encodings or UTF-8 `C2 9B` etc.) are honoured: `9B` CSI, `9D` OSC, `90` DCS, `98`/`9E`/`9F` SOS/PM/APC, `9C` ST; the rest are ignored. |
-| Character width | 2 cells: U+1100-115F, 2E80-303E, 3041-33FF, 3400-4DBF, 4E00-9FFF, A000-A4CF, AC00-D7A3, F900-FAFF, FE30-FE4F, FF00-FF60, FFE0-FFE6, 1F300-1F64F, 1F680-1F6FF, 1F900-1F9FF, 20000-2FFFD, 30000-3FFFD. 0 cells: combining marks (0300-036F, 1AB0-1AFF, 1DC0-1DFF, 20D0-20FF, FE20-FE2F), Hangul Jamo medial/final (1160-11FF), format chars (200B-200F, 2028-202E, 2060-2064), variation selectors (FE00-FE0F, E0100-E01EF), C0/C1 controls. Everything else, including `U+2600-26FF` (misc. symbols) and `U+FFFD`, is 1 cell. |
+| Character width | 2 cells: U+1100-115F, 2E80-303E, 3041-33FF, 3400-4DBF, 4E00-9FFF, A000-A4CF, AC00-D7A3, F900-FAFF, FE30-FE4F, FF00-FF60, FFE0-FFE6, 1F300-1F64F, 1F680-1F6FF, 1F900-1F9FF, 20000-2FFFD, 30000-3FFFD. 0 cells: combining marks (0300-036F, 1AB0-1AFF, 1DC0-1DFF, 20D0-20FF, FE20-FE2F), Hangul Jamo medial/final (1160-11FF), format chars (200B-200F, 2028-202E, 2060-2064, FEFF, FFF9-FFFB), variation selectors (FE00-FE0F, E0100-E01EF), C0/C1 controls. Everything else, including `U+2600-26FF` (misc. symbols) and `U+FFFD`, is 1 cell. |
 | Zero-width code points | Ignored (not stored); combining accents are dropped rather than rendered. |
 | Wide characters | Occupy a `WideLead` cell plus a `WideTrail` placeholder (`ch == 0`). If only one column is left the line wraps first (autowrap off: placed as a narrow cell in the last column). Overwriting or erasing either half blanks the other half. |
 | `DEL` (0x7F) | Ignored everywhere. |
@@ -38,15 +40,16 @@ terminate, `CAN`/`SUB` abort, and other C0 are dropped).
 | `0x0D` | CR | Column 0 |
 | `0x18` `0x1A` | CAN SUB | Abort the current sequence, back to ground |
 | `0x1B` | ESC | Start an escape sequence (from any state; terminates OSC strings) |
-| `0x0E` `0x0F` | SO SI | Ignored (display is always Unicode) |
+| `0x0E` | SO (LS1) | G1 becomes the active character set (§3a) |
+| `0x0F` | SI (LS0) | G0 becomes the active character set (the default) |
 | others | NUL ENQ XON XOFF … | Ignored |
 
 ## 3. ESC sequences
 
 | Sequence | Name | Action |
 |---|---|---|
-| `ESC 7` | DECSC | Save cursor position, attributes, origin mode, autowrap |
-| `ESC 8` | DECRC | Restore them (nothing saved: home + default attributes) |
+| `ESC 7` | DECSC | Save cursor position, attributes, origin mode, autowrap, and the G0/G1 designations + active set (§3a) |
+| `ESC 8` | DECRC | Restore them (nothing saved: home + default attributes, ASCII) |
 | `ESC D` | IND | Line feed (no CR) |
 | `ESC E` | NEL | CR + line feed |
 | `ESC H` | HTS | Set a tab stop at the cursor column |
@@ -56,12 +59,42 @@ terminate, `CAN`/`SUB` abort, and other C0 are dropped).
 | `ESC # 8` | DECALN | Fill the screen with `E`, reset margins and origin mode, home |
 | `ESC # 3/4/5/6` | DECDHL/DECSWL/DECDWL | Ignored |
 | `ESC =` `ESC >` | DECKPAM/DECKPNM | Ignored |
-| `ESC ( ) * + - . /` *x* | SCS | Character set designation: ignored |
-| `ESC N O n o \| } ~` | SS2 SS3 LS2 LS3 LS3R LS2R LS1R | Ignored |
+| `ESC ( 0`, `ESC ( 2` / `ESC ) 0`, `ESC ) 2` | SCS | Designate DEC Special Graphics into G0 / G1 (§3a) |
+| `ESC (` *x* / `ESC )` *x*, other *x* | SCS | Designate US-ASCII into G0 / G1 (`B`, UK `A`, `1`, national and supplemental sets are all treated as ASCII) |
+| `ESC * + - . /` *x* | SCS | G2 / G3 and 96-character set designations: ignored |
+| `ESC N O n o \| } ~` | SS2 SS3 LS2 LS3 LS3R LS2R LS1R | Ignored (G2/G3 and GR are never used) |
 | `ESC SP` *x*, `ESC %` *x* | S7C1T/S8C1T, ESC % G / @ | Ignored |
 | `ESC \` | ST | Ends a string; otherwise no effect |
 | `ESC [` `ESC ]` `ESC P` `ESC X ^ _` | CSI OSC DCS SOS/PM/APC | Introducers, see below |
 | other | | Logged, ignored |
+
+### 3a. Character sets (VT100 G0/G1, DEC Special Graphics)
+
+ncurses programs (`dialog`, `whiptail`, `menuconfig`, `mc`, `htop`) on a board with a C locale
+draw their frames with terminfo `smacs`/`rmacs`, which for `TERM=vt100`/`linux`/`xterm` is
+`ESC ( 0` … `ESC ( B` (or `ESC ) 0` once, then `SO` … `SI`). The parser keeps two designations
+(G0, G1), each either US-ASCII or DEC Special Graphics, and one active set (GL: G0 after `SI`,
+G1 after `SO`). The screen always stores Unicode: while GL is Special Graphics, printable code
+points `0x5F..0x7E` are replaced before they reach `TerminalScreen`; everything else (space,
+digits, upper case, all non-ASCII) passes through unchanged. All 32 replacements are 1 cell.
+
+| Byte | Glyph | Byte | Glyph | Byte | Glyph | Byte | Glyph |
+|---|---|---|---|---|---|---|---|
+| `_` | `U+00A0` nbsp | `g` | `U+00B1` ± | `o` | `U+23BA` ⎺ | `w` | `U+252C` ┬ |
+| `` ` `` | `U+25C6` ◆ | `h` | `U+2424` ␤ | `p` | `U+23BB` ⎻ | `x` | `U+2502` │ |
+| `a` | `U+2592` ▒ | `i` | `U+240B` ␋ | `q` | `U+2500` ─ | `y` | `U+2264` ≤ |
+| `b` | `U+2409` ␉ | `j` | `U+2518` ┘ | `r` | `U+23BC` ⎼ | `z` | `U+2265` ≥ |
+| `c` | `U+240C` ␌ | `k` | `U+2510` ┐ | `s` | `U+23BD` ⎽ | `{` | `U+03C0` π |
+| `d` | `U+240D` ␍ | `l` | `U+250C` ┌ | `t` | `U+251C` ├ | `\|` | `U+2260` ≠ |
+| `e` | `U+240A` ␊ | `m` | `U+2514` └ | `u` | `U+2524` ┤ | `}` | `U+00A3` £ |
+| `f` | `U+00B0` ° | `n` | `U+253C` ┼ | `v` | `U+2534` ┴ | `~` | `U+00B7` · |
+
+Rules: RIS (`ESC c`), DECSTR (`CSI ! p`) and `AnsiParser::reset()` designate ASCII into G0 and
+G1 and select G0. `ESC 7` saves the designations and the active set with the cursor and `ESC 8`
+restores them; this is a single parser-side slot, not duplicated for the alternate screen
+(`CSI s`/`CSI u` and `?1048`/`?1049` save the cursor only). A pending printable run is flushed
+before `SO`/`SI` take effect, so earlier text is never remapped. Not supported: `TERM=linux`'s
+`SGR 10`/`SGR 11` + CP437 `acsc` alternative, and G2/G3 single/locking shifts.
 
 ## 4. CSI sequences
 
@@ -72,8 +105,8 @@ Parameters: decimal, `;`-separated, up to 32 (extras ignored), each capped at 65
 | Sequence | Name | Action |
 |---|---|---|
 | `CSI Pn @` | ICH | Insert *Pn* blank cells at the cursor (line shifts right, last cells lost) |
-| `CSI Pn A` / `B` / `C` / `D` | CUU CUD CUF CUB | Cursor up/down/right/left, clamped to the screen (to the scroll region when the cursor is inside it) |
-| `CSI Pn E` / `F` | CNL CPL | Down/up *Pn* lines to column 0 |
+| `CSI Pn A` / `B` / `C` / `D` | CUU CUD CUF CUB | Cursor up/down/right/left. Up stops at the top margin (screen top if the cursor starts above the region); down stops at the bottom margin (screen bottom if the cursor starts below the region) |
+| `CSI Pn E` / `F` | CNL CPL | Down/up *Pn* lines with the same margin rules as CUD/CUU, then column 0 |
 | `CSI Pn G` / `` ` `` | CHA HPA | Cursor to column *Pn* |
 | `CSI Pr ; Pc H` / `f` | CUP HVP | Cursor to row *Pr*, column *Pc* (relative to the region top in origin mode) |
 | `CSI Pn I` | CHT | Forward *Pn* tab stops |
@@ -144,7 +177,7 @@ variant 8-15 ("bold is bright", `Palette::resolve()`).
 | `?25` | DECTCEM | set | Cursor visible |
 | `?47`, `?1047` | | reset | Alternate screen (blank, no scrollback while active); primary contents restored on reset |
 | `?1048` | | | Save (set) / restore (reset) cursor |
-| `?1049` | | reset | `?1048` + `?47`: save cursor, switch to a blank alternate screen; reset restores screen and cursor |
+| `?1049` | | reset | `?1048` + `?47`: save cursor, switch to a blank alternate screen; reset restores screen and cursor. Set while already active saves the cursor and clears the alternate screen; reset while already on the primary screen still restores the cursor (xterm) |
 | `?2004` | | reset | Bracketed paste: `AnsiParser::bracketedPasteChanged(bool)`; pastes are wrapped in `ESC [ 200 ~` … `ESC [ 201 ~` |
 | `?3 ?4 ?5 ?8 ?9 ?12 ?40 ?45 ?1000-1007 ?1015 ?1016 ?1034 ?1036 ?2026 ?7727 ?8452` | DECCOLM, smooth scroll, reverse video, autorepeat, mouse tracking, focus events, cursor blink, … | | Consumed and ignored |
 | other | | | Logged, ignored |
@@ -162,7 +195,9 @@ variant 8-15 ("bold is bright", `Palette::resolve()`).
 - **Erase** (ED/EL/ECH/DCH/ICH/IL/DL/scroll fill) writes blank cells carrying the current
   **background colour** only (`bce`), no other attributes.
 - **Alternate screen:** separate blank grid, no scrollback pushes, its own DECSC/DECRC slot.
-  Leaving it restores the primary grid (fitted to the current size).
+  Leaving it restores the primary grid. A resize while the alternate screen is active resizes
+  the saved primary grid with the same scrollback policy as a visible resize (anchored on the
+  `?1049` saved cursor, which is adjusted so it lands on the same text when restored).
 - **Resize:** columns truncate/pad lines (no reflow; a wide character cut in half is blanked).
   Fewer rows: lines above the cursor move into the scrollback first so the cursor stays visible,
   then blank/bottom lines are dropped. More rows: lines are pulled back from the scrollback,
@@ -184,9 +219,10 @@ variant 8-15 ("bold is bright", `Palette::resolve()`).
 |---|---|
 | `OSC 0 ; text ST` / `OSC 2 ; text ST` | Set window title (`titleChanged`). Terminator: `BEL` (0x07), `ESC \`, or C1 `ST` (0x9C). An `ESC` followed by anything else also ends the string and starts a new sequence |
 | `OSC Ps ; …` (other *Ps*: 1, 4, 8, 10-19, 52, 133, 1337 …) | Consumed, ignored |
-| `DCS … ST`, `SOS … ST`, `PM … ST`, `APC … ST` | Consumed up to ST, ignored (`BEL` does not terminate them) |
+| `DCS … ST`, `SOS … ST`, `PM … ST`, `APC … ST` | Consumed up to ST, ignored (`BEL` does not terminate them). A non-ASCII printable aborts the string and is printed; a string longer than 4096 code points is abandoned and the parser returns to Ground (a stray introducer from line noise must not swallow the console) |
 
-OSC strings are capped at 4096 characters (excess dropped).
+OSC strings are capped at 4096 characters (excess dropped, the string is still consumed until its
+terminator); DCS/SOS/PM/APC strings are abandoned after 4096 code points.
 
 ## 9. Replies sent to the device (`AnsiParser::responseRequested`)
 

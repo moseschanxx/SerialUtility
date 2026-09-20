@@ -1,8 +1,6 @@
 # BuildAI Serial Utility
 
-CI: `.github/workflows/build.yml` builds and tests on Ubuntu and Windows for every push and
-publishes a release on `v*` tags (add the badge once the repository is on GitHub:
-`![Build](https://github.com/<org>/<repo>/actions/workflows/build.yml/badge.svg)`).
+CI: `.github/workflows/build.yml` builds and tests on Ubuntu and Windows for every push and publishes a release on `v*` tags.
 
 A multi-tab serial-port terminal for the boards BuildAI works with every day: **Rockchip
 Linux boards** (U-Boot prompt and Linux console at 115200 or 1 500 000 baud) and **MCU firmware
@@ -56,20 +54,16 @@ speaks bytes.
   terminal has focus.
 - **English / Chinese UI**, switchable at run time.
 
-## Screenshots
-
-> Placeholder - screenshots of a Rockchip boot log, the Quick Commands editor and the Send File
-> dialog will be added once the v0.1.0 UI is frozen. (`docs/images/`)
-
 ## Prerequisites
 
 | Component | Version |
 |---|---|
 | Qt | **6.8** with modules Core, Gui, Widgets, SerialPort, LinguistTools (Test for the unit tests) |
-| CMake | 3.21 or newer (3.25+ for the presets) |
+| CMake | 3.22 or newer (3.25+ for the presets) |
 | Generator | Ninja |
 | Compiler (Windows) | MSVC 2022 x64 (`D:\Qt\6.8.3\msvc2022_64` is the default Qt prefix) |
 | Compiler (Linux) | GCC 12+ or Clang 15+ |
+| Linux distro Qt packages | Debian 13+ / Ubuntu 25.10+ (older releases: install Qt 6.8.3 via aqtinstall) |
 
 No third-party libraries beyond Qt are required.
 
@@ -125,14 +119,45 @@ cmake --build --preset Release
 ctest --preset Release
 ```
 
-The presets live in `CMakePresets.json` and expect `QT_ROOT` to point at the Qt prefix
-(defaults to `D:/Qt/6.8.3/msvc2022_64` on Windows).
+The presets live in `CMakePresets.json`. They pick up Qt from the `QT_ROOT` environment variable
+(via `$penv{QT_ROOT}`, so your own value is always honoured); when it is unset, `CMakeLists.txt`
+falls back to `D:/Qt/6.8.3/msvc2022_64` on Windows and to the system Qt on Linux. To pin a
+different prefix per machine without touching the shared file, create a gitignored
+`CMakeUserPresets.json`:
+
+```json
+{ "version": 6, "configurePresets": [
+  { "name": "Release-local", "inherits": "Release",
+    "cacheVariables": { "CMAKE_PREFIX_PATH": "E:/Qt/6.8.3/msvc2022_64" } } ] }
+```
 
 ### Plain CMake (Linux)
 
+The project requires Qt **6.8 or newer** (`find_package(Qt6 6.8 ...)` in `CMakeLists.txt`).
+Pick whichever of the two routes matches your distro:
+
+**A. Qt from the distro (Debian 13 "trixie" / Ubuntu 25.10 or newer only).** Ubuntu 22.04 (Qt 6.2)
+and 24.04 (Qt 6.4) are too old for this route - use B. `qt6-l10n-tools` is required: it provides
+`lrelease`/`lupdate`, which `qt6-tools-dev` does not pull in.
+
 ```bash
-sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-serialport-dev qt6-tools-dev
+sudo apt install build-essential cmake ninja-build \
+    qt6-base-dev qt6-serialport-dev qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+./build/BuildAI-SerialUtility
+```
+
+**B. Qt 6.8.3 from the Qt online installer or `aqtinstall` (what CI does; works on any distro).**
+Install the `gcc_64` desktop kit with the `qtserialport` module, then point CMake at it with
+`CMAKE_PREFIX_PATH` (or export `QT_ROOT` and use `cmake --preset linux-release`).
+
+```bash
+sudo apt install build-essential cmake ninja-build libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0
+pipx install aqtinstall            # or: pip install --user aqtinstall
+aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qtserialport -O ~/Qt
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=~/Qt/6.8.3/gcc_64
 cmake --build build
 QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 ./build/BuildAI-SerialUtility
@@ -147,17 +172,20 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 
 `cmake --install build --prefix dist` (or `build.ps1 -Deploy`) copies the executable to
 `dist/bin` and runs `windeployqt` / the Qt deploy script so the folder is self-contained.
+The Linux tarball published by CI is built the same way (`bin/`, `lib/`, `plugins/`, `qt.conf`)
+and is self-contained except for the system X11/xcb libraries, which users install via apt:
+`sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libgl1`.
 
 ## Usage guide
 
 ### Trying it without hardware (SIM: ports)
 
-The port list always contains four simulated devices (manufacturer "BuildAI Simulator"):
+By default the port list also contains four simulated devices (manufacturer "BuildAI Simulator"):
 
 | Port | What it does | Try |
 |---|---|---|
 | `SIM:loopback` | echoes every byte | hex view, logging, encodings, file send |
-| `SIM:linux` | Rockchip RV1106-style boot log, `login:` (any user / password), busybox-like shell with device-side line editing | `help`, `top -n 1`, `dmesg \| tail -n 50`, `color`, `chinese`, `wide`, `progress`, `stty size`, `reboot` (port vanishes 3 s, auto-reconnect), `poweroff`, `exit` |
+| `SIM:linux` | Rockchip RV1106-style boot log, `login:` (any user / password), busybox-like shell with device-side line editing | `help`, `top -n 1`, `dmesg \| tail -n 50`, `color`, `chinese`, `wide`, `progress`, `stty size`, `reboot` (port vanishes 3 s, auto-reconnect), `poweroff` (device stays listed but is down until you reconnect), `exit` |
 | `SIM:uboot` | U-Boot banner + "Hit any key to stop autoboot" countdown, `=>` prompt, boots into the Linux simulation | press a key during the countdown, `printenv`, `setenv`, `bdinfo`, `mmc info`, `md 02008000`, `boot`, `reset` |
 | `SIM:mcu` | "BuildAI MCU shell" with `\r\n` lines and an AT command set | `help`, `led on`, `adc`, `telemetry on`, `AT`, `AT+GMR`, `ATE0`, `AT+RST` (device resets, port vanishes 1.5 s) |
 
@@ -203,11 +231,12 @@ Connection* if you prefer manual control.
 ### Quick commands
 
 *Edit > Quick Commands...* opens the editor. Each row has a name, the command text, a group
-(one button bar per group), the line ending appended, a **HEX** flag (the text is parsed as hex
-bytes, no line ending), an **Escapes** flag (`\n`, `\r`, `\t`, `\xHH`, `\uHHHH`), an optional
-shortcut and a tooltip. *Import...* / *Export...* exchange the JSON file with colleagues;
-*Restore Defaults* brings back the Linux / U-Boot / MCU / Control starter set. The list is
-stored at `AppSettings::dataDirectory()/quick_commands.json`.
+(the quick command bar below the terminal shows one group at a time, chosen in its group
+selector; *All* shows every command), the line ending appended, a **HEX** flag (the text is
+parsed as hex bytes, no line ending), an **Escapes** flag (`\n`, `\r`, `\t`, `\xHH`, `\uHHHH`),
+an optional shortcut and a tooltip. *Import...* / *Export...* exchange the JSON file with
+colleagues; *Restore Defaults* brings back the Linux / U-Boot / MCU / Control starter set. The
+list is stored at `AppSettings::dataDirectory()/quick_commands.json`.
 
 ### Sending a file
 
@@ -235,8 +264,9 @@ default logging format) is recognised from its first line: the `[timestamp] ` pr
 `TX> ` lines (your own input) are removed and every line ends in CR LF again. *File > Stop
 Replay* aborts. From the command line: `BuildAI-SerialUtility.exe --replay boot.log --speed 1500000`
 (`--speed 0` = as fast as possible). Replay only runs while the tab is disconnected - it never
-writes to the port, and a request while a port is open is refused in the status bar; while it
-streams, the tab is titled `Replay: <file>`.
+writes to the port, a request while a port is open is refused in the status bar, and connecting
+while a replay streams stops the replay first; while it streams, the tab is titled
+`Replay: <file>`.
 
 ### Hex view
 
@@ -263,7 +293,9 @@ RX / TX hex dump. The view is bounded so it stays responsive during long session
 | Shift+PageUp / PageDown, mouse wheel | Scroll the scrollback |
 
 Everything else - Tab, arrows, Home / End, F-keys, Ctrl+letter - is sent to the device
-(see `docs/TERMINAL_EMULATION.md` for the exact byte sequences).
+(see `docs/TERMINAL_EMULATION.md` for the exact byte sequences). Exceptions: F3 and F5 always
+belong to the application (Disconnect / Refresh Ports) and are never sent; F2 is Connect while
+disconnected and reaches the device (`ESC O Q`) only while connected.
 
 ## Architecture
 
@@ -319,7 +351,7 @@ Windows). Per-user data files (quick commands, history) live in
 | Symptom | Cause / fix |
 |---|---|
 | "Port COM8 busy or access denied" | Another program (PuTTY, a flashing tool, a previous instance) holds the port. Close it, or unplug / re-plug the adapter. |
-| Garbled text, `�` or random symbols | Wrong **baud rate** (try 1500000 vs 115200) or wrong **encoding** (*Preferences > Input*: UTF-8 for Rockchip Linux; GB18030 for some legacy Chinese firmware). |
+| Garbled text, `�` or random symbols | Wrong **baud rate** (try 1500000 vs 115200) or wrong **encoding** (*Preferences > Input*). UTF-8 is right for Rockchip Linux and U-Boot. For legacy Chinese firmware that prints GBK, pick **System** on a Chinese-locale Windows (ANSI code page 936 = GBK), or **GB18030** where the list offers it (only Qt builds with ICU, e.g. most Linux distro packages; the official Windows Qt binaries do not, so the entry is hidden there). *Help > Version* lists the codecs your build actually has. |
 | Staircase text (each line starts further right) | Device sends bare `\n`. Turn on *Implicit carriage return on line feed*. |
 | Nothing appears after connecting | Board not powered or TX/RX swapped; check the connection bar shows **Connected** and RX counter moves in the status bar. Try DTR / RTS toggles - some adapters hold the board in reset. |
 | Backspace prints `^H` / `^?` | Toggle *Backspace sends DEL* in *Preferences > Input*. |
@@ -337,7 +369,8 @@ report (versions, compiler, OS, codecs).
 - Follow `.clang-format` (LLVM base, 4 spaces, 120 columns, braces on their own line for
   functions and classes) and the conventions in `docs/DESIGN.md`.
 - The headers under `src/` are the contract; keep public APIs stable and documented.
-- Code must compile warning-free with `/W4` (MSVC) and `-Wall -Wextra -Wpedantic -Wshadow` (GCC).
+- Code must compile warning-free with `/W4` (MSVC) and `-Wall -Wextra -Wpedantic -Wshadow` (GCC);
+  CI configures with `-DSU_WARNINGS_AS_ERRORS=ON`, so any warning fails the build.
 - Run `scripts\build.ps1 -Config Debug -Test` before pushing; CI builds Ubuntu and Windows on
   every push and publishes a release on `v*` tags.
 

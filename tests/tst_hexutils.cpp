@@ -40,6 +40,7 @@ private slots:
     void unescapePlainUtf8();
     void unescapeErrors();
     void unescapeClearsError();
+    void unescapeWithEncoder();
 
     // escapeForDisplay
     void escapeControls();
@@ -322,6 +323,37 @@ void Tst_hexutils::unescapeClearsError()
     QString error = QStringLiteral("stale");
     QCOMPARE(HexUtils::unescape(QStringLiteral("ok\\n"), &error), QByteArray("ok\n"));
     QVERIFY(error.isEmpty());
+}
+
+void Tst_hexutils::unescapeWithEncoder()
+{
+    // Text runs (literals and \u escapes) go through the callback - here upper-cased Latin-1 -
+    // while every \xHH byte is appended verbatim and never reaches the callback.
+    int calls = 0;
+    const auto upperLatin1 = [&calls](const QString& s) {
+        ++calls;
+        return s.toUpper().toLatin1();
+    };
+    QString error = QStringLiteral("stale");
+    const QByteArray out = HexUtils::unescape(QStringLiteral("ab\\x80\\u00e9c"), upperLatin1, &error);
+    QCOMPARE(out, QByteArray("AB") + QByteArray::fromHex("80") + QByteArray::fromHex("c9") + QByteArray("C"));
+    QCOMPARE(calls, 2);   // "ab" flushed before \x80, "<e-acute>c" flushed at the end
+    QVERIFY(error.isEmpty());
+
+    // Only raw bytes: the callback is never invoked.
+    calls = 0;
+    QCOMPARE(HexUtils::unescape(QStringLiteral("\\xff\\x55"), upperLatin1), QByteArray::fromHex("ff55"));
+    QCOMPARE(calls, 0);
+
+    // The UTF-8 overload is the same parser with toUtf8() as the encoder.
+    QCOMPARE(HexUtils::unescape(
+                 QStringLiteral("\\u4E2D\\x00"), [](const QString& s) { return s.toUtf8(); }),
+             HexUtils::unescape(QStringLiteral("\\u4E2D\\x00")));
+
+    // The error path is unchanged: empty result, message set, callback output discarded.
+    QVERIFY(HexUtils::unescape(QStringLiteral("abc\\q"), upperLatin1, &error).isEmpty());
+    QVERIFY(error.contains(QStringLiteral("\\q")));
+    QVERIFY(HexUtils::unescape(QStringLiteral("\\x4"), upperLatin1, nullptr).isEmpty());
 }
 
 // ---------------------------------------------------------------------------------------

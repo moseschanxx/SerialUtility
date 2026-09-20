@@ -260,12 +260,27 @@ QStringList QuickCommandStore::groups() const
 {
     QStringList result;
     for (const QuickCommand& qc : m_commands) {
-        const QString group = qc.group.isEmpty() ? tr("General") : qc.group;
+        const QString group = effectiveGroup(qc);
         if (!result.contains(group)) {
             result.append(group);
         }
     }
     return result;
+}
+
+QString QuickCommandStore::generalGroupKey()
+{
+    return QStringLiteral("General");
+}
+
+QString QuickCommandStore::effectiveGroup(const QuickCommand& command)
+{
+    return command.group.trimmed().isEmpty() ? generalGroupKey() : command.group;
+}
+
+QString QuickCommandStore::groupDisplayName(const QString& group)
+{
+    return group == generalGroupKey() ? tr("General") : group;
 }
 
 QList<QuickCommand> QuickCommandStore::defaults()

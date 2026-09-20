@@ -34,7 +34,7 @@ it is a general terminal that speaks bytes.
 | Item | Choice |
 |---|---|
 | Language | C++20, Qt 6.8 (Core, Gui, Widgets, SerialPort, LinguistTools, Test) |
-| Build | CMake ≥ 3.21 + Ninja; `CMakePresets.json` (Qt Creator picks it up), `scripts/build.ps1` for the CLI |
+| Build | CMake ≥ 3.22 + Ninja (≥ 3.25 for the presets); `CMakePresets.json` (Qt Creator picks it up), `scripts/build.ps1` for the CLI |
 | Compiler (Windows) | MSVC 2022 x64 (`D:\Qt\6.8.3\msvc2022_64`), `/W4 /utf-8 /permissive-` |
 | Layout | `src/app` (settings, logging, version), `src/core` (serial + helpers), `src/terminal` (emulator), `src/ui` (widgets), `src/dialogs`, `tests/` |
 | Naming | PascalCase files and classes (`SerialConnection.cpp`), `m_` member prefix, Qt-style camelCase methods, `lc*` logging categories |
@@ -98,7 +98,7 @@ may add private members, private slots and helper functions freely, and may add
 
 | Module | Responsibility | Notes |
 |---|---|---|
-| `SerialConnection` | one QSerialPort; open/close/write; counters; **auto-reconnect** on `ResourceError`; live parameter changes; DTR/RTS; break | never blocks (`waitForBytesWritten` forbidden) |
+| `SerialConnection` | one QSerialPort; open/close/write; counters; **auto-reconnect** when the device vanishes (`ResourceError`, or Read/Write/UnknownError with the port no longer enumerated, or enumerator `portRemoved`); live parameter changes; DTR/RTS; break | never blocks (`waitForBytesWritten` forbidden); public getter/signal added at integration: `pendingTxBytes()` / `txBytesWritten()` (write-buffer backpressure for `SendFileDialog`), `sendBreak()` returns success |
 | `SerialPortEnumerator` | singleton 1 s poller of `QSerialPortInfo`; natural sort; add/remove diffs | Windows enumeration is cheap (<5 ms) |
 | `TerminalScreen` | grid + scrollback + cursor + attributes + modes; every editing op the parser needs | pure model, unit-tested |
 | `AnsiParser` | bytes → decoded text → VT500 state machine → `TerminalScreen` ops; DSR/DA replies | never desyncs on garbage |
@@ -150,7 +150,7 @@ on (default on; a Preferences checkbox hides them for production use):
 | Port | Behaviour | Exercises |
 |---|---|---|
 | `SIM:loopback` | echoes every byte | TX/RX path, hex view, logger, encodings |
-| `SIM:linux` | Rockchip-style boot log → `login:` → busybox-like shell with device-side line editing, coloured `dmesg`, `top`, `progress`, `color`, `chinese`, `reboot` (port vanishes 3 s) | full emulation, quick commands, auto-reconnect |
+| `SIM:linux` | Rockchip-style boot log → `login:` → busybox-like shell with device-side line editing, coloured `dmesg`, `top`, `progress`, `color`, `chinese`, `reboot` (port vanishes 3 s), `poweroff` (device stays listed but is down until you reconnect) | full emulation, quick commands, auto-reconnect |
 | `SIM:uboot` | U-Boot banner, "Hit any key to stop autoboot" countdown, `=>` prompt, `boot` → Linux | autoboot interrupt workflow |
 | `SIM:mcu` | firmware shell with `\r\n`, `AT`/`OK`, telemetry stream | CRLF/LF handling, streaming |
 

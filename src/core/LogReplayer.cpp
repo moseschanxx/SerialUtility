@@ -81,6 +81,7 @@ bool LogReplayer::start(const Options& options)
 
     m_options = options;
     m_options.bytesPerSecond = qMax<qint64>(0, m_options.bytesPerSecond);
+    applyInterval();
     if (m_options.autoDetectFormat) {
         m_options.format = detectFormat(data.left(kDetectHeadBytes));
     }
@@ -164,6 +165,19 @@ qint64 LogReplayer::sentBytes() const
 void LogReplayer::setBytesPerSecond(qint64 bytesPerSecond)
 {
     m_options.bytesPerSecond = qMax<qint64>(0, bytesPerSecond);
+    applyInterval();
+}
+
+void LogReplayer::applyInterval()
+{
+    // Paced: one chunk every 20 ms. Unlimited (0): a zero-interval timer fires once per
+    // event-loop iteration after pending window-system events, so the UI stays responsive.
+    // QTimer::setInterval() restarts an active timer, so a live change applies immediately;
+    // while paused the timer is stopped and resume() picks up the stored interval.
+    const int interval = m_options.bytesPerSecond > 0 ? kTickMs : 0;
+    if (m_timer.interval() != interval) {
+        m_timer.setInterval(interval);
+    }
 }
 
 LogReplayer::Format LogReplayer::detectFormat(const QByteArray& head)
@@ -191,28 +205,48 @@ QByteArray LogReplayer::stripTimestamps(const QByteArray& text)
 {
     QByteArray out;
     out.reserve(text.size());
+    bool pendingLf = false;   // previous kept line ended in a bare '\n'; break not yet emitted
     qsizetype pos = 0;
     while (pos < text.size()) {
         const qsizetype newline = text.indexOf('\n', pos);
         const bool hasBreak = newline >= 0;
         QByteArray line = hasBreak ? text.mid(pos, newline - pos) : text.mid(pos);
         pos = hasBreak ? newline + 1 : text.size();
-        if (line.endsWith('\r')) {
+        const bool hadCr = line.endsWith('\r');
+        if (hadCr) {
             line.chop(1);
         }
-        if (line.startsWith("# ")) {
-            continue;   // header line written by SessionLogger
-        }
-        if (hasTimestampPrefix(line)) {
+        const bool hadPrefix = hasTimestampPrefix(line);
+        bool isTx = false;
+        if (hadPrefix) {
             line.remove(0, kTimestampPrefixLength);
-            if (line.startsWith("TX> ")) {
-                continue;   // the host's own input
-            }
+            isTx = line.startsWith("TX> ");
+        }
+        if (isTx) {
+            // The host's own input. SessionLogger::logSent() inserts a bare '\n' before a TX
+            // line when RX left the cursor mid-line (a prompt); the device never sent that
+            // break, so swallow it. A device CRLF carries the '\r' and was emitted right away.
+            pendingLf = false;
+            continue;
+        }
+        if (pendingLf) {
+            out += "\r\n";
+            pendingLf = false;
+        }
+        if (!hadPrefix && line.startsWith("# ")) {
+            continue;   // header line written by SessionLogger (a timestamped "# " is a root prompt)
         }
         out += line;
         if (hasBreak) {
-            out += "\r\n";
+            if (hadCr) {
+                out += "\r\n";
+            } else {
+                pendingLf = true;
+            }
         }
+    }
+    if (pendingLf) {
+        out += "\r\n";
     }
     return out;
 }

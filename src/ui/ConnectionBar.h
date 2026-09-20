@@ -20,7 +20,8 @@ class QLabel;
  *   setPorts() keeps the current selection if the port still exists; if the selected port
  *   disappeared it stays as a greyed placeholder item so the user sees what was selected.
  *   Refresh button -> refreshRequested().
- * - Baud combo is editable (QIntValidator 50..10000000) with SerialSettings::standardBaudRates().
+ * - Baud combo is editable (QIntValidator SerialSettings::kMinBaudRate..kMaxBaudRate, i.e. 50..10000000)
+ *   with SerialSettings::standardBaudRates().
  * - Data bits 5/6/7/8, parity N/E/O/S/M (tooltips spell them out), stop bits 1/1.5/2,
  *   flow None / RTS-CTS / XON-XOFF.
  * - DTR / RTS are checkable tool buttons (state mirrored from the connection via setPinStates).

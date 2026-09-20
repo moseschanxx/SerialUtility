@@ -161,12 +161,49 @@ void TerminalScreen::resize(int rows, int cols)
         }
     }
     if (m_alternate) {
-        // The saved primary screen is simply truncated / padded at the bottom.
-        while (m_savedScreen.size() > rows) {
-            m_savedScreen.removeLast();
+        // The saved primary screen follows the same policy as the visible grid, anchored
+        // on the ?1049 saved cursor (or on the last non-blank line when ?47/?1047 saved none).
+        int anchor = 0;
+        if (m_savedCursor.valid) {
+            anchor = m_savedCursor.cursor.row;
+        } else {
+            for (int r = static_cast<int>(m_savedScreen.size()) - 1; r >= 0; --r) {
+                if (!m_savedScreen[r].text().isEmpty()) {
+                    anchor = r;
+                    break;
+                }
+            }
         }
-        while (m_savedScreen.size() < rows) {
-            m_savedScreen.append(blankLine());
+        const int excess = static_cast<int>(m_savedScreen.size()) - rows;
+        if (excess > 0) {
+            const int toMove = std::min(excess, std::max(0, anchor - rows + 1));
+            for (int i = 0; i < toMove; ++i) {
+                Line l = m_savedScreen.takeFirst();
+                if (m_scrollbackMax > 0) {
+                    m_scrollback.append(std::move(l));
+                    m_scrollbackDirty = true;
+                }
+            }
+            if (m_savedCursor.valid) {
+                m_savedCursor.cursor.row = std::max(0, m_savedCursor.cursor.row - toMove);
+            }
+            m_savedScreen.resize(m_savedScreen.size() - (excess - toMove));
+            trimScrollback();
+        } else {
+            int needed = -excess;
+            while (needed > 0 && !m_scrollback.isEmpty()) {
+                Line l = m_scrollback.takeLast();
+                fitLineToColumns(l, m_cols);
+                m_savedScreen.prepend(std::move(l));
+                if (m_savedCursor.valid) {
+                    ++m_savedCursor.cursor.row;
+                }
+                m_scrollbackDirty = true;
+                --needed;
+            }
+            while (needed-- > 0) {
+                m_savedScreen.append(blankLine());
+            }
         }
     }
     m_rows = rows;
@@ -208,6 +245,11 @@ const Line& TerminalScreen::line(int row) const
 int TerminalScreen::scrollbackSize() const
 {
     return static_cast<int>(m_scrollback.size());
+}
+
+qint64 TerminalScreen::scrollbackDropped() const
+{
+    return m_scrollbackDropped;
 }
 
 const Line& TerminalScreen::scrollbackLine(int index) const
@@ -650,17 +692,27 @@ void TerminalScreen::moveCursorTo(int row, int col)
     notifyChanged(before);
 }
 
+int TerminalScreen::clampRelativeRow(int dRow) const
+{
+    const int target = m_cursor.row + dRow;
+    if (dRow < 0) {
+        // Moving up: stop at the top margin unless we started above it (DEC STD 070 / xterm).
+        const int top = (m_cursor.row < m_scrollTop) ? 0 : m_scrollTop;
+        return std::max(target, top);
+    }
+    if (dRow > 0) {
+        // Moving down: stop at the bottom margin unless we started below it.
+        const int bottom = (m_cursor.row > m_scrollBottom) ? (m_rows - 1) : m_scrollBottom;
+        return std::min(target, bottom);
+    }
+    return m_cursor.row;
+}
+
 void TerminalScreen::moveCursorBy(int dRow, int dCol)
 {
     const Cursor before = m_cursor;
     m_pendingWrap = false;
-    int top = 0;
-    int bottom = m_rows - 1;
-    if (m_cursor.row >= m_scrollTop && m_cursor.row <= m_scrollBottom) {
-        top = m_scrollTop;
-        bottom = m_scrollBottom;
-    }
-    m_cursor.row = clampInt(m_cursor.row + dRow, top, bottom);
+    m_cursor.row = clampRelativeRow(dRow);
     m_cursor.col = clampInt(m_cursor.col + dCol, 0, m_cols - 1);
     notifyChanged(before);
 }
@@ -689,13 +741,7 @@ void TerminalScreen::cursorNextLine(int n)
 {
     const Cursor before = m_cursor;
     m_pendingWrap = false;
-    int top = 0;
-    int bottom = m_rows - 1;
-    if (m_cursor.row >= m_scrollTop && m_cursor.row <= m_scrollBottom) {
-        top = m_scrollTop;
-        bottom = m_scrollBottom;
-    }
-    m_cursor.row = clampInt(m_cursor.row + std::max(1, n), top, bottom);
+    m_cursor.row = clampRelativeRow(std::max(1, n));
     m_cursor.col = 0;
     notifyChanged(before);
 }
@@ -704,13 +750,7 @@ void TerminalScreen::cursorPreviousLine(int n)
 {
     const Cursor before = m_cursor;
     m_pendingWrap = false;
-    int top = 0;
-    int bottom = m_rows - 1;
-    if (m_cursor.row >= m_scrollTop && m_cursor.row <= m_scrollBottom) {
-        top = m_scrollTop;
-        bottom = m_scrollBottom;
-    }
-    m_cursor.row = clampInt(m_cursor.row - std::max(1, n), top, bottom);
+    m_cursor.row = clampRelativeRow(-std::max(1, n));
     m_cursor.col = 0;
     notifyChanged(before);
 }
@@ -1268,5 +1308,6 @@ void TerminalScreen::trimScrollback()
     const qsizetype excess = m_scrollback.size() - m_scrollbackMax;
     if (excess > 0) {
         m_scrollback.remove(0, excess);
+        m_scrollbackDropped += excess;
     }
 }

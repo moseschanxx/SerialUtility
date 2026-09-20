@@ -84,6 +84,7 @@ public:
     void stop() { m_timer.stop(); }
     int count() const { return m_count; }
     QStringList classNames() const { return m_classNames; }
+    QStringList windowTitles() const { return m_windowTitles; }
 
 private:
     void poll()
@@ -94,6 +95,7 @@ private:
         }
         ++m_count;
         m_classNames.append(QString::fromLatin1(modal->metaObject()->className()));
+        m_windowTitles.append(modal->windowTitle());
         if (auto* box = qobject_cast<QMessageBox*>(modal); box && m_answer != Answer::Reject) {
             QAbstractButton* button = box->button(m_answer == Answer::Yes ? QMessageBox::Yes : QMessageBox::No);
             if (button) {
@@ -112,6 +114,7 @@ private:
     QTimer m_timer;
     int m_count = 0;
     QStringList m_classNames;
+    QStringList m_windowTitles;
 };
 
 namespace {
@@ -435,6 +438,10 @@ void Tst_mainwindow::constructsAndShows()
     for (const char* menu : {"menuFile", "menuSession", "menuEdit", "menuView", "menuLanguage", "menuHelp"}) {
         QVERIFY2(child<QMenu>(&w, menu) != nullptr, menu);
     }
+    // Help opens on a local dialog (keyboard default), not on the external homepage link.
+    auto* help = child<QMenu>(&w, "menuHelp");
+    QCOMPARE(help->actions().first(), action(w, "actionVersion"));
+    QCOMPARE(help->actions().last(), action(w, "actionAbout"));
     auto* dock = child<QDockWidget>(&w, "systemLogDock");
     QVERIFY(dock);
     QVERIFY(dock->isHidden());
@@ -600,6 +607,8 @@ void Tst_mainwindow::quitAsksWhenConnected()
         dismisser.stop();
         QCOMPARE(dismisser.count(), 1);
         QCOMPARE(dismisser.classNames().first(), QStringLiteral("QMessageBox"));
+        // The quit variant says "Quit", not "Close Session" (which would read as "close this tab").
+        QVERIFY(dismisser.windowTitles().first().startsWith(QStringLiteral("Quit")));
     }
     QVERIFY(w.isVisible());
     QVERIFY(session->isConnected());
@@ -661,13 +670,19 @@ void Tst_mainwindow::newSessionShortcut()
     MainWindow w;
     QVERIFY(showAndActivate(w));
     QCOMPARE(w.sessionCount(), 1);
-    w.currentSession()->focusTerminal();
+    // Connected and focused: the terminal has input enabled and must still pass Ctrl+T through
+    // to the window's action instead of sending 0x14.
+    QVERIFY(connectCurrent(w, kLoopback));
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
 
-    QTest::keyClick(&w, Qt::Key_T, Qt::ControlModifier);
+    // The key goes to the terminal (not the window) so its ShortcutOverride decision is exercised.
+    QTest::keyClick(session->terminal(), Qt::Key_T, Qt::ControlModifier);
     QTRY_COMPARE(w.sessionCount(), 2);
 
-    // Ctrl+W closes it again (the terminal passes both through even when connected).
-    QTest::keyClick(&w, Qt::Key_W, Qt::ControlModifier);
+    // Ctrl+W closes the new (disconnected) session again.
+    QTest::keyClick(w.currentSession()->terminal(), Qt::Key_W, Qt::ControlModifier);
     QTRY_COMPARE(w.sessionCount(), 1);
 }
 
@@ -1029,11 +1044,15 @@ void Tst_mainwindow::languageSwitch()
     QVERIFY(!action(w, "actionLanguageEnglish")->isChecked());
     QCOMPARE(AppSettings::instance().language(), QStringLiteral("zh_CN"));
     QVERIFY(w.windowTitle().contains(QStringLiteral(APP_VERSION)));   // the title format survives
+    // Qt's own dialog strings follow too (embedded qtbase_zh_CN.qm; "QPlatformTheme"/"Cancel" is
+    // the context/source of the QMessageBox standard buttons).
+    QVERIFY(QCoreApplication::translate("QPlatformTheme", "Cancel") != QStringLiteral("Cancel"));
 
     action(w, "actionLanguageEnglish")->trigger();
     QTRY_COMPARE(fileMenu->title(), QStringLiteral("&File"));
     QVERIFY(action(w, "actionLanguageEnglish")->isChecked());
     QCOMPARE(AppSettings::instance().language(), QStringLiteral("en_US"));
+    QCOMPARE(QCoreApplication::translate("QPlatformTheme", "Cancel"), QStringLiteral("Cancel"));
 
     // Triggering the already-checked language is a no-op.
     action(w, "actionLanguageEnglish")->trigger();
@@ -1103,6 +1122,8 @@ void Tst_mainwindow::connectDisconnectActions()
     QVERIFY(!action(w, "actionSendFile")->isEnabled());
     QVERIFY(!action(w, "actionSendBreak")->isEnabled());
     QVERIFY(!action(w, "actionSyncTerminalSize")->isEnabled());
+    QVERIFY(!action(w, "actionPaste")->isEnabled());   // the terminal drops input while disconnected
+    QVERIFY(action(w, "actionCopy")->isEnabled());
     QVERIFY(action(w, "actionClear")->isEnabled());
     QVERIFY(action(w, "actionStartLogging")->isEnabled());
     QVERIFY(!action(w, "actionStopLogging")->isEnabled());
@@ -1117,12 +1138,14 @@ void Tst_mainwindow::connectDisconnectActions()
     QVERIFY(action(w, "actionSendFile")->isEnabled());
     QVERIFY(action(w, "actionSendBreak")->isEnabled());
     QVERIFY(action(w, "actionSyncTerminalSize")->isEnabled());
+    QVERIFY(action(w, "actionPaste")->isEnabled());
 
     disconnectAction->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(!session->isConnected(), kSimTimeoutMs);
     QTRY_VERIFY(connectAction->isEnabled());
     QVERIFY(!disconnectAction->isEnabled());
     QVERIFY(!action(w, "actionSendFile")->isEnabled());
+    QVERIFY(!action(w, "actionPaste")->isEnabled());
 }
 
 void Tst_mainwindow::statusBarConnected()
@@ -1524,11 +1547,18 @@ void Tst_mainwindow::sysLogRoutesQtMessages()
     QVERIFY(viewerText(viewer).contains(QStringLiteral("critical-sysLog")));
     QVERIFY(viewerText(viewer).contains(QStringLiteral("ERROR")));
 
-    // Messages arrive via a queued invocation: nothing appears before events are processed.
+    // Messages emitted while no instance is registered do not reach the detached viewer...
     SystemLogViewer::setInstance(nullptr);
     QVERIFY(SystemLogViewer::instance() == nullptr);
     qCWarning(lcApp) << "orphan-sysLog";
     QCoreApplication::processEvents();
+    QVERIFY(!viewerText(viewer).contains(QStringLiteral("orphan-sysLog")));
+
+    // ...but are buffered and delivered to the next instance (the constructor registers it
+    // because s_instance is null). This also drains the pending buffer for the later tests.
+    SystemLogViewer late;
+    QCoreApplication::processEvents();
+    QTRY_VERIFY2(viewerText(late).contains(QStringLiteral("orphan-sysLog")), qPrintable(viewerText(late)));
     QVERIFY(!viewerText(viewer).contains(QStringLiteral("orphan-sysLog")));
 }
 

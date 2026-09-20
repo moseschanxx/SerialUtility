@@ -27,28 +27,22 @@ namespace {
 // Tab indices as laid out in PreferencesDialog.ui.
 enum Page { PageTerminal = 0, PageInput, PageConnection, PageLogging, PageGeneral };
 
-QFont defaultTerminalFont()
-{
-#if defined(Q_OS_WIN)
-    QFont font(QStringLiteral("Consolas"), 10);
-#else
-    QFont font(QStringLiteral("Monospace"), 10);
-#endif
-    font.setStyleHint(QFont::Monospace);
-    font.setFixedPitch(true);
-    return font;
-}
-
-QString defaultLogDirectory()
-{
-    return QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                                    + QStringLiteral("/BuildAI/SerialLogs"));
-}
-
 /// Select the item whose user data equals `value`; falls back to the first item.
 void selectByData(QComboBox* combo, const QVariant& value)
 {
     const int index = combo->findData(value);
+    combo->setCurrentIndex(index >= 0 ? index : 0);
+}
+
+/// Like selectByData(), but when `value` is not in the combo, append it (display `text`)
+/// and select it so an OK/Apply round trip never rewrites a stored value the user did not touch.
+void selectOrInsert(QComboBox* combo, const QString& text, const QString& value)
+{
+    int index = combo->findData(value);
+    if (index < 0 && !value.isEmpty()) {
+        combo->addItem(text, value);
+        index = combo->count() - 1;
+    }
     combo->setCurrentIndex(index >= 0 ? index : 0);
 }
 
@@ -68,7 +62,7 @@ void selectBaud(QComboBox* combo, qint32 baud)
 PreferencesDialog::PreferencesDialog(QWidget* parent)
     : QDialog(parent)
     , ui(new Ui::PreferencesDialog)
-    , m_font(defaultTerminalFont())
+    , m_font(AppSettings::defaultTerminalFont())
 {
     ui->setupUi(this);
     setWindowTitle(tr("Preferences"));
@@ -118,7 +112,8 @@ void PreferencesDialog::setupPages()
     ui->defaultBaudCombo->clear();
     ui->defaultBaudCombo->setEditable(true);
     ui->defaultBaudCombo->setInsertPolicy(QComboBox::NoInsert);
-    ui->defaultBaudCombo->setValidator(new QIntValidator(1, 100000000, ui->defaultBaudCombo));
+    ui->defaultBaudCombo->setValidator(
+        new QIntValidator(SerialSettings::kMinBaudRate, SerialSettings::kMaxBaudRate, ui->defaultBaudCombo));
     const QList<qint32> bauds = SerialSettings::standardBaudRates();
     for (qint32 baud : bauds) {
         ui->defaultBaudCombo->addItem(QString::number(baud), baud);
@@ -160,7 +155,7 @@ void PreferencesDialog::setupPages()
                                 SessionLogger::formatToString(SessionLogger::Format::Raw));
     ui->logFormatCombo->addItem(tr("Timestamped text"), SessionLogger::formatToString(SessionLogger::Format::Text));
     ui->logFormatCombo->addItem(tr("Hex dump"), SessionLogger::formatToString(SessionLogger::Format::HexDump));
-    ui->logDirEdit->setPlaceholderText(defaultLogDirectory());
+    ui->logDirEdit->setPlaceholderText(QDir::toNativeSeparators(AppSettings::defaultLogDirectory()));
 
     ui->tabWidget->setCurrentIndex(PageTerminal);
     updateFontPreview();
@@ -173,7 +168,7 @@ void PreferencesDialog::loadFromSettings()
     // Terminal
     m_font = settings.terminalFont();
     updateFontPreview();
-    selectByData(ui->themeCombo, settings.themeName());
+    selectOrInsert(ui->themeCombo, TerminalTheme::displayName(settings.themeName()), settings.themeName());
     ui->scrollbackSpin->setValue(settings.scrollbackLines());
     ui->cursorBlinkCheck->setChecked(settings.cursorBlink());
     ui->bellCheck->setChecked(settings.bellEnabled());
@@ -183,7 +178,7 @@ void PreferencesDialog::loadFromSettings()
     selectByData(ui->enterSendsCombo, static_cast<int>(settings.enterSends()));
     ui->backspaceDeleteCheck->setChecked(settings.backspaceSendsDelete());
     ui->localEchoCheck->setChecked(settings.localEcho());
-    selectByData(ui->encodingCombo, settings.encoding());
+    selectOrInsert(ui->encodingCombo, settings.encoding(), settings.encoding());
 
     // Connection
     const SerialSettings serial = settings.defaultSerialSettings();
@@ -227,13 +222,13 @@ void PreferencesDialog::saveToSettings()
     settings.setEnterSends(static_cast<LineEnding::Mode>(ui->enterSendsCombo->currentData().toInt()));
     settings.setBackspaceSendsDelete(ui->backspaceDeleteCheck->isChecked());
     settings.setLocalEcho(ui->localEchoCheck->isChecked());
-    settings.setEncoding(ui->encodingCombo->currentText());
+    settings.setEncoding(ui->encodingCombo->currentData().toString());
 
     // Connection
     SerialSettings serial = settings.defaultSerialSettings();
     bool baudOk = false;
     const qint32 baud = ui->defaultBaudCombo->currentText().trimmed().toInt(&baudOk);
-    if (baudOk && baud > 0) {
+    if (baudOk && SerialSettings::isValidBaudRate(baud)) {
         serial.baudRate = baud;
     } else {
         qCWarning(lcUi) << "Ignoring invalid default baud rate" << ui->defaultBaudCombo->currentText();
@@ -257,7 +252,7 @@ void PreferencesDialog::saveToSettings()
     // Logging
     QString logDir = ui->logDirEdit->text().trimmed();
     if (logDir.isEmpty()) {
-        logDir = defaultLogDirectory();
+        logDir = QDir::toNativeSeparators(AppSettings::defaultLogDirectory());
         ui->logDirEdit->setText(logDir);
     }
     settings.setLogDirectory(QDir::fromNativeSeparators(logDir));
@@ -303,7 +298,7 @@ void PreferencesDialog::onRestoreDefaults()
 {
     switch (ui->tabWidget->currentIndex()) {
     case PageTerminal:
-        m_font = defaultTerminalFont();
+        m_font = AppSettings::defaultTerminalFont();
         updateFontPreview();
         selectByData(ui->themeCombo, QStringLiteral("dark"));
         ui->scrollbackSpin->setValue(10000);
@@ -334,7 +329,7 @@ void PreferencesDialog::onRestoreDefaults()
         break;
     }
     case PageLogging:
-        ui->logDirEdit->setText(defaultLogDirectory());
+        ui->logDirEdit->setText(QDir::toNativeSeparators(AppSettings::defaultLogDirectory()));
         ui->autoLogCheck->setChecked(false);
         selectByData(ui->logFormatCombo, SessionLogger::formatToString(SessionLogger::Format::Text));
         ui->logIncludeTxCheck->setChecked(true);

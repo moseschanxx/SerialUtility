@@ -29,12 +29,13 @@
         <translation>License</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/AboutDialog.cpp" line="+15"/>
+        <location filename="../src/dialogs/AboutDialog.cpp" line="+16"/>
+        <location line="+17"/>
         <source>About %1</source>
         <translation>About %1</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+14"/>
         <source>Version %1</source>
         <translation>Version %1</translation>
     </message>
@@ -57,9 +58,14 @@
 <context>
     <name>CommandInput</name>
     <message>
-        <location filename="../src/ui/CommandInput.cpp" line="+101"/>
+        <location filename="../src/ui/CommandInput.cpp" line="+106"/>
         <source>Hex bytes, e.g. AA 55 0D</source>
         <translation>Hex bytes, e.g. AA 55 0D</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Command with C escapes, e.g. \x1b[A or AT\tOK (\\ for a literal backslash)</source>
+        <translation>Command with C escapes, e.g. \x1b[A or AT\tOK (\\ for a literal backslash)</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -121,12 +127,12 @@
 <context>
     <name>ConnectionBar</name>
     <message>
-        <location filename="../src/ui/ConnectionBar.cpp" line="+56"/>
+        <location filename="../src/ui/ConnectionBar.cpp" line="+54"/>
         <source>unavailable</source>
         <translation>unavailable</translation>
     </message>
     <message>
-        <location line="+193"/>
+        <location line="+194"/>
         <source>Port:</source>
         <translation>Port:</translation>
     </message>
@@ -371,7 +377,7 @@
         <translation>Cannot read %1: %2</translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+182"/>
         <source>%1 baud</source>
         <translation>%1 baud</translation>
     </message>
@@ -750,8 +756,8 @@
     </message>
     <message>
         <location line="+8"/>
-        <source>Zoom &amp;In</source>
-        <translation>Zoom &amp;In</translation>
+        <source>&amp;Zoom In</source>
+        <translation>&amp;Zoom In</translation>
     </message>
     <message>
         <location line="+3"/>
@@ -824,20 +830,20 @@
         <translation>BuildAI &amp;Homepage</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+99"/>
-        <location line="+311"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+100"/>
+        <location line="+322"/>
         <source>New Session (Ctrl+T)</source>
         <translation>New Session (Ctrl+T)</translation>
     </message>
     <message>
-        <location line="-54"/>
+        <location line="-53"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>Session %1 is still connected.
 Close it anyway?</translation>
     </message>
     <message numerus="yes">
-        <location line="+2"/>
+        <location line="+1"/>
         <source>%n sessions are still connected (%1).
 Close them anyway?</source>
         <translation>
@@ -848,25 +854,51 @@ Close them anyway?</numerusform>
         </translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="-2"/>
         <source>Close Session</source>
         <translation>Close Session</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <location line="+694"/>
+        <location line="-6"/>
+        <source>Quit %1</source>
+        <translation>Quit %1</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n session(s) are still connected (%1).
+Quit anyway? All tabs will be closed and logging stopped.</source>
+        <translation>
+            <numerusform>%n session is still connected (%1).
+Quit anyway? All tabs will be closed and logging stopped.</numerusform>
+            <numerusform>%n sessions are still connected (%1).
+Quit anyway? All tabs will be closed and logging stopped.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Quit</source>
+        <translation>Quit</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Close</source>
+        <translation>Close</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <location line="+709"/>
         <source>System Log</source>
         <translation>System Log</translation>
     </message>
     <message>
-        <location line="-616"/>
-        <location line="+572"/>
+        <location line="-631"/>
+        <location line="+587"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-507"/>
+        <location line="-522"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>%n serial port found</numerusform>
@@ -880,12 +912,17 @@ Close them anyway?</numerusform>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+273"/>
+        <location line="+288"/>
         <source>Cannot open %1</source>
         <translation>Cannot open %1</translation>
     </message>
     <message>
-        <location line="-208"/>
+        <location line="-245"/>
+        <source>Not connected</source>
+        <translation>Not connected</translation>
+    </message>
+    <message>
+        <location line="+28"/>
         <source>Find</source>
         <translation>Find</translation>
     </message>
@@ -900,7 +937,7 @@ Close them anyway?</numerusform>
         <translation>Not found</translation>
     </message>
     <message>
-        <location line="+267"/>
+        <location line="+276"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
@@ -939,7 +976,7 @@ Close them anyway?</numerusform>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+74"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+68"/>
         <source>Preferences</source>
         <translation>Preferences</translation>
     </message>
@@ -1139,7 +1176,7 @@ Close them anyway?</numerusform>
         <translation>Reopen the previous session tabs on start</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+60"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+61"/>
         <source>None</source>
         <translation>None</translation>
     </message>
@@ -1192,12 +1229,12 @@ Close them anyway?</numerusform>
 <context>
     <name>QuickCommandBar</name>
     <message>
-        <location filename="../src/ui/QuickCommandBar.cpp" line="+227"/>
+        <location filename="../src/ui/QuickCommandBar.cpp" line="+223"/>
         <source>All</source>
         <translation>All</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+4"/>
         <source>Quick command group</source>
         <translation>Quick command group</translation>
     </message>
@@ -1208,20 +1245,25 @@ Close them anyway?</numerusform>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+113"/>
+        <location line="+112"/>
         <source>Click: send, middle-click or Alt+click: edit</source>
         <translation>Click: send, middle-click or Alt+click: edit</translation>
     </message>
     <message>
-        <location line="-4"/>
+        <location line="-7"/>
         <source>Shortcut: %1</source>
         <translation>Shortcut: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source> (not available while the terminal has focus)</source>
+        <translation> (not available while the terminal has focus)</translation>
     </message>
 </context>
 <context>
     <name>QuickCommandModel</name>
     <message>
-        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="+186"/>
+        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="+286"/>
         <source>Error: %1</source>
         <translation>Error: %1</translation>
     </message>
@@ -1234,12 +1276,7 @@ Close them anyway?</numerusform>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
-        <source>General</source>
-        <translation>General</translation>
-    </message>
-    <message>
-        <location line="+14"/>
+        <location line="+19"/>
         <source>No line ending is appended to HEX commands.</source>
         <translation>No line ending is appended to HEX commands.</translation>
     </message>
@@ -1254,12 +1291,17 @@ Close them anyway?</numerusform>
         <translation>Interpret C-style escapes (\n, \r, \t, \xHH) in the command.</translation>
     </message>
     <message>
-        <location line="+16"/>
-        <source>Optional keyboard shortcut, e.g. Ctrl+1 or Alt+Shift+R.</source>
-        <translation>Optional keyboard shortcut, e.g. Ctrl+1 or Alt+Shift+R.</translation>
+        <location line="+24"/>
+        <source>Optional keyboard shortcut, e.g. Ctrl+1 or Ctrl+Shift+2. While connected the terminal consumes plain keys, Alt+&lt;key&gt;, Ctrl+&lt;letter&gt;, Ctrl+0 and F1-F12; use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</source>
+        <translation>Optional keyboard shortcut, e.g. Ctrl+1 or Ctrl+Shift+2. While connected the terminal consumes plain keys, Alt+&lt;key&gt;, Ctrl+&lt;letter&gt;, Ctrl+0 and F1-F12; use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</translation>
     </message>
     <message>
-        <location line="+112"/>
+        <location line="+4"/>
+        <source>%1 is consumed by the connected terminal and will not trigger this command while the terminal has focus. Use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</source>
+        <translation>%1 is consumed by the connected terminal and will not trigger this command while the terminal has focus. Use Ctrl+&lt;digit 1-9&gt;, optionally with Shift.</translation>
+    </message>
+    <message>
+        <location line="+125"/>
         <source>Name</source>
         <translation>Name</translation>
     </message>
@@ -1328,12 +1370,12 @@ Close them anyway?</numerusform>
         <translation>Cannot write %1: %2</translation>
     </message>
     <message>
-        <location line="+149"/>
+        <location line="+169"/>
         <source>General</source>
         <translation>General</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+38"/>
         <source>Interrupt (ETX, 0x03)</source>
         <translation>Interrupt (ETX, 0x03)</translation>
     </message>
@@ -1418,12 +1460,12 @@ Close them anyway?</numerusform>
         <translation>Restore De&amp;faults</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="-404"/>
+        <location filename="../src/dialogs/QuickCommandsDialog.cpp" line="-526"/>
         <source>The file contains no quick commands.</source>
         <translation>The file contains no quick commands.</translation>
     </message>
     <message>
-        <location line="+405"/>
+        <location line="+527"/>
         <source>The quick commands could not be saved to
 %1
 
@@ -1514,7 +1556,8 @@ Nothing is saved until you press OK.</translation>
     <name>SendFileDialog</name>
     <message>
         <location filename="../src/dialogs/SendFileDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+56"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+57"/>
+        <location line="+54"/>
         <source>Send File</source>
         <translation>Send File</translation>
     </message>
@@ -1611,7 +1654,8 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+42"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+85"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+6"/>
+        <location line="+53"/>
         <source>Ready.</source>
         <translation>Ready.</translation>
     </message>
@@ -1622,7 +1666,7 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+10"/>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="+185"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="+238"/>
         <source>&amp;Pause</source>
         <translation>&amp;Pause</translation>
     </message>
@@ -1637,12 +1681,13 @@ Nothing is saved until you press OK.</translation>
         <translation>Cl&amp;ose</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/SendFileDialog.cpp" line="-190"/>
+        <location filename="../src/dialogs/SendFileDialog.cpp" line="-244"/>
         <source>Paused: the session is not connected. Press Resume once it is back.</source>
         <translation>Paused: the session is not connected. Press Resume once it is back.</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-47"/>
+        <location line="+51"/>
         <location line="+39"/>
         <source>Not connected.</source>
         <translation>Not connected.</translation>
@@ -1668,7 +1713,7 @@ Nothing is saved until you press OK.</translation>
         <translation>File not found: %1</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+13"/>
         <source>The file could not be sent.</source>
         <translation>The file could not be sent.</translation>
     </message>
@@ -1683,12 +1728,12 @@ Nothing is saved until you press OK.</translation>
         <translation>Cannot resume: the session is not connected.</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+7"/>
         <source>Resumed.</source>
         <translation>Resumed.</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+5"/>
         <source>Paused.</source>
         <translation>Paused.</translation>
     </message>
@@ -1703,7 +1748,22 @@ Nothing is saved until you press OK.</translation>
         <translation>[paused]</translation>
     </message>
     <message>
-        <location line="+69"/>
+        <location line="+16"/>
+        <source> - %1 still leaving the port</source>
+        <translation> - %1 still leaving the port</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source> (%1 already queued will still be sent)</source>
+        <translation> (%1 already queued will still be sent)</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Waiting for the port to drain (%1 queued)...</source>
+        <translation>Waiting for the port to drain (%1 queued)...</translation>
+    </message>
+    <message>
+        <location line="+62"/>
         <source>&amp;Resume</source>
         <translation>&amp;Resume</translation>
     </message>
@@ -1721,42 +1781,42 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SerialConnection</name>
     <message>
-        <location filename="../src/core/SerialConnection.cpp" line="+250"/>
-        <location line="+410"/>
+        <location filename="../src/core/SerialConnection.cpp" line="+281"/>
+        <location line="+485"/>
         <source>baud rate %1</source>
         <translation>baud rate %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-481"/>
+        <location line="+484"/>
         <source>data bits %1</source>
         <translation>data bits %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-479"/>
+        <location line="+482"/>
         <source>parity %1</source>
         <translation>parity %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-477"/>
+        <location line="+480"/>
         <source>stop bits %1</source>
         <translation>stop bits %1</translation>
     </message>
     <message>
-        <location line="-407"/>
-        <location line="+410"/>
+        <location line="-475"/>
+        <location line="+478"/>
         <source>flow control %1</source>
         <translation>flow control %1</translation>
     </message>
     <message>
-        <location line="-407"/>
+        <location line="-471"/>
         <source>Cannot apply %1 to %2: %3</source>
         <translation>Cannot apply %1 to %2: %3</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+115"/>
         <source>Connected</source>
         <translation>Connected</translation>
     </message>
@@ -1771,29 +1831,34 @@ Nothing is saved until you press OK.</translation>
         <translation>Disconnected</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+27"/>
         <source>No serial port selected</source>
         <translation>No serial port selected</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <source>Port %1 is busy or access denied</source>
         <translation>Port %1 is busy or access denied</translation>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+282"/>
+        <location line="+332"/>
         <location line="+5"/>
         <source>Port %1 not found</source>
         <translation>Port %1 not found</translation>
     </message>
     <message>
-        <location line="-284"/>
+        <location line="-334"/>
         <source>Cannot open %1: %2</source>
         <translation>Cannot open %1: %2</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+17"/>
+        <source>Port %1 is back but %2</source>
+        <translation>Port %1 is back but %2</translation>
+    </message>
+    <message>
+        <location line="+78"/>
         <source>Write to %1 failed: %2</source>
         <translation>Write to %1 failed: %2</translation>
     </message>
@@ -1813,17 +1878,17 @@ Nothing is saved until you press OK.</translation>
         <translation>Cannot send BREAK on %1: %2</translation>
     </message>
     <message>
-        <location line="+205"/>
+        <location line="+231"/>
         <source>Port %1 disconnected</source>
         <translation>Port %1 disconnected</translation>
     </message>
     <message>
-        <location line="-145"/>
+        <location line="-159"/>
         <source>Port %1: %2</source>
         <translation>Port %1: %2</translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+62"/>
         <source>Cannot set %1 on %2: %3</source>
         <translation>Cannot set %1 on %2: %3</translation>
     </message>
@@ -1924,7 +1989,8 @@ Nothing is saved until you press OK.</translation>
         <translation>Cannot open log file %1: %2</translation>
     </message>
     <message>
-        <location line="+167"/>
+        <location line="+190"/>
+        <location line="+10"/>
         <source>Write to log file %1 failed: %2</source>
         <translation>Write to log file %1 failed: %2</translation>
     </message>
@@ -1932,12 +1998,12 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+97"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+98"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Log closed: %1 (%2 bytes)</source>
         <translation>Log closed: %1 (%2 bytes)</translation>
     </message>
@@ -1957,17 +2023,27 @@ Nothing is saved until you press OK.</translation>
         <translation>Select a serial port first</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+23"/>
         <source>Connected to %1 (%2)</source>
         <translation>Connected to %1 (%2)</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+29"/>
+        <source>%1 unsent bytes discarded on disconnect</source>
+        <translation>%1 unsent bytes discarded on disconnect</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Disconnected from %1 (%2 unsent bytes discarded)</source>
+        <translation>Disconnected from %1 (%2 unsent bytes discarded)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Disconnected from %1</source>
         <translation>Disconnected from %1</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+24"/>
         <source>Terminal reset</source>
         <translation>Terminal reset</translation>
     </message>
@@ -1978,23 +2054,23 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+255"/>
+        <location line="+320"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>Log files (*.log *.txt);;All files (*)</translation>
     </message>
     <message>
-        <location line="-233"/>
+        <location line="-298"/>
         <source>(no port)</source>
         <translation>(no port)</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+43"/>
         <source>Sending %1...</source>
         <translation>Sending %1...</translation>
     </message>
     <message>
         <location line="+23"/>
-        <location line="+24"/>
+        <location line="+27"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
@@ -2014,7 +2090,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Quick command &quot;%1&quot;: %2</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+65"/>
         <source>port %1 disappeared, waiting to reconnect</source>
         <translation>port %1 disappeared, waiting to reconnect</translation>
     </message>
@@ -2044,7 +2120,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Reconnected to %1</translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="+106"/>
         <source>Disconnect from %1 before replaying a log file</source>
         <translation>Disconnect from %1 before replaying a log file</translation>
     </message>
@@ -2097,7 +2173,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SystemLogViewer</name>
     <message>
-        <location filename="../src/ui/SystemLogViewer.cpp" line="+214"/>
+        <location filename="../src/ui/SystemLogViewer.cpp" line="+248"/>
         <source>Level:</source>
         <translation>Level:</translation>
     </message>
@@ -2157,7 +2233,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Discard all messages</translation>
     </message>
     <message>
-        <location line="+132"/>
+        <location line="+138"/>
         <location line="+8"/>
         <source>Save System Log</source>
         <translation>Save System Log</translation>
@@ -2201,7 +2277,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1714"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1765"/>
         <source>&amp;Copy</source>
         <translation>&amp;Copy</translation>
     </message>
@@ -2235,12 +2311,18 @@ Nothing is saved until you press OK.</translation>
         <source>Sync Terminal Size (stty)</source>
         <translation>Sync Terminal Size (stty)</translation>
     </message>
+    <message>
+        <location line="+5"/>
+        <source>&amp;Find...</source>
+        <translation>&amp;Find...</translation>
+    </message>
 </context>
 <context>
     <name>VersionDialog</name>
     <message>
         <location filename="../src/dialogs/VersionDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/VersionDialog.cpp" line="+68"/>
+        <location filename="../src/dialogs/VersionDialog.cpp" line="+69"/>
+        <location line="+19"/>
         <source>Version Information</source>
         <translation>Version Information</translation>
     </message>
@@ -2256,7 +2338,7 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+6"/>
-        <location filename="../src/dialogs/VersionDialog.cpp" line="+45"/>
+        <location filename="../src/dialogs/VersionDialog.cpp" line="+37"/>
         <location line="+30"/>
         <source>Application Version:</source>
         <translation>Application Version:</translation>

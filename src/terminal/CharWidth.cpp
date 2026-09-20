@@ -14,7 +14,8 @@ struct Range
 };
 
 // Code points that occupy no cell of their own (combining marks, joiners, format
-// characters, variation selectors, Hangul medial/final Jamo). Sorted by `first`.
+// characters incl. the BOM, variation selectors, Hangul medial/final Jamo). Sorted by
+// `first`.
 constexpr Range kZeroWidth[] = {
     {0x0300, 0x036F},   // Combining Diacritical Marks
     {0x1160, 0x11FF},   // Hangul Jamo medial vowels + final consonants
@@ -26,6 +27,8 @@ constexpr Range kZeroWidth[] = {
     {0x20D0, 0x20FF},   // Combining Diacritical Marks for Symbols
     {0xFE00, 0xFE0F},   // Variation Selectors
     {0xFE20, 0xFE2F},   // Combining Half Marks
+    {0xFEFF, 0xFEFF},   // ZWNBSP / byte order mark
+    {0xFFF9, 0xFFFB},   // Interlinear annotation anchors
     {0xE0100, 0xE01EF}, // Variation Selectors Supplement
 };
 

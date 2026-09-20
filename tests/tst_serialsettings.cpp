@@ -155,6 +155,22 @@ void Tst_serialsettings::fromMapInvalidValues()
     QVariantMap zeroBaud;
     zeroBaud.insert(QStringLiteral("baud"), 0);
     QCOMPARE(SerialSettings::fromMap(zeroBaud).baudRate, 115200);
+
+    // Rates outside kMinBaudRate..kMaxBaudRate fall back to the default as well.
+    QVariantMap tooFast;
+    tooFast.insert(QStringLiteral("baud"), 20000000);
+    QCOMPARE(SerialSettings::fromMap(tooFast).baudRate, 115200);
+    QVariantMap tooSlow;
+    tooSlow.insert(QStringLiteral("baud"), 20);
+    QCOMPARE(SerialSettings::fromMap(tooSlow).baudRate, 115200);
+
+    // The range limits themselves are accepted.
+    QVariantMap minBaud;
+    minBaud.insert(QStringLiteral("baud"), SerialSettings::kMinBaudRate);
+    QCOMPARE(SerialSettings::fromMap(minBaud).baudRate, SerialSettings::kMinBaudRate);
+    QVariantMap maxBaud;
+    maxBaud.insert(QStringLiteral("baud"), SerialSettings::kMaxBaudRate);
+    QCOMPARE(SerialSettings::fromMap(maxBaud).baudRate, SerialSettings::kMaxBaudRate);
 }
 
 void Tst_serialsettings::summaryText()
@@ -465,6 +481,9 @@ void Tst_serialsettings::connectionInitialState()
     QVERIFY(c.rts());
     QCOMPARE(c.settings(), SerialSettings());
 
+    // setSettings() on a closed connection stores everything unvalidated (the driver checks the
+    // values on the next open()). While open, a rejected line parameter is NOT stored and
+    // settings() keeps the last accepted value; that branch needs hardware and is review-only.
     const SerialSettings s = custom();
     c.setSettings(s);
     QCOMPARE(c.settings(), s);

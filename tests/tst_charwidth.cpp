@@ -141,6 +141,8 @@ void Tst_charwidth::formatCharactersAreZero()
     QCOMPARE(charWidth(0x202E), 0);
     QCOMPARE(charWidth(0x2060), 0); // word joiner
     QCOMPARE(charWidth(0x2064), 0);
+    QCOMPARE(charWidth(0xFEFF), 0); // BOM / ZWNBSP
+    QCOMPARE(charWidth(0xFFF9), 0); // interlinear annotation anchor
     QCOMPARE(charWidth(0x2010), 1); // hyphen stays narrow
     QCOMPARE(charWidth(0x2065), 1);
 }
@@ -199,9 +201,14 @@ void Tst_charwidth::boundaries_data()
     QTest::newRow("FB00") << 0xFB00u << 1;
     QTest::newRow("FE4F") << 0xFE4Fu << 2;
     QTest::newRow("FE50") << 0xFE50u << 1;
-    QTest::newRow("FEFF") << 0xFEFFu << 1;
+    QTest::newRow("FEFE") << 0xFEFEu << 1;
+    QTest::newRow("FEFF (zero)") << 0xFEFFu << 0;
     QTest::newRow("FF00") << 0xFF00u << 2;
     QTest::newRow("FFE7") << 0xFFE7u << 1;
+    QTest::newRow("FFF8") << 0xFFF8u << 1;
+    QTest::newRow("FFF9 (zero)") << 0xFFF9u << 0;
+    QTest::newRow("FFFB (zero)") << 0xFFFBu << 0;
+    QTest::newRow("FFFC") << 0xFFFCu << 1;
     QTest::newRow("1F2FF") << 0x1F2FFu << 1;
     QTest::newRow("1F300") << 0x1F300u << 2;
     QTest::newRow("1F64F") << 0x1F64Fu << 2;

@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.22)
+# 3.22: ENVIRONMENT_MODIFICATION test property (tests/CMakeLists.txt puts Qt's bin dir on PATH for
+# ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
     VERSION 0.1.0
@@ -26,6 +28,17 @@ set(SU_APP_OUTPUT_NAME "BuildAI-SerialUtility")
 # ---------------------------------------------------------------------------
 # Qt
 # ---------------------------------------------------------------------------
+# Qt location. Precedence: -DCMAKE_PREFIX_PATH / -DQt6_DIR on the command line (build.ps1,
+# CI) > QT_ROOT in the environment (CMakePresets.json forwards it via $penv{}) > the default
+# install on the Windows dev machines. Linux relies on the distro Qt (nothing to set).
+if(NOT CMAKE_PREFIX_PATH AND NOT Qt6_DIR)
+    if(DEFINED ENV{QT_ROOT} AND NOT "$ENV{QT_ROOT}" STREQUAL "")
+        set(CMAKE_PREFIX_PATH "$ENV{QT_ROOT}")
+    elseif(WIN32 AND EXISTS "D:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6")
+        set(CMAKE_PREFIX_PATH "D:/Qt/6.8.3/msvc2022_64")
+    endif()
+endif()
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets SerialPort LinguistTools)
 if(SU_BUILD_TESTS)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
@@ -52,6 +65,22 @@ if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
         RESULT_VARIABLE _su_git_rc)
     if(_su_git_rc EQUAL 0 AND NOT _su_git_hash STREQUAL "")
         set(APP_GIT_HASH "${_su_git_hash}")
+    endif()
+
+    # Re-run the configure step whenever HEAD moves (commit/checkout/reset/merge append to the
+    # reflog), so `cmake --build` / Qt Creator incremental builds never ship a stale hash.
+    # Ask git for the path so worktree / submodule layouts (.git as a file) resolve correctly.
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path logs/HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE _su_git_reflog
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(_su_git_reflog AND NOT IS_ABSOLUTE "${_su_git_reflog}")
+        set(_su_git_reflog "${CMAKE_CURRENT_SOURCE_DIR}/${_su_git_reflog}")
+    endif()
+    if(EXISTS "${_su_git_reflog}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_su_git_reflog}")
     endif()
 endif()
 string(TIMESTAMP APP_BUILD_DATE "%Y-%m-%d" UTC)
@@ -199,8 +228,8 @@ set(SU_TRANSLATION_TARGETS SerialUtility)
 if(SU_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-    # GUI tests that exercise the language menu need the embedded .qm files too.
-    list(APPEND SU_TRANSLATION_TARGETS tst_mainwindow tst_dialogs)
+    # GUI tests that exercise the language menu / translated group names need the embedded .qm files too.
+    list(APPEND SU_TRANSLATION_TARGETS tst_mainwindow tst_dialogs tst_sessionwidget)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -218,6 +247,23 @@ qt_add_translations(
     TS_FILES ${SU_TS_FILES}
     RESOURCE_PREFIX "/translations"
     LUPDATE_OPTIONS -no-obsolete -locations relative)
+
+# Qt's own widget/dialog strings for Chinese, embedded so a deployed (windeployqt
+# NO_TRANSLATIONS) build does not depend on a Qt SDK being present. qtbase_zh_CN.qm
+# covers QMessageBox/QFileDialog/QInputDialog/QFontDialog/QColorDialog; nothing in
+# QtSerialPort is translatable.
+set(SU_QTBASE_QM "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}/qtbase_zh_CN.qm")
+if(EXISTS "${SU_QTBASE_QM}")
+    foreach(_t IN LISTS SU_TRANSLATION_TARGETS)
+        qt_add_resources(${_t} "su_qtbase_translations"
+            PREFIX "/translations"
+            BASE   "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}"
+            FILES  "${SU_QTBASE_QM}")
+    endforeach()
+else()
+    message(WARNING "qtbase_zh_CN.qm not found in ${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}; "
+                    "Qt dialogs will stay English in the Chinese UI")
+endif()
 
 # ---------------------------------------------------------------------------
 # Install / deploy  (cmake --install <build> --prefix <dist>)

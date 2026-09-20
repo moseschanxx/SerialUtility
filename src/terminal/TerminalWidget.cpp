@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QStringConverter>
@@ -35,6 +36,8 @@ namespace {
 constexpr int kRepaintIntervalMs = 16;    ///< coalescing window for screen updates
 constexpr int kBlinkIntervalMs = 530;
 constexpr int kBellFlashMs = 120;
+constexpr int kBellSuppressMs = 250;      ///< xterm-style bell suppression: at most one beep/flash per window
+constexpr int kDragScrollIntervalMs = 50; ///< edge auto-scroll while dragging a selection: one line per tick
 constexpr int kMinFontPointSize = 6;
 constexpr int kMaxFontPointSize = 40;
 constexpr int kDefaultFontPointSize = 10;
@@ -397,6 +400,8 @@ TerminalWidget::TerminalWidget(QWidget* parent)
         m_bellFlash = false;
         viewport()->update();
     });
+    m_dragScrollTimer.setInterval(kDragScrollIntervalMs);
+    connect(&m_dragScrollTimer, &QTimer::timeout, this, &TerminalWidget::onDragScrollTimeout);
 
     connect(m_screen, &TerminalScreen::contentChanged, this, &TerminalWidget::onScreenContentChanged);
     connect(m_screen, &TerminalScreen::sizeChanged, this, &TerminalWidget::onScreenSizeChanged);
@@ -415,7 +420,7 @@ TerminalWidget::TerminalWidget(QWidget* parent)
 
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         m_followOutput = value >= verticalScrollBar()->maximum();
-        viewport()->update();
+        scheduleFullRepaint();
     });
 
     updateCellMetrics();
@@ -427,6 +432,7 @@ TerminalWidget::~TerminalWidget()
     m_repaintTimer.stop();
     m_blinkTimer.stop();
     m_bellTimer.stop();
+    m_dragScrollTimer.stop();
     // The parser references the screen: make sure it goes first.
     delete m_parser;
     m_parser = nullptr;
@@ -710,11 +716,22 @@ void TerminalWidget::selectAll()
     if (total <= 0) {
         return;
     }
-    setSelectionRange(0, 0, total - 1, qMax(0, m_screen->cols() - 1));
+    // Stop at the last non-blank line: blank rows below the output would otherwise each add
+    // a '\n' to the copied text (and an Enter each when pasted back into the device).
+    int last = total - 1;
+    while (last > 0 && m_screen->absoluteLine(last).text().isEmpty()) {
+        --last;
+    }
+    if (last == 0 && m_screen->absoluteLine(0).text().isEmpty()) {
+        clearSelection();   // nothing to select
+        return;
+    }
+    setSelectionRange(0, 0, last, qMax(0, m_screen->cols() - 1));
 }
 
 void TerminalWidget::clearSelection()
 {
+    m_dragScrollTimer.stop();
     if (!m_selection.active) {
         return;
     }
@@ -862,10 +879,8 @@ void TerminalWidget::paintEvent(QPaintEvent* event)
         paintLine(painter, m_screen->absoluteLine(absolute), absolute, row * m_cellHeight);
     }
     paintCursor(painter);
-
-    if (clip.contains(viewport()->rect())) {
-        m_screen->clearDirty();
-    }
+    // The screen's dirty state is consumed by performRepaint() when it posts the update, never
+    // here: mutations that land between the two set fresh bits for the next coalesced pass.
 }
 
 void TerminalWidget::paintLine(QPainter& painter, const Terminal::Line& line, int absoluteIndex, int y)
@@ -1571,6 +1586,7 @@ void TerminalWidget::mousePressEvent(QMouseEvent* event)
         if (chained && m_clickCount >= 2) {
             m_clickCount = 0;   // the next click starts a fresh sequence
             m_selecting = false;
+            m_dragScrollTimer.stop();
             m_lastClickCell = cell;
             selectLineAt(cell.x());
         } else if (event->modifiers().testFlag(Qt::ShiftModifier) && m_selection.active) {
@@ -1624,30 +1640,16 @@ void TerminalWidget::mouseMoveEvent(QMouseEvent* event)
 {
     if (m_selecting && event->buttons().testFlag(Qt::LeftButton)) {
         const QPoint pos = event->position().toPoint();
-        if (pos.y() < 0) {
-            scrollLines(-1);
-        } else if (pos.y() >= viewport()->height()) {
-            scrollLines(1);
-        }
-        const QPoint cell = cellAt(pos);
-        if (cell == m_lastClickCell && m_selection.isEmpty()) {
-            event->accept();   // jitter inside the pressed cell is not a drag yet
-            return;
-        }
-        int anchorLine = 0;
-        int anchorCol = 0;
-        int endLine = 0;
-        int endCol = 0;
-        selectionBounds(m_lastClickCell, cell, anchorLine, anchorCol, endLine, endCol);
-        if (anchorLine != m_selection.anchorLine || anchorCol != m_selection.anchorCol ||
-            endLine != m_selection.endLine || endCol != m_selection.endCol) {
-            m_selection.active = true;
-            m_selection.anchorLine = anchorLine;
-            m_selection.anchorCol = anchorCol;
-            m_selection.endLine = endLine;
-            m_selection.endCol = endCol;
-            emit selectionChanged();
-            viewport()->update();
+        m_dragScrollPos = pos;
+        const bool outside = pos.y() < 0 || pos.y() >= viewport()->height();
+        if (outside) {
+            if (!m_dragScrollTimer.isActive()) {
+                onDragScrollTimeout();   // scroll immediately on the crossing, then repeat
+                m_dragScrollTimer.start();
+            }
+        } else {
+            m_dragScrollTimer.stop();
+            extendDragSelectionTo(pos);
         }
         event->accept();
         return;
@@ -1655,9 +1657,57 @@ void TerminalWidget::mouseMoveEvent(QMouseEvent* event)
     QAbstractScrollArea::mouseMoveEvent(event);
 }
 
+void TerminalWidget::extendDragSelectionTo(const QPoint& viewportPos)
+{
+    const QPoint cell = cellAt(viewportPos);   // rows outside the viewport clamp to the first/last visible row
+    if (cell == m_lastClickCell && m_selection.isEmpty()) {
+        return;   // jitter inside the pressed cell is not a drag yet
+    }
+    int anchorLine = 0;
+    int anchorCol = 0;
+    int endLine = 0;
+    int endCol = 0;
+    selectionBounds(m_lastClickCell, cell, anchorLine, anchorCol, endLine, endCol);
+    if (anchorLine != m_selection.anchorLine || anchorCol != m_selection.anchorCol || endLine != m_selection.endLine ||
+        endCol != m_selection.endCol) {
+        m_selection.active = true;
+        m_selection.anchorLine = anchorLine;
+        m_selection.anchorCol = anchorCol;
+        m_selection.endLine = endLine;
+        m_selection.endCol = endCol;
+        emit selectionChanged();
+        viewport()->update();
+    }
+}
+
+void TerminalWidget::onDragScrollTimeout()
+{
+    if (!m_selecting) {
+        m_dragScrollTimer.stop();
+        return;
+    }
+    QScrollBar* bar = verticalScrollBar();
+    if (m_dragScrollPos.y() < 0) {
+        // At the top there is nothing left to scroll; the timer keeps running so that a later
+        // move back below the edge is still tracked by mouseMoveEvent().
+        if (bar->value() > bar->minimum()) {
+            scrollLines(-1);
+        }
+    } else if (m_dragScrollPos.y() >= viewport()->height()) {
+        if (bar->value() < bar->maximum()) {
+            scrollLines(1);
+        }
+    } else {
+        m_dragScrollTimer.stop();
+        return;
+    }
+    extendDragSelectionTo(m_dragScrollPos);
+}
+
 void TerminalWidget::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
+        m_dragScrollTimer.stop();
         m_selecting = false;
         if (m_selection.active && m_selection.isEmpty()) {
             m_selection.active = false;
@@ -1683,6 +1733,7 @@ void TerminalWidget::mouseDoubleClickEvent(QMouseEvent* event)
     m_clickTimer.start();
     m_lastClickCell = cell;
     m_selecting = false;
+    m_dragScrollTimer.stop();
     selectWordAt(cell.x(), cell.y());
     event->accept();
 }
@@ -1735,6 +1786,11 @@ void TerminalWidget::contextMenuEvent(QContextMenuEvent* event)
     syncAction->setEnabled(m_inputEnabled);
     connect(syncAction, &QAction::triggered, this, &TerminalWidget::syncSizeRequested);
 
+    menu.addSeparator();
+    QAction* findAction = menu.addAction(tr("&Find..."));
+    findAction->setEnabled(m_screen->totalLines() > 0);
+    connect(findAction, &QAction::triggered, this, &TerminalWidget::findRequested);
+
     menu.exec(event->globalPos());
     event->accept();
 }
@@ -1768,7 +1824,7 @@ void TerminalWidget::scrollContentsBy(int dx, int dy)
 {
     Q_UNUSED(dx);
     Q_UNUSED(dy);
-    viewport()->update();   // rows are re-read from the screen model; no pixel scrolling
+    scheduleFullRepaint();   // rows are re-read from the screen model; no pixel scrolling
 }
 
 void TerminalWidget::dragEnterEvent(QDragEnterEvent* event)
@@ -1826,6 +1882,42 @@ void TerminalWidget::onScreenSizeChanged(int rows, int cols)
 void TerminalWidget::onScrollbackChanged(int size)
 {
     Q_UNUSED(size);
+    // Lines dropped from a full scrollback shift every absolute index by -1 each. Shift the
+    // frozen view and the selection the same way (before the range is updated) so the same text
+    // stays under the viewport and under the highlight.
+    const qint64 dropped = m_screen->scrollbackDropped();
+    const qint64 maxDelta = std::numeric_limits<int>::max();
+    const int delta = static_cast<int>(qMin(dropped - m_seenScrollbackDropped, maxDelta));
+    m_seenScrollbackDropped = dropped;
+    if (delta > 0) {
+        if (!m_followOutput) {
+            QScrollBar* bar = verticalScrollBar();
+            bar->setValue(qMax(0, bar->value() - delta));   // at 0 the view pins to the oldest surviving line
+        }
+        if (m_selection.active) {
+            m_selection.anchorLine -= delta;
+            m_selection.endLine -= delta;
+            m_lastClickCell.rx() = qMax(0, m_lastClickCell.x() - delta);
+            int l0 = 0;
+            int c0 = 0;
+            int l1 = 0;
+            int c1 = 0;
+            m_selection.normalized(l0, c0, l1, c1);
+            if (l1 < 0) {
+                clearSelection();   // the whole selection fell off the top
+            } else if (l0 < 0) {
+                // Clamp the earlier end (l0 < 0 <= l1, so the two ends are on different lines).
+                if (m_selection.anchorLine < m_selection.endLine) {
+                    m_selection.anchorLine = 0;
+                    m_selection.anchorCol = 0;
+                } else {
+                    m_selection.endLine = 0;
+                    m_selection.endCol = 0;
+                }
+                emit selectionChanged();
+            }
+        }
+    }
     updateScrollBar();   // keeps the view at the bottom while following
     scheduleRepaint();
 }
@@ -1836,6 +1928,12 @@ void TerminalWidget::onBell()
     if (!m_bellEnabled) {
         return;
     }
+    // Suppress bells that arrive in a burst (baud mismatch garbage, binary data): one beep and
+    // one 120 ms flash per 250 ms window, so the background always returns to normal in between.
+    if (m_bellSuppress.isValid() && m_bellSuppress.elapsed() < kBellSuppressMs) {
+        return;
+    }
+    m_bellSuppress.start();
     QApplication::beep();
     m_bellFlash = true;
     m_bellTimer.start(kBellFlashMs);
@@ -1859,8 +1957,45 @@ void TerminalWidget::scheduleRepaint()
     m_repaintTimer.start(kRepaintIntervalMs);
 }
 
+void TerminalWidget::scheduleFullRepaint()
+{
+    m_repaintAll = true;
+    scheduleRepaint();
+}
+
 void TerminalWidget::performRepaint()
 {
     m_repaintPending = false;
-    viewport()->update();
+    // Partial repaint is only meaningful while following output: when scrolled up the visible
+    // rows are scrollback lines and do not map to screen rows. A scroll (m_repaintAll) has to
+    // repaint everything even when the screen itself did not change.
+    const bool all = m_repaintAll || m_screen->allDirty() || !isAtBottom();
+    m_repaintAll = false;
+    if (!all && !m_screen->isDirty()) {
+        return;   // nothing changed since the last paint (e.g. a cursorMoved coalesced into an earlier full paint)
+    }
+    if (all) {
+        m_screen->clearDirty();
+        viewport()->update();
+        return;
+    }
+    const QBitArray dirty = m_screen->dirtyRows();
+    QRegion region;
+    const int width = viewport()->width();
+    const int rows = qMin(static_cast<int>(dirty.size()), m_screen->rows());
+    for (int row = 0; row < rows; ++row) {
+        if (dirty.testBit(row)) {
+            region += QRect(0, row * m_cellHeight, width, m_cellHeight);
+        }
+    }
+    // The cursor row is always repainted (cursor may have moved onto/off it, or its visibility toggled).
+    const Terminal::Cursor cur = m_screen->cursor();
+    if (cur.row >= 0 && cur.row < m_screen->rows()) {
+        region += QRect(0, cur.row * m_cellHeight, width, m_cellHeight);
+    }
+    m_screen->clearDirty();   // consume the dirty state now, before the paint event is delivered
+    if (region.isEmpty()) {
+        return;
+    }
+    viewport()->update(region);
 }

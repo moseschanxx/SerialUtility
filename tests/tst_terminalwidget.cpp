@@ -5,6 +5,7 @@
 // docs/DESIGN.md §4.7.
 #include <QtTest>
 
+#include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QDir>
@@ -111,6 +112,22 @@ QColor firstFragmentColor(const QTextBlock& block)
     return it.fragment().charFormat().foreground().color();
 }
 
+/// Counts the paint events delivered to the widget it is installed on.
+class PaintCounter : public QObject
+{
+public:
+    int paints = 0;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::Paint) {
+            ++paints;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
 /// show() + exposure + activation, so that key events and focus behave like in the app.
 bool showAndActivate(QWidget* widget)
 {
@@ -120,6 +137,23 @@ bool showAndActivate(QWidget* widget)
     }
     widget->activateWindow();
     return QTest::qWaitForWindowActive(widget);
+}
+
+/// A window-wide QAction on `window` with the shortcut `key`+`mods`, the way the main window's
+/// menu actions compete with a focused terminal for key presses (via QEvent::ShortcutOverride).
+QAction* addWindowAction(QWidget* window, Qt::Key key, Qt::KeyboardModifiers mods = Qt::NoModifier)
+{
+    auto* action = new QAction(window);
+    action->setShortcut(QKeySequence(QKeyCombination(mods, key)));
+    action->setShortcutContext(Qt::WindowShortcut);
+    window->addAction(action);
+    return action;
+}
+
+/// "Ctrl+Shift+H" etc. for failure messages.
+QString keyName(Qt::Key key, Qt::KeyboardModifiers mods)
+{
+    return QKeySequence(QKeyCombination(mods, key)).toString(QKeySequence::PortableText);
 }
 
 } // namespace
@@ -160,6 +194,9 @@ private slots:
     void inputDisabledSwallowsKeys();
     void inputDisabledSuppressesDsrReplies();
     void shiftPageKeysScrollInsteadOfSending();
+    void shortcutOverrideClaimsTerminalKeysWhileConnected();
+    void shortcutOverrideWhileDisconnected();
+    void ctrlShiftLetterWithoutActionSendsControlByte();
 
     // ---- Selection / clipboard --------------------------------------------------------
     void cellMetricsMatchGrid();
@@ -177,6 +214,8 @@ private slots:
     void shiftClickExtendsSelection();
     void middleClickPastes();
     void selectionSurvivesScrollbackGrowth();
+    void dragAutoScrollRepeatsOnTimer();
+    void dragAutoScrollStopsInsideViewport();
     void dropTextPastes();
     void dropFileEmitsFileDropped();
     void pasteIgnoredWhenInputDisabled();
@@ -186,6 +225,7 @@ private slots:
     void colouredBootLog();
     void burstFillsScrollback();
     void scrollingUpFreezesView();
+    void fullScrollbackKeepsFrozenViewAndSelection();
     void keyPressReturnsToBottom();
     void wheelScrollsAndCtrlWheelZooms();
     void zoomBoundsAndSignal();
@@ -198,6 +238,7 @@ private slots:
     void daReply();
     void titleChangedOnOsc();
     void bellRangAndFlash();
+    void bellBurstIsThrottled();
     void findNextWrapsAndSelects();
     void findPreviousAndCaseSensitivity();
     void paintingProducesNonUniformImage();
@@ -206,6 +247,8 @@ private slots:
     void cursorBlockWhenConnectedHollowWhenNot();
     void selectionIsPainted();
     void feedPerformance();
+    void repaintsAreCoalescedWhileFollowing();
+    void partialRepaintConsumesDirtyState();
     void scrollbackMaxTrims();
     void cursorPositionChangedSignal();
 
@@ -217,6 +260,7 @@ private slots:
     void hexBytesPerLine();
     void hexTimestampsToggle();
     void hexEmptyChunkIgnored();
+    void hexTrimKeepsScrolledUpContent();
 
 private:
     QByteArray bytesFor(Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
@@ -523,6 +567,7 @@ void Tst_terminalwidget::altKeySendsEscPrefix()
     QCOMPARE(bytesFor(Qt::Key_X, Qt::AltModifier), esc("x"));
     QCOMPARE(bytesFor(Qt::Key_Return, Qt::AltModifier), esc("\r"));
     QCOMPARE(bytesFor(Qt::Key_Backspace, Qt::AltModifier), esc("\x7f"));
+    QCOMPARE(bytesFor(Qt::Key_Escape, Qt::AltModifier), QByteArray("\x1b\x1b"));
 }
 
 void Tst_terminalwidget::plainText()
@@ -660,6 +705,137 @@ void Tst_terminalwidget::shiftPageKeysScrollInsteadOfSending()
     QCOMPARE(bytesFor(Qt::Key_PageUp), esc("[5~"));
 }
 
+void Tst_terminalwidget::shortcutOverrideClaimsTerminalKeysWhileConnected()
+{
+    // Header "Input mapping": while the terminal is connected and focused, the keys it maps to
+    // bytes (Ctrl+<letter>, Tab, F1, Esc, ...) are claimed in event(QEvent::ShortcutOverride) so
+    // an ancestor's QAction with the same shortcut cannot steal them; the main window's
+    // shortcuts (Ctrl+Shift+<letter>, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+, F2/F3/F5) pass through.
+    QWidget container;
+    auto* layout = new QVBoxLayout(&container);
+    auto* term = new TerminalWidget;
+    layout->addWidget(term);
+    container.resize(640, 400);
+    QVERIFY(showAndActivate(&container));
+    term->setFocus();
+    QTRY_VERIFY(term->hasFocus());
+    term->setInputEnabled(true);
+    QVERIFY(!term->hasSelection());
+
+    struct Probe
+    {
+        Qt::Key key;
+        Qt::KeyboardModifiers mods;
+        QByteArray expected;   ///< bytes the device receives (claimed keys only)
+    };
+    const Probe claimed[] = {{Qt::Key_L, Qt::ControlModifier, QByteArray(1, '\x0c')},
+                             {Qt::Key_C, Qt::ControlModifier, QByteArray(1, '\x03')},   // no selection: ETX
+                             {Qt::Key_Tab, Qt::NoModifier, QByteArray("\t")},
+                             {Qt::Key_F1, Qt::NoModifier, esc("OP")},
+                             {Qt::Key_Escape, Qt::NoModifier, QByteArray("\x1b")}};
+    // F2 is listed in functionKeys() as ESC O Q: that mapping only applies when no action owns it.
+    const Probe passThrough[] = {{Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier, {}},
+                                 {Qt::Key_T, Qt::ControlModifier, {}},
+                                 {Qt::Key_W, Qt::ControlModifier, {}},
+                                 {Qt::Key_Comma, Qt::ControlModifier, {}},
+                                 {Qt::Key_Tab, Qt::ControlModifier, {}},
+                                 {Qt::Key_F2, Qt::NoModifier, {}},
+                                 {Qt::Key_F3, Qt::NoModifier, {}},
+                                 {Qt::Key_F5, Qt::NoModifier, {}}};
+
+    for (const Probe& p : claimed) {
+        QAction* action = addWindowAction(&container, p.key, p.mods);
+        QSignalSpy triggered(action, &QAction::triggered);
+        QSignalSpy send(term, &TerminalWidget::sendData);
+        QTest::keyClick(term, p.key, p.mods);
+        QVERIFY2(triggered.count() == 0, qPrintable(keyName(p.key, p.mods) + QStringLiteral(" reached the action")));
+        QVERIFY2(sentBytes(send) == p.expected, qPrintable(keyName(p.key, p.mods) + QStringLiteral(": got ") +
+                                                           QString::fromLatin1(sentBytes(send).toHex(' '))));
+        QCOMPARE(QApplication::focusWidget(), term);   // in particular after Tab
+    }
+
+    for (const Probe& p : passThrough) {
+        QAction* action = addWindowAction(&container, p.key, p.mods);
+        QSignalSpy triggered(action, &QAction::triggered);
+        QSignalSpy send(term, &TerminalWidget::sendData);
+        QTest::keyClick(term, p.key, p.mods);
+        QVERIFY2(triggered.count() == 1,
+                 qPrintable(keyName(p.key, p.mods) + QStringLiteral(" did not reach the action")));
+        QVERIFY2(send.count() == 0, qPrintable(keyName(p.key, p.mods) + QStringLiteral(" was sent to the device")));
+    }
+}
+
+void Tst_terminalwidget::shortcutOverrideWhileDisconnected()
+{
+    // Header setInputEnabled(): disconnected, key presses are swallowed except the copy /
+    // navigation shortcuts. event() therefore only claims the widget-local actions - and only
+    // when they apply: an ancestor's Ctrl+L fires (nothing to send), Ctrl+Insert / Ctrl+C with
+    // a selection copy locally instead of triggering the ancestor, Ctrl+C without a selection
+    // goes to the ancestor, and Ctrl+Shift+C passes through like every Ctrl+Shift+<letter>.
+    QWidget container;
+    auto* layout = new QVBoxLayout(&container);
+    auto* term = new TerminalWidget;
+    layout->addWidget(term);
+    container.resize(640, 400);
+    QVERIFY(showAndActivate(&container));
+    term->setFocus();
+    QTRY_VERIFY(term->hasFocus());
+    QVERIFY(!term->inputEnabled());
+    term->feedData("some text\r\n");
+    QSignalSpy send(term, &TerminalWidget::sendData);
+
+    QAction* ctrlL = addWindowAction(&container, Qt::Key_L, Qt::ControlModifier);
+    QSignalSpy ctrlLSpy(ctrlL, &QAction::triggered);
+    QTest::keyClick(term, Qt::Key_L, Qt::ControlModifier);
+    QCOMPARE(ctrlLSpy.count(), qsizetype(1));
+
+    // Tab is swallowed (no action owns it): no bytes, the focus stays on the terminal.
+    QTest::keyClick(term, Qt::Key_Tab);
+    QCOMPARE(QApplication::focusWidget(), term);
+    QVERIFY(term->hasFocus());
+
+    QAction* ctrlInsert = addWindowAction(&container, Qt::Key_Insert, Qt::ControlModifier);
+    QSignalSpy ctrlInsertSpy(ctrlInsert, &QAction::triggered);
+    term->selectAll();
+    QVERIFY(term->hasSelection());
+    QTest::keyClick(term, Qt::Key_Insert, Qt::ControlModifier);
+    QCOMPARE(ctrlInsertSpy.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("some text"));
+    QVERIFY(term->hasSelection());   // Ctrl+Insert keeps the selection
+
+    QAction* ctrlC = addWindowAction(&container, Qt::Key_C, Qt::ControlModifier);
+    QSignalSpy ctrlCSpy(ctrlC, &QAction::triggered);
+    QApplication::clipboard()->clear();
+    QTest::keyClick(term, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(ctrlCSpy.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("some text"));
+    QVERIFY(!term->hasSelection());   // Ctrl+C clears the selection ...
+    QTest::keyClick(term, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(ctrlCSpy.count(), qsizetype(1));   // ... so the next Ctrl+C is the ancestor's
+
+    // Ctrl+Shift+C belongs to the main window's Copy action whenever one exists (pass-through);
+    // the terminal itself copies on Ctrl+Shift+C only when no action claims it (see
+    // inputDisabledSwallowsKeys()).
+    QAction* ctrlShiftC = addWindowAction(&container, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QSignalSpy ctrlShiftCSpy(ctrlShiftC, &QAction::triggered);
+    QApplication::clipboard()->clear();
+    term->selectAll();
+    QTest::keyClick(term, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(ctrlShiftCSpy.count(), qsizetype(1));
+    QVERIFY(QApplication::clipboard()->text().isEmpty());
+
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::focusWidget(), term);
+}
+
+void Tst_terminalwidget::ctrlShiftLetterWithoutActionSendsControlByte()
+{
+    // Header: a Ctrl+Shift+<letter> that no action uses comes back from the shortcut map and is
+    // sent as the Ctrl+<letter> control byte. The fixture has no QActions at all.
+    QCOMPARE(bytesFor(Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier), QByteArray(1, '\x01'));
+    QCOMPARE(bytesFor(Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier), QByteArray(1, '\x1a'));
+}
+
 // -------------------------------------------------------------------------------------------
 // Selection / clipboard
 // -------------------------------------------------------------------------------------------
@@ -716,11 +892,19 @@ void Tst_terminalwidget::selectAllCopiesText()
     m_term->feedData("alpha\r\nbeta");
     m_term->selectAll();
     QVERIFY(m_term->hasSelection());
-    const QString text = m_term->selectedText();
-    QVERIFY2(text.startsWith(QStringLiteral("alpha\nbeta")), qPrintable(text));
-    QCOMPARE(text.trimmed(), QStringLiteral("alpha\nbeta"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("alpha\nbeta")); // no trailing blank rows
     m_term->copySelection();
-    QCOMPARE(QApplication::clipboard()->text().trimmed(), QStringLiteral("alpha\nbeta"));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("alpha\nbeta"));
+
+    // A terminated last line (cursor on a blank row) still copies without trailing newlines.
+    m_term->feedData("\r\n");
+    m_term->selectAll();
+    QCOMPARE(m_term->selectedText(), QStringLiteral("alpha\nbeta"));
+
+    // Select All on a blank buffer selects nothing.
+    m_term->resetTerminal();
+    m_term->selectAll();
+    QVERIFY(!m_term->hasSelection());
 }
 
 void Tst_terminalwidget::ctrlCWithSelectionCopiesInsteadOfSending()
@@ -859,6 +1043,60 @@ void Tst_terminalwidget::selectionSurvivesScrollbackGrowth()
     QVERIFY(m_term->screen()->scrollbackSize() > 0);
     QCOMPARE(m_term->screen()->lineText(0), QStringLiteral("anchor text")); // now in scrollback
     QCOMPARE(m_term->selectedText(), QStringLiteral("anchor"));             // anchors are absolute
+}
+
+void Tst_terminalwidget::dragAutoScrollRepeatsOnTimer()
+{
+    m_term->feedData(numberedLines(200)); // several pages of scrollback
+    m_term->scrollToBottom();
+    QScrollBar* bar = m_term->verticalScrollBar();
+    QVERIFY(bar->maximum() > 4 * m_term->visibleRows());
+    QWidget* vp = m_term->viewport();
+    const TerminalScreen* screen = m_term->screen();
+
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(5, 0));
+    QTest::mouseMove(vp, QPoint(cellCenter(0, 0).x(), -10)); // above the viewport: one line right away
+    const int v0 = bar->value();
+    QVERIFY(v0 < bar->maximum());
+    QVERIFY(!m_term->isAtBottom());
+
+    // Without any further mouse event the timer keeps scrolling ...
+    QTRY_VERIFY_WITH_TIMEOUT(bar->value() <= v0 - 3, 1000);
+    // ... and the selection follows: it starts on the first visible line.
+    QVERIFY(m_term->hasSelection());
+    QVERIFY2(m_term->selectedText().startsWith(screen->lineText(bar->value())), qPrintable(m_term->selectedText()));
+
+    // Releasing the button stops the timer.
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, QPoint(cellCenter(0, 0).x(), -10));
+    const int released = bar->value();
+    QTest::qWait(200);
+    QCOMPARE(bar->value(), released);
+    QVERIFY(m_term->hasSelection());
+    QVERIFY(m_term->selectedText().startsWith(screen->lineText(released)));
+}
+
+void Tst_terminalwidget::dragAutoScrollStopsInsideViewport()
+{
+    m_term->feedData(numberedLines(200));
+    m_term->scrollToBottom();
+    QScrollBar* bar = m_term->verticalScrollBar();
+    QWidget* vp = m_term->viewport();
+
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(5, 0));
+    QTest::mouseMove(vp, QPoint(cellCenter(0, 0).x(), -10));
+    const int v0 = bar->value();
+    QTRY_VERIFY_WITH_TIMEOUT(bar->value() <= v0 - 2, 1000);
+
+    // Back inside the viewport: no more scrolling, the selection ends at the pointer cell.
+    QTest::mouseMove(vp, cellCenter(2, 0));
+    const int inside = bar->value();
+    QTest::qWait(200);
+    QCOMPARE(bar->value(), inside);
+    QVERIFY(m_term->selectedText().startsWith(m_term->screen()->lineText(inside + 2)));
+
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(2, 0));
+    QTest::qWait(100);
+    QCOMPARE(bar->value(), inside);
 }
 
 void Tst_terminalwidget::dropTextPastes()
@@ -1013,6 +1251,47 @@ void Tst_terminalwidget::scrollingUpFreezesView()
     QVERIFY(m_term->isAtBottom());
     // ... and it follows output again.
     m_term->feedData(numberedLines(5, "tail "));
+    QCOMPARE(bar->value(), bar->maximum());
+}
+
+void Tst_terminalwidget::fullScrollbackKeepsFrozenViewAndSelection()
+{
+    m_term->setScrollbackMax(100);
+    m_term->feedData(numberedLines(300)); // the scrollback is full: every new line drops the oldest
+    const TerminalScreen* screen = m_term->screen();
+    QScrollBar* bar = m_term->verticalScrollBar();
+    QCOMPARE(bar->maximum(), 100);
+
+    m_term->scrollLines(-10);
+    const int v = bar->value();
+    QCOMPARE(v, 90);
+    const QString top = screen->lineText(v);
+    QVERIFY(!top.isEmpty());
+
+    // Select a word on viewport row 2 (absolute line v + 2).
+    QWidget* vp = m_term->viewport();
+    QTest::mouseDClick(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(2, 0));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(2, 0));
+    const QString sel = m_term->selectedText();
+    QVERIFY(!sel.isEmpty());
+
+    // Seven more lines: the range stays 0..100, the view and the selection keep their text.
+    m_term->feedData(numberedLines(7, "more "));
+    QCOMPARE(bar->maximum(), 100);
+    QCOMPARE(bar->value(), v - 7);
+    QCOMPARE(screen->lineText(bar->value()), top);
+    QCOMPARE(m_term->selectedText(), sel);
+    QVERIFY(!m_term->isAtBottom());
+
+    // A flood pushes both the view and the selection off the top.
+    m_term->feedData(numberedLines(200, "flood "));
+    QCOMPARE(bar->value(), 0);
+    QVERIFY(!m_term->hasSelection());
+
+    // Follow mode is unchanged.
+    m_term->scrollToBottom();
+    m_term->feedData(numberedLines(5, "tail "));
+    QVERIFY(m_term->isAtBottom());
     QCOMPARE(bar->value(), bar->maximum());
 }
 
@@ -1306,6 +1585,43 @@ void Tst_terminalwidget::bellRangAndFlash()
     QTRY_VERIFY_WITH_TIMEOUT(QColor(m_term->viewport()->grab().toImage().pixel(corner)) == background, 3000);
 }
 
+void Tst_terminalwidget::bellBurstIsThrottled()
+{
+    m_term->setBellEnabled(true);
+    QSignalSpy spy(m_term, &TerminalWidget::bellRang);
+    const QColor background = m_term->colorPalette().background;
+    m_term->feedData(esc("[?25l"));
+    const QPoint corner(m_term->viewport()->width() - 2, m_term->viewport()->height() - 2);
+    auto cornerColor = [this, corner]() { return QColor(m_term->viewport()->grab().toImage().pixel(corner)); };
+
+    // A burst of BELs in one chunk: the signal is still per BEL, but only one flash is started
+    // and the background returns to normal even though the BELs kept coming.
+    m_term->feedData(QByteArray(20, '\x07'));
+    QCOMPARE(spy.count(), qsizetype(20));
+    QVERIFY(cornerColor() != background);
+    QTRY_VERIFY_WITH_TIMEOUT(cornerColor() == background, 3000);
+
+    // A stream of BELs spaced closer than the flash duration (30 ms < 120 ms) must not keep the
+    // background tinted: only one bell per 250 ms window is accepted, so the tint is gone for at
+    // least 130 ms between flashes. Without suppression every BEL restarts the flash timer and
+    // the corner never shows the background while the stream flows.
+    QTest::qWait(300); // leave the previous suppression window
+    int sawBackground = 0;
+    for (int i = 0; i < 14; ++i) {
+        m_term->feedData("\x07");
+        if (i == 0) {
+            QVERIFY(cornerColor() != background); // the first bell of the stream flashes
+        }
+        QTest::qWait(30);
+        if (cornerColor() == background) {
+            ++sawBackground;
+        }
+    }
+    QCOMPARE(spy.count(), qsizetype(34));
+    QVERIFY2(sawBackground >= 1, "a stream of bells kept the background tinted");
+    QTRY_VERIFY_WITH_TIMEOUT(cornerColor() == background, 3000);
+}
+
 void Tst_terminalwidget::findNextWrapsAndSelects()
 {
     m_term->feedData("alpha\r\nbeta\r\ngamma\r\nalpha again\r\n");
@@ -1512,6 +1828,69 @@ void Tst_terminalwidget::feedPerformance()
     QVERIFY(!isUniform(m_term->viewport()->grab().toImage(), m_term->colorPalette().background));
 }
 
+void Tst_terminalwidget::repaintsAreCoalescedWhileFollowing()
+{
+    // Flush whatever the fixture left pending so only the paints below are counted.
+    m_term->resetTerminal();
+    QCoreApplication::processEvents();
+    QTest::qWait(40);
+
+    PaintCounter counter;
+    QWidget* vp = m_term->viewport();
+    vp->installEventFilter(&counter);
+
+    // 200 chunks, each scrolling the (full) screen by three lines, with the event loop spun in
+    // between like QSerialPort::readyRead would. Every chunk moves the scrollbar; the repaint
+    // must still go through the 16 ms coalescer instead of one full paint per chunk.
+    QElapsedTimer t;
+    t.start();
+    for (int i = 0; i < 200; ++i) {
+        m_term->feedData(QByteArrayLiteral("line ") + QByteArray::number(i) + "\r\nline b\r\nline c\r\n");
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+    }
+    QTest::qWait(50);
+    const qint64 elapsed = t.elapsed();
+    vp->removeEventFilter(&counter);
+
+    qInfo("repaintsAreCoalescedWhileFollowing: %d paints for 200 chunks in %lld ms", counter.paints,
+          static_cast<long long>(elapsed));
+    QVERIFY(counter.paints >= 1);
+    QVERIFY2(counter.paints <= static_cast<int>(elapsed / 16) + 3,
+             qPrintable(QStringLiteral("%1 paints in %2 ms").arg(counter.paints).arg(elapsed)));
+    // Follow-output still works with the deferred repaint.
+    QVERIFY(m_term->isAtBottom());
+    QCOMPARE(m_term->verticalScrollBar()->value(), m_term->verticalScrollBar()->maximum());
+    QVERIFY(!isUniform(vp->grab().toImage(), m_term->colorPalette().background));
+}
+
+void Tst_terminalwidget::partialRepaintConsumesDirtyState()
+{
+    // Baseline: the initial all-dirty paint has happened.
+    m_term->feedData("x");
+    QTest::qWait(40);
+    QVERIFY(!m_term->screen()->isDirty());
+
+    // A single-row change is painted partially and still consumes the dirty state.
+    m_term->feedData("y");
+    QVERIFY(m_term->screen()->isDirty());
+    QVERIFY(!m_term->screen()->allDirty());
+    QTest::qWait(40);
+    QVERIFY(!m_term->screen()->isDirty());
+
+    // Two mutations before the timer fires: both rows are painted, nothing is left dirty.
+    m_term->feedData("a");
+    m_term->feedData(esc("[10;1Hb"));
+    QVERIFY(m_term->screen()->isDirty());
+    QTest::qWait(40);
+    QVERIFY(!m_term->screen()->isDirty());
+    const TerminalScreen* screen = m_term->screen();
+    QCOMPARE(screen->lineText(screen->scrollbackSize() + 9).trimmed(), QStringLiteral("b"));
+    QCOMPARE(screen->lineText(screen->scrollbackSize()).trimmed(), QStringLiteral("xya"));
+    // The rows are really on screen (grab renders from the model, so also check a pixel of row 9).
+    const QImage image = m_term->viewport()->grab().toImage();
+    QVERIFY(!isUniform(image.copy(QRect(0, 9 * m_cellH, m_cellW, m_cellH)), m_term->colorPalette().background));
+}
+
 void Tst_terminalwidget::scrollbackMaxTrims()
 {
     m_term->feedData(numberedLines(500));
@@ -1714,6 +2093,50 @@ void Tst_terminalwidget::hexEmptyChunkIgnored()
     view.appendSent(QByteArray());
     QVERIFY(view.toPlainText().isEmpty());
     QCOMPARE(view.document()->blockCount(), 1);
+}
+
+void Tst_terminalwidget::hexTrimKeepsScrolledUpContent()
+{
+    HexDumpView view;
+    view.setShowTimestamps(false);
+    view.setMaxLines(40);
+    view.resize(600, 200);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    for (int i = 0; i < 20; ++i) {
+        view.appendReceived(QByteArray(16, static_cast<char>(i))); // header + 1 hex line = 40 blocks
+    }
+    QCOMPARE(view.document()->blockCount(), 40);
+    QScrollBar* bar = view.verticalScrollBar();
+    bar->setValue(5);
+    QCoreApplication::processEvents();
+    // firstVisibleBlock() is protected; the block under the viewport's top-left is the same thing.
+    const QString topText = view.cursorForPosition(QPoint(2, 2)).block().text();
+    QVERIFY2(topText.contains(QStringLiteral("02 02 02 02")), qPrintable(topText));
+
+    view.appendReceived(QByteArray(48, 'Z')); // header + 3 hex lines -> 4 blocks trimmed
+    QCoreApplication::processEvents();
+    QCOMPARE(view.document()->blockCount(), 40);
+    QCOMPARE(view.cursorForPosition(QPoint(2, 2)).block().text(), topText); // no jump
+    QCOMPARE(bar->value(), 1);
+
+    // Shrinking the cap must not jump either. Scroll deep enough that the visible block survives
+    // the 10-block trim (a block that is itself trimmed away can only clamp to the top).
+    bar->setValue(15);
+    QCoreApplication::processEvents();
+    const QString deeperText = view.cursorForPosition(QPoint(2, 2)).block().text();
+    QVERIFY2(deeperText.contains(QStringLiteral("09 09 09 09")), qPrintable(deeperText));
+    view.setMaxLines(30);
+    QCoreApplication::processEvents();
+    QCOMPARE(view.document()->blockCount(), 30);
+    QCOMPARE(view.cursorForPosition(QPoint(2, 2)).block().text(), deeperText);
+    QCOMPARE(bar->value(), 5);
+
+    // Following the tail is unaffected.
+    bar->setValue(bar->maximum());
+    view.appendReceived(QByteArray(16, 'Q'));
+    QCoreApplication::processEvents();
+    QCOMPARE(bar->value(), bar->maximum());
 }
 
 QTEST_MAIN(Tst_terminalwidget)

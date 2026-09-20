@@ -17,11 +17,15 @@ class QAbstractButton;
  *
  * Pages / controls (objectNames in PreferencesDialog.ui):
  *  Terminal:   fontButton (opens QFontDialog, monospace-only filter) + fontPreviewLabel,
- *              themeCombo (TerminalTheme::names() with displayName), scrollbackSpin (100..1000000),
+ *              themeCombo (TerminalTheme::names() with displayName; a stored name not in the
+ *              list is appended so it round-trips), scrollbackSpin (100..1000000),
  *              cursorBlinkCheck, bellCheck, implicitCrCheck
  *  Input:      enterSendsCombo (LineEnding::allModes()), backspaceDeleteCheck,
- *              localEchoCheck, encodingCombo (AnsiParser::availableEncodings())
- *  Connection: defaultBaudCombo (editable), defaultDataBitsCombo, defaultParityCombo,
+ *              localEchoCheck, encodingCombo (AnsiParser::availableEncodings(), plus the stored
+ *              encoding when it is not in that list)
+ *  Connection: defaultBaudCombo (editable, QIntValidator SerialSettings::kMinBaudRate..kMaxBaudRate;
+ *              an out-of-range or unparsable entry is ignored on OK/Apply and the previous
+ *              value re-selected), defaultDataBitsCombo, defaultParityCombo,
  *              defaultStopBitsCombo, defaultFlowCombo, dtrCheck, rtsCheck,
  *              autoReconnectCheck, reconnectIntervalSpin (200..60000 ms)
  *  Logging:    logDirEdit + logDirBrowseButton, autoLogCheck,

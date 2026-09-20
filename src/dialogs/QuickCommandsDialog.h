@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include <QAbstractTableModel>
+#include <QKeySequence>
 #include <QList>
 
 #include "core/QuickCommand.h"
@@ -16,6 +17,10 @@ class QuickCommandStore;
  * Editable table model over a QList<QuickCommand>. Columns: Name, Command, Group,
  * Line Ending (combo delegate text: LineEnding::displayName), HEX (checkbox), Escapes
  * (checkbox), Shortcut, Tooltip. Supports insert/remove/move rows.
+ *
+ * The Shortcut column accepts any single-stroke QKeySequence, but flags (tooltip, warning
+ * colour and icon) sequences the focused, connected TerminalWidget consumes before the
+ * application shortcut map runs; see isTerminalSafeShortcut().
  */
 class QuickCommandModel : public QAbstractTableModel
 {
@@ -24,6 +29,19 @@ public:
     enum Column { Name = 0, Command, Group, LineEndingCol, Hex, Escapes, Shortcut, Tooltip, ColumnCount };
 
     explicit QuickCommandModel(QObject* parent = nullptr);
+
+    /**
+     * True when `sequence` is a single key stroke that reaches the application shortcut map
+     * even while a connected TerminalWidget has keyboard focus. Mirrors the terminal's
+     * ShortcutOverride rules without depending on it: Meta+<anything> passes through;
+     * F1-F12 and the editing/navigation keys (Tab, Escape, Return, arrows, Home/End, Insert,
+     * Delete, Page Up/Down, Backspace) are always claimed; Alt+<key> becomes ESC + key;
+     * plain and Shift+<key> are typed text; Ctrl+<letter> (without Shift), Ctrl+0 and the
+     * Ctrl+<punctuation> control bytes / zoom keys are consumed; Ctrl+T, Ctrl+W, Ctrl+Comma
+     * and Ctrl(+Shift)+Tab belong to MainWindow. Everything else - notably Ctrl+<digit 1-9>,
+     * optionally with Shift - is safe.
+     */
+    static bool isTerminalSafeShortcut(const QKeySequence& sequence);
 
     QList<QuickCommand> commands() const;
     void setCommands(const QList<QuickCommand>& commands);

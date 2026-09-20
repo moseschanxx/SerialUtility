@@ -18,6 +18,8 @@
 #include <QTextDocument>
 #include <QVBoxLayout>
 
+#include <utility>
+
 #include "app/AppSettings.h"
 
 // Register LogLevel with the meta-type system before any queued invocation uses it.
@@ -32,6 +34,18 @@ namespace {
 /// output reaches the debugger / stderr.
 QtMessageHandler s_previousHandler = nullptr;
 bool s_handlerInstalled = false;
+
+/// Messages emitted while no instance is registered (e.g. during MainWindow's constructor),
+/// guarded by SystemLogViewer::s_instanceMutex; delivered by flushPendingLocked().
+struct Pending
+{
+    QDateTime timestamp;
+    LogLevel level = LogLevel::Info;
+    QString category;
+    QString message;
+};
+QList<Pending> s_pending;
+constexpr int kMaxPending = 512;
 
 const char* const kTimestampFormat = "yyyy-MM-dd HH:mm:ss.zzz";
 
@@ -71,6 +85,7 @@ SystemLogViewer::SystemLogViewer(QWidget* parent)
     QMutexLocker locker(&s_instanceMutex);
     if (!s_instance) {
         s_instance = this;
+        flushPendingLocked(this);
     }
 }
 
@@ -92,6 +107,19 @@ void SystemLogViewer::setInstance(SystemLogViewer* viewer)
 {
     QMutexLocker locker(&s_instanceMutex);
     s_instance = viewer;
+    if (viewer) {
+        flushPendingLocked(viewer);
+    }
+}
+
+void SystemLogViewer::flushPendingLocked(SystemLogViewer* target)
+{
+    const QList<Pending> pending = std::exchange(s_pending, {});
+    for (const Pending& e : pending) {
+        QMetaObject::invokeMethod(
+            target, [target, e]() { target->appendEntry(e.timestamp, e.level, e.category, e.message); },
+            Qt::QueuedConnection);
+    }
 }
 
 void SystemLogViewer::installMessageHandler()
@@ -121,6 +149,12 @@ void SystemLogViewer::installMessageHandler()
                 QMetaObject::invokeMethod(
                     target, [target, level, category, text]() { target->appendCategorised(level, category, text); },
                     Qt::QueuedConnection);
+            } else {
+                // No viewer yet (start-up) or detached: keep a bounded backlog for the next one.
+                s_pending.append({QDateTime::currentDateTime(), level, category, message});
+                if (s_pending.size() > kMaxPending) {
+                    s_pending.removeFirst();
+                }
             }
         }
 
@@ -288,13 +322,19 @@ void SystemLogViewer::appendLog(LogLevel level, const QString& message)
 
 void SystemLogViewer::appendCategorised(LogLevel level, const QString& category, const QString& message)
 {
+    appendEntry(QDateTime::currentDateTime(), level, category, message);
+}
+
+void SystemLogViewer::appendEntry(const QDateTime& timestamp, LogLevel level, const QString& category,
+                                  const QString& message)
+{
     QMutexLocker locker(&m_mutex);
     if (!m_textEdit) {
         return;
     }
 
     Entry entry;
-    entry.timestamp = QDateTime::currentDateTime();
+    entry.timestamp = timestamp;
     entry.level = level;
     entry.category = category;
     entry.message = message;

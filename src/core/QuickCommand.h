@@ -15,7 +15,8 @@ struct QuickCommand
 {
     QString name;                                       ///< button label, e.g. "uname -a"
     QString command;                                    ///< text to send, or hex string when `hex` is true
-    QString group;                                      ///< e.g. "Linux", "U-Boot", "MCU"; empty = "General"
+    QString group;                                      ///< e.g. "Linux", "U-Boot", "MCU"; empty/whitespace = the
+                                                        ///< general group (QuickCommandStore::generalGroupKey())
     LineEnding::Mode lineEnding = LineEnding::Mode::CR; ///< appended after `command` (ignored when hex)
     bool hex = false;                                   ///< interpret `command` with HexUtils::parseHexString
     bool escapes = false;                               ///< interpret C-style escapes (HexUtils::unescape); ignored when hex
@@ -56,7 +57,16 @@ public:
 
     QList<QuickCommand> commands() const;
     void setCommands(const QList<QuickCommand>& commands);   ///< emits changed() if different
-    QStringList groups() const;                              ///< distinct groups in first-seen order, "General" for empty
+    /// Distinct effective groups in first-seen order; empty/whitespace group -> generalGroupKey() (untranslated).
+    QStringList groups() const;
+
+    /// Untranslated canonical key ("General") used in groups(), in the QuickCommandBar's combo item data and in
+    /// QSettings "ui/quickCommandGroup"; never shown directly, see groupDisplayName().
+    static QString generalGroupKey();
+    /// `command.group` trimmed, or generalGroupKey() when that is empty.
+    static QString effectiveGroup(const QuickCommand& command);
+    /// Text to show for a group key: tr("General") for generalGroupKey(), the group itself otherwise.
+    static QString groupDisplayName(const QString& group);
 
     /// Sensible starter set (see docs/DESIGN.md "Default quick commands"):
     /// Linux: uname -a, cat /proc/cpuinfo, cat /proc/meminfo, df -h, ifconfig, dmesg | tail -n 50, ps, top -n 1

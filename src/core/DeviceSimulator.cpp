@@ -20,7 +20,7 @@ constexpr int kTicksPerSecond = 1000 / kPaceIntervalMs;
 constexpr int kBitsPerByte = 10;               ///< start + 8 data + stop
 constexpr int kRebootDownMs = 3000;
 constexpr int kMcuResetDownMs = 1500;
-constexpr int kVanishDelayMs = 400;            ///< lets the "going down" line reach the host first
+constexpr int kVanishGraceMs = 400;            ///< last shutdown byte leaves the UART -> port disappears
 constexpr int kTelemetryIntervalMs = 2000;
 constexpr int kCountdownStart = 3;
 constexpr int kProgressSteps = 100;
@@ -659,6 +659,23 @@ bool DeviceSimulator::isPresent(const QString& portName)
     return true;
 }
 
+bool DeviceSimulator::isListed(const QString& portName)
+{
+    if (!kindFromPortName(portName)) {
+        return false;
+    }
+    QHash<QString, qint64>& table = downUntilTable();
+    const auto it = table.constFind(presenceKey(portName));
+    if (it == table.constEnd() || it.value() < 0) {
+        return true;   // present, or powered off but still enumerable
+    }
+    if (QDateTime::currentMSecsSinceEpoch() < it.value()) {
+        return false;   // timed reboot in progress
+    }
+    table.remove(presenceKey(portName));
+    return true;
+}
+
 void DeviceSimulator::markPresent(const QString& portName)
 {
     downUntilTable().remove(presenceKey(portName));
@@ -725,6 +742,7 @@ void DeviceSimulator::start()
         return;
     }
     m_started = true;
+    m_vanishPending = false;
     m_uptime.start();
     m_lineBuffer.clear();
     m_utf8Pending.clear();
@@ -767,14 +785,22 @@ void DeviceSimulator::receive(const QByteArray& hostToDevice)
 void DeviceSimulator::flushOutput()
 {
     QByteArray all;
-    for (const Segment& segment : m_segments) {
+    QList<std::function<void()>> delivered;
+    for (Segment& segment : m_segments) {
         all += segment.bytes;
+        if (segment.onDelivered) {
+            delivered.append(std::move(segment.onDelivered));
+        }
     }
     m_segments.clear();
     m_paceTimer.stop();
     if (!all.isEmpty()) {
         emit dataReady(all);
     }
+    for (const std::function<void()>& done : delivered) {
+        done();
+    }
+    scheduleVanishIfDrained();
 }
 
 QByteArray DeviceSimulator::pendingOutput() const
@@ -814,6 +840,17 @@ void DeviceSimulator::emitText(const QString& text)
     emitRaw(text.toUtf8());
 }
 
+void DeviceSimulator::emitTextThen(const QString& text, std::function<void()> onDelivered)
+{
+    Segment segment;
+    segment.bytes = text.toUtf8();
+    segment.onDelivered = std::move(onDelivered);
+    m_segments.append(std::move(segment));
+    if (!m_paceTimer.isActive()) {
+        m_paceTimer.start(kPaceIntervalMs);
+    }
+}
+
 void DeviceSimulator::emitLine(const QString& line)
 {
     emitRaw(line.toUtf8() + QByteArrayLiteral("\r\n"));
@@ -837,32 +874,40 @@ void DeviceSimulator::pause(int ms)
 void DeviceSimulator::onPaceTimer()
 {
     int budget = bytesPerTick();
+    int nextTickMs = kPaceIntervalMs;
     QByteArray out;
+    QList<std::function<void()>> delivered;
     while (budget > 0 && !m_segments.isEmpty()) {
         Segment& front = m_segments.first();
         if (front.delayMs > 0) {
             // A pause marker: deliver what we have, then wait before continuing.
-            const int wait = front.delayMs;
+            nextTickMs = front.delayMs;
             front.delayMs = 0;
-            if (!out.isEmpty()) {
-                emit dataReady(out);
-            }
-            m_paceTimer.start(wait);
-            return;
+            break;
         }
         const int take = static_cast<int>(qMin<qsizetype>(budget, front.bytes.size()));
         out += front.bytes.left(take);
         front.bytes.remove(0, take);
         budget -= take;
         if (front.bytes.isEmpty()) {
+            // Move the callback out first: it must not run while we hold a reference into
+            // m_segments (it may enqueue), and only after the host has received the bytes.
+            if (front.onDelivered) {
+                delivered.append(std::move(front.onDelivered));
+            }
             m_segments.removeFirst();
         }
     }
     if (!out.isEmpty()) {
         emit dataReady(out);
     }
+    for (const std::function<void()>& done : delivered) {
+        done();
+    }
     if (!m_segments.isEmpty()) {
-        m_paceTimer.start(kPaceIntervalMs);
+        m_paceTimer.start(nextTickMs);
+    } else {
+        scheduleVanishIfDrained();
     }
 }
 
@@ -876,6 +921,28 @@ void DeviceSimulator::cancelDelayed()
 {
     m_delayTimer.stop();
     m_delayedAction = nullptr;
+}
+
+void DeviceSimulator::discardPendingOutput()
+{
+    // Nothing is emitted: onPaceTimer() copes with an empty queue and the next emitRaw()
+    // restarts the pace timer.
+    m_segments.clear();
+    m_paceTimer.stop();
+}
+
+void DeviceSimulator::scheduleVanishIfDrained()
+{
+    if (!m_vanishPending || !m_segments.isEmpty()) {
+        return;
+    }
+    m_vanishPending = false;
+    const QString name = portName(m_kind);
+    const int downMs = m_vanishDownMs;
+    runDelayed(kVanishGraceMs, [this, downMs, name]() {
+        markAbsent(name, downMs);
+        emit vanished(downMs);
+    });
 }
 
 void DeviceSimulator::onDelayedAction()
@@ -895,9 +962,19 @@ void DeviceSimulator::handleByte(char c)
 {
     const auto byte = static_cast<unsigned char>(c);
 
+    // The LF of a CR+LF pair is discarded whatever stage the CR's command put the device
+    // into (a "reset\r\n" must not have its LF cancel the countdown it just started).
+    if (m_swallowLf) {
+        m_swallowLf = false;
+        if (byte == '\n') {
+            return;
+        }
+    }
+
     if (m_stage == Stage::Countdown) {
         // Any key stops autoboot; the key itself is discarded (like real U-Boot).
         m_countdownTimer.stop();
+        m_swallowLf = byte == '\r';
         emitText(QStringLiteral("\r\n"));
         m_stage = Stage::Shell;
         m_uBootMode = true;
@@ -907,14 +984,15 @@ void DeviceSimulator::handleByte(char c)
     if (m_stage == Stage::Sleeping) {
         if (byte == 0x03) {
             cancelDelayed();
+            discardPendingOutput();
             emitText(QStringLiteral("^C\r\n"));
             m_stage = Stage::Shell;
             prompt();
         }
         return;
     }
-    if (m_stage == Stage::Booting) {
-        return;
+    if (m_stage == Stage::Booting || m_stage == Stage::Down) {
+        return;   // a command earlier in this same write took the device down: the rest is lost
     }
 
     // Escape sequences (arrow keys, function keys) are consumed and ignored.
@@ -943,13 +1021,6 @@ void DeviceSimulator::handleByte(char c)
         return;
     }
 
-    if (m_swallowLf) {
-        m_swallowLf = false;
-        if (byte == '\n') {
-            return;
-        }
-    }
-
     switch (byte) {
     case '\r':
         m_swallowLf = true;
@@ -969,6 +1040,7 @@ void DeviceSimulator::handleByte(char c)
         if (m_stage == Stage::Shell && m_kind != Kind::Mcu) {
             m_lineBuffer.clear();
             m_utf8Pending.clear();
+            discardPendingOutput();   // SIGINT: not-yet-sent output is dropped like a tty INTR flush
             emitText(QStringLiteral("^C\r\n"));
             prompt();
         }
@@ -1142,6 +1214,7 @@ void DeviceSimulator::handleLine(const QString& line)
 
 void DeviceSimulator::resetEnvironment()
 {
+    m_vanishPending = false;
     m_env.clear();
     m_env.insert(QStringLiteral("HOME"), QStringLiteral("/root"));
     m_env.insert(QStringLiteral("HOSTNAME"), kHostName);
@@ -1246,12 +1319,13 @@ void DeviceSimulator::reboot(int downMs)
     m_telemetryTimer.stop();
     m_countdownTimer.stop();
     cancelDelayed();
-    const QString name = portName(m_kind);
-    qCInfo(lcSerial) << "simulator" << name << "going down for" << downMs << "ms";
-    runDelayed(kVanishDelayMs, [this, downMs, name]() {
-        markAbsent(name, downMs);
-        emit vanished(downMs);
-    });
+    qCInfo(lcSerial) << "simulator" << portName(m_kind) << "going down for" << downMs << "ms";
+    // The port only disappears once every queued shutdown line has left the "UART" (plus a
+    // short grace), whatever the baud rate: onPaceTimer()/flushOutput() call
+    // scheduleVanishIfDrained() when the queue runs empty.
+    m_vanishDownMs = downMs;
+    m_vanishPending = true;
+    scheduleVanishIfDrained();
 }
 
 void DeviceSimulator::startProgress()
@@ -1796,8 +1870,17 @@ void DeviceSimulator::beginCountdown()
 {
     m_stage = Stage::Countdown;
     m_countdown = kCountdownStart;
-    emitText(QStringLiteral("Hit any key to stop autoboot:  %1").arg(m_countdown));
-    m_countdownTimer.start();
+    m_countdownTimer.stop();
+    // Like real U-Boot, the seconds start counting only once the banner and the "3" have
+    // left the UART (seconds at low baud rates). The stage guard covers a key pressed while
+    // the banner is still streaming; the generation guard covers a `reset` that queued a
+    // second countdown before the first marker was delivered.
+    const int generation = ++m_countdownGeneration;
+    emitTextThen(QStringLiteral("Hit any key to stop autoboot:  %1").arg(m_countdown), [this, generation]() {
+        if (m_stage == Stage::Countdown && generation == m_countdownGeneration) {
+            m_countdownTimer.start();
+        }
+    });
 }
 
 void DeviceSimulator::onCountdownTimer()

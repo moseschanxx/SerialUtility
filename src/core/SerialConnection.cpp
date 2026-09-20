@@ -2,9 +2,11 @@
 
 #include <QSerialPortInfo>
 #include <QStringList>
+#include <algorithm>
 
 #include "app/Logging.h"
 #include "core/DeviceSimulator.h"
+#include "core/SerialPortEnumerator.h"
 
 namespace {
 
@@ -86,7 +88,7 @@ SerialSettings SerialSettings::fromMap(const QVariantMap& map)
     s.portName = map.value(QStringLiteral("port"), s.portName).toString();
     bool ok = false;
     const qint32 baud = map.value(QStringLiteral("baud")).toInt(&ok);
-    if (ok && baud > 0) {
+    if (ok && isValidBaudRate(baud)) {
         s.baudRate = baud;
     }
     s.dataBits = enumFromVariant(map.value(QStringLiteral("dataBits")), s.dataBits,
@@ -187,6 +189,20 @@ SerialConnection::SerialConnection(QObject* parent)
 {
     connect(&m_port, &QSerialPort::readyRead, this, &SerialConnection::onReadyRead);
     connect(&m_port, &QSerialPort::errorOccurred, this, &SerialConnection::onPortError);
+    connect(&m_port, &QSerialPort::bytesWritten, this, &SerialConnection::txBytesWritten);
+
+    // Safety net for drivers whose I/O error arrives late or never when the adapter is unplugged:
+    // the open port simply drops out of the enumerator's list. Idempotent with onPortError():
+    // whichever fires first moves the state to Reconnecting and the other is then ignored. The
+    // enumerator only emits once MainWindow has started it, so headless/test code is unaffected.
+    connect(&SerialPortEnumerator::instance(), &SerialPortEnumerator::portRemoved, this,
+            [this](const QString& removed) {
+                if (m_state == State::Connected && !m_simulator && m_port.isOpen() &&
+                    removed.compare(m_settings.portName, Qt::CaseInsensitive) == 0) {
+                    qCWarning(lcSerial) << m_settings.portName << "removed from the port list while connected";
+                    handleDeviceVanished();
+                }
+            });
 
     m_reconnectTimer.setInterval(kDefaultReconnectMs);
     m_reconnectTimer.setSingleShot(false);
@@ -228,9 +244,9 @@ SerialSettings SerialConnection::settings() const
 void SerialConnection::setSettings(const SerialSettings& settings)
 {
     const SerialSettings old = m_settings;
-    m_settings = settings;
     if (m_simulator) {
         // Simulated device: only the pacing (baud rate) and the pin states are meaningful.
+        m_settings = settings;
         if (old.baudRate != settings.baudRate) {
             m_simulator->setBaudRate(settings.baudRate);
             qCInfo(lcSerial) << m_settings.portName << "line parameters changed to" << m_settings.summary();
@@ -241,55 +257,80 @@ void SerialConnection::setSettings(const SerialSettings& settings)
         return;
     }
     if (!m_port.isOpen()) {
+        m_settings = settings;   // a closed port accepts anything; validated on the next open()
         return;
     }
 
-    // Live line-parameter changes: apply what differs, one setter at a time.
+    // Live line-parameter changes: apply what differs, one setter at a time, and commit only
+    // what the driver accepted. A rejected field is rolled back in QSerialPort too, so its
+    // internal cache does not hold a value that the next open() would fail on.
+    SerialSettings applied = settings;
     QStringList failures;
+    QString reason;
+    auto rejected = [this, &failures, &reason](const QString& what, bool restored, const char* field) {
+        failures.append(what);
+        if (reason.isEmpty()) {
+            reason = m_port.errorString();
+        }
+        if (!restored) {
+            qCDebug(lcSerial) << m_settings.portName << "cannot restore previous" << field << ":" << m_port.errorString();
+        }
+    };
     if (old.baudRate != settings.baudRate && !m_port.setBaudRate(settings.baudRate)) {
-        failures.append(tr("baud rate %1").arg(settings.baudRate));
+        applied.baudRate = old.baudRate;
+        rejected(tr("baud rate %1").arg(settings.baudRate), m_port.setBaudRate(old.baudRate), "baud rate");
     }
     if (old.dataBits != settings.dataBits && !m_port.setDataBits(settings.dataBits)) {
-        failures.append(tr("data bits %1").arg(static_cast<int>(settings.dataBits)));
+        applied.dataBits = old.dataBits;
+        rejected(tr("data bits %1").arg(static_cast<int>(settings.dataBits)), m_port.setDataBits(old.dataBits),
+                 "data bits");
     }
     if (old.parity != settings.parity && !m_port.setParity(settings.parity)) {
-        failures.append(tr("parity %1").arg(SerialSettings::parityLetter(settings.parity)));
+        applied.parity = old.parity;
+        rejected(tr("parity %1").arg(SerialSettings::parityLetter(settings.parity)), m_port.setParity(old.parity),
+                 "parity");
     }
     if (old.stopBits != settings.stopBits && !m_port.setStopBits(settings.stopBits)) {
-        failures.append(tr("stop bits %1").arg(SerialSettings::stopBitsText(settings.stopBits)));
+        applied.stopBits = old.stopBits;
+        rejected(tr("stop bits %1").arg(SerialSettings::stopBitsText(settings.stopBits)),
+                 m_port.setStopBits(old.stopBits), "stop bits");
     }
     if (old.flowControl != settings.flowControl && !m_port.setFlowControl(settings.flowControl)) {
-        failures.append(tr("flow control %1").arg(SerialSettings::flowControlText(settings.flowControl)));
+        applied.flowControl = old.flowControl;
+        rejected(tr("flow control %1").arg(SerialSettings::flowControlText(settings.flowControl)),
+                 m_port.setFlowControl(old.flowControl), "flow control");
     }
+    m_settings = applied;   // portName, dtr and rts are always taken from `settings`
+
     if (!failures.isEmpty()) {
-        m_errorString = tr("Cannot apply %1 to %2: %3")
-                            .arg(failures.join(QStringLiteral(", ")), m_settings.portName, m_port.errorString());
+        m_errorString =
+            tr("Cannot apply %1 to %2: %3").arg(failures.join(QStringLiteral(", ")), m_settings.portName, reason);
         qCWarning(lcSerial) << m_errorString;
         emit errorOccurred(m_errorString);
-    } else if (old.baudRate != settings.baudRate || old.dataBits != settings.dataBits ||
-               old.parity != settings.parity || old.stopBits != settings.stopBits ||
-               old.flowControl != settings.flowControl) {
+    }
+    if (old.baudRate != applied.baudRate || old.dataBits != applied.dataBits || old.parity != applied.parity ||
+        old.stopBits != applied.stopBits || old.flowControl != applied.flowControl) {
         qCInfo(lcSerial) << m_settings.portName << "line parameters changed to" << m_settings.summary();
     }
 
     bool pins = false;
-    if (old.dtr != settings.dtr) {
+    if (old.dtr != applied.dtr) {
         pins = true;
-        if (!m_port.setDataTerminalReady(settings.dtr)) {
+        if (!m_port.setDataTerminalReady(applied.dtr)) {
             qCWarning(lcSerial) << m_settings.portName << "cannot set DTR:" << m_port.errorString();
         }
     }
-    if (old.rts != settings.rts || (old.flowControl != settings.flowControl)) {
+    if (old.rts != applied.rts || (old.flowControl != applied.flowControl)) {
         pins = true;
-        if (settings.flowControl != QSerialPort::HardwareControl && !m_port.setRequestToSend(settings.rts)) {
+        if (applied.flowControl != QSerialPort::HardwareControl && !m_port.setRequestToSend(applied.rts)) {
             qCWarning(lcSerial) << m_settings.portName << "cannot set RTS:" << m_port.errorString();
         }
     }
     if (pins) {
         emit pinsChanged(m_settings.dtr, m_settings.rts);
     }
-    if (old.portName != settings.portName) {
-        qCInfo(lcSerial) << "port name changed to" << settings.portName << "- applied on next open";
+    if (old.portName != applied.portName) {
+        qCInfo(lcSerial) << "port name changed to" << applied.portName << "- applied on next open";
     }
 }
 
@@ -352,7 +393,11 @@ int SerialConnection::reconnectIntervalMs() const
 
 void SerialConnection::setReconnectIntervalMs(int ms)
 {
-    m_reconnectTimer.setInterval(qBound(kMinReconnectMs, ms, kMaxReconnectMs));
+    const int clamped = qBound(kMinReconnectMs, ms, kMaxReconnectMs);
+    if (clamped == m_reconnectTimer.interval()) {
+        return;   // QTimer::setInterval() restarts an active timer; a no-op write must not delay a pending reconnect
+    }
+    m_reconnectTimer.setInterval(clamped);
 }
 
 bool SerialConnection::dtr() const
@@ -363,6 +408,11 @@ bool SerialConnection::dtr() const
 bool SerialConnection::rts() const
 {
     return m_settings.rts;
+}
+
+qint64 SerialConnection::pendingTxBytes() const
+{
+    return (m_simulator || !m_port.isOpen()) ? 0 : m_port.bytesToWrite();
 }
 
 QString SerialConnection::stateText(State state)
@@ -380,11 +430,16 @@ QString SerialConnection::stateText(State state)
 
 bool SerialConnection::open()
 {
+    return openPort(/*quiet=*/false);
+}
+
+bool SerialConnection::openPort(bool quiet)
+{
     if (m_port.isOpen() || m_simulator) {
         return true;
     }
     const QString name = m_settings.portName;
-    const bool quiet = (m_state == State::Reconnecting);   // reconnect attempts must not spam the UI
+    const bool wasReconnecting = (m_state == State::Reconnecting);
 
     auto reportFailure = [this, quiet](const QString& message) {
         m_errorString = message;
@@ -401,48 +456,74 @@ bool SerialConnection::open()
         return false;
     }
     if (m_settings.isSimulatedPort()) {
-        return openSimulator(quiet);
-    }
-
-    m_port.setPortName(name);
-    if (!m_port.open(QIODevice::ReadWrite)) {
-        QString message;
-        switch (m_port.error()) {
-        case QSerialPort::PermissionError:
-            message = tr("Port %1 is busy or access denied").arg(name);
-            break;
-        case QSerialPort::DeviceNotFoundError:
-            message = tr("Port %1 not found").arg(name);
-            break;
-        default:
-            message = tr("Cannot open %1: %2").arg(name, m_port.errorString());
-            break;
+        if (!openSimulator(quiet)) {
+            return false;
         }
-        reportFailure(message);
-        return false;
+    } else {
+        m_port.setPortName(name);
+        if (!m_port.open(QIODevice::ReadWrite)) {
+            QString message;
+            switch (m_port.error()) {
+            case QSerialPort::PermissionError:
+                message = tr("Port %1 is busy or access denied").arg(name);
+                break;
+            case QSerialPort::DeviceNotFoundError:
+                message = tr("Port %1 not found").arg(name);
+                break;
+            default:
+                message = tr("Cannot open %1: %2").arg(name, m_port.errorString());
+                break;
+            }
+            reportFailure(message);
+            return false;
+        }
+
+        if (!applyParameters()) {
+            m_port.close();
+            if (quiet) {
+                // The port is present and openable but the stored line parameters are rejected:
+                // unlike "not back yet" this deserves one visible message. Keep retrying while
+                // the port is listed (header contract) so a transient driver failure right after
+                // re-enumeration still recovers.
+                if (!m_reconnectParamErrorReported) {
+                    m_reconnectParamErrorReported = true;
+                    // m_errorString is already "Cannot set X on PORT: reason" (applyParameters()).
+                    const QString msg = tr("Port %1 is back but %2").arg(name, m_errorString);
+                    m_errorString = msg;
+                    qCWarning(lcSerial) << msg;
+                    emit errorOccurred(msg);
+                } else {
+                    qCDebug(lcSerial) << "reconnect attempt failed:" << m_errorString;
+                }
+            } else {
+                reportFailure(m_errorString);
+            }
+            return false;
+        }
+
+        if (!m_port.setDataTerminalReady(m_settings.dtr)) {
+            qCWarning(lcSerial) << name << "cannot set DTR:" << m_port.errorString();
+        }
+        if (m_settings.flowControl != QSerialPort::HardwareControl && !m_port.setRequestToSend(m_settings.rts)) {
+            qCWarning(lcSerial) << name << "cannot set RTS:" << m_port.errorString();
+        }
+        if (!m_port.clear(QSerialPort::AllDirections)) {
+            qCDebug(lcSerial) << name << "clear() failed:" << m_port.errorString();
+        }
+
+        m_errorString.clear();
+        m_reconnectParamErrorReported = false;
+        m_reconnectTimer.stop();
+        qCInfo(lcSerial) << "opened" << name << m_settings.summary() << "DTR" << m_settings.dtr << "RTS"
+                         << m_settings.rts;
+        setState(State::Connected);
+        emit pinsChanged(m_settings.dtr, m_settings.rts);
     }
 
-    if (!applyParameters()) {
-        m_port.close();
-        reportFailure(m_errorString);
-        return false;
+    if (wasReconnecting) {
+        qCInfo(lcSerial) << "reconnected to" << name;
+        emit reconnected(name);
     }
-
-    if (!m_port.setDataTerminalReady(m_settings.dtr)) {
-        qCWarning(lcSerial) << name << "cannot set DTR:" << m_port.errorString();
-    }
-    if (m_settings.flowControl != QSerialPort::HardwareControl && !m_port.setRequestToSend(m_settings.rts)) {
-        qCWarning(lcSerial) << name << "cannot set RTS:" << m_port.errorString();
-    }
-    if (!m_port.clear(QSerialPort::AllDirections)) {
-        qCDebug(lcSerial) << name << "clear() failed:" << m_port.errorString();
-    }
-
-    m_errorString.clear();
-    m_reconnectTimer.stop();
-    qCInfo(lcSerial) << "opened" << name << m_settings.summary() << "DTR" << m_settings.dtr << "RTS" << m_settings.rts;
-    setState(State::Connected);
-    emit pinsChanged(m_settings.dtr, m_settings.rts);
     return true;
 }
 
@@ -451,10 +532,15 @@ void SerialConnection::close()
     const bool wasReconnecting = m_reconnectTimer.isActive() || m_state == State::Reconnecting;
     m_reconnectTimer.stop();
     m_breakTimer.stop();
+    m_reconnectParamErrorReported = false;
     if (m_simulator) {
         closeSimulator();
         qCInfo(lcSerial) << "closed" << m_settings.portName << "(simulated device)";
     } else if (m_port.isOpen()) {
+        const qint64 dropped = m_port.bytesToWrite();
+        if (dropped > 0) {
+            qCWarning(lcSerial) << m_settings.portName << "closed with" << dropped << "unsent bytes discarded";
+        }
         m_port.close();
         qCInfo(lcSerial) << "closed" << m_settings.portName;
     } else if (wasReconnecting) {
@@ -527,24 +613,25 @@ void SerialConnection::setRts(bool on)
     emit pinsChanged(m_settings.dtr, m_settings.rts);
 }
 
-void SerialConnection::sendBreak(int durationMs)
+bool SerialConnection::sendBreak(int durationMs)
 {
     if (m_simulator) {
         qCInfo(lcSerial) << m_settings.portName << "BREAK for" << durationMs << "ms (simulated device ignores it)";
-        return;
+        return true;
     }
     if (!m_port.isOpen()) {
         qCDebug(lcSerial) << "sendBreak ignored: not connected";
-        return;
+        return false;
     }
     if (!m_port.setBreakEnabled(true)) {
         m_errorString = tr("Cannot send BREAK on %1: %2").arg(m_settings.portName, m_port.errorString());
         qCWarning(lcSerial) << m_errorString;
         emit errorOccurred(m_errorString);
-        return;
+        return false;
     }
     qCInfo(lcSerial) << m_settings.portName << "BREAK asserted for" << durationMs << "ms";
     m_breakTimer.start(qMax(1, durationMs));
+    return true;
 }
 
 void SerialConnection::clearBuffers()
@@ -598,6 +685,17 @@ void SerialConnection::onPortError(QSerialPort::SerialPortError error)
     case QSerialPort::ReadError:
     case QSerialPort::WriteError:
     case QSerialPort::UnknownError:
+        // Windows maps ERROR_GEN_FAILURE / ERROR_DEVICE_NOT_CONNECTED / ERROR_NO_SUCH_DEVICE to
+        // UnknownError and a failed overlapped read to ReadError, and QSerialPort stops its read
+        // loop on any such completion error. If the port is no longer enumerated the handle is
+        // dead: take the same path as ResourceError so auto-reconnect can bring the session back.
+        // Only reached while Connected (guard above) and Qt emits at most one error before the
+        // loop stops, so the fresh QSerialPortInfo scan runs once per outage, not repeatedly.
+        if (!isPortListed(/*useEnumeratorSnapshot=*/false)) {
+            qCWarning(lcSerial) << name << "disappeared:" << portErrorName(error) << m_port.errorString();
+            handleDeviceVanished();
+            break;
+        }
         m_errorString = tr("Port %1: %2").arg(name, m_port.errorString());
         qCWarning(lcSerial) << m_errorString << "(" << portErrorName(error) << ")";
         emit errorOccurred(m_errorString);
@@ -615,27 +713,35 @@ void SerialConnection::tryReconnect()
         m_reconnectTimer.stop();
         return;
     }
-    const QString name = m_settings.portName;
-    bool listed = false;
-    if (m_settings.isSimulatedPort()) {
-        listed = DeviceSimulator::isPresent(name);
-    } else {
-        const QList<QSerialPortInfo> infos = QSerialPortInfo::availablePorts();
-        for (const QSerialPortInfo& info : infos) {
-            if (info.portName().compare(name, Qt::CaseInsensitive) == 0) {
-                listed = true;
-                break;
-            }
-        }
-    }
-    if (!listed) {
+    // Periodic tick: reuse the application-wide enumerator snapshot rather than re-enumerating
+    // per tab per tick (on Linux availablePorts() walks sysfs/udev).
+    if (!isPortListed(/*useEnumeratorSnapshot=*/true)) {
         return;
     }
-    qCDebug(lcSerial) << name << "is back, trying to reopen";
-    if (open()) {
-        qCInfo(lcSerial) << "reconnected to" << name;
-        emit reconnected(name);
+    qCDebug(lcSerial) << m_settings.portName << "is back, trying to reopen";
+    openPort(/*quiet=*/true);   // emits reconnected() on success
+}
+
+bool SerialConnection::isPortListed(bool useEnumeratorSnapshot) const
+{
+    const QString name = m_settings.portName;
+    if (m_settings.isSimulatedPort()) {
+        return DeviceSimulator::isPresent(name);
     }
+    // Case-insensitive throughout (Windows "com8" vs "COM8").
+    const auto sameName = [&name](const QString& other) { return other.compare(name, Qt::CaseInsensitive) == 0; };
+    if (useEnumeratorSnapshot) {
+        const SerialPortEnumerator& enumerator = SerialPortEnumerator::instance();
+        if (enumerator.isRunning()) {
+            const QStringList names = enumerator.portNames();
+            return std::any_of(names.cbegin(), names.cend(), sameName);
+        }
+    }
+    // Headless / tests, or a one-shot check that must not be a poll interval stale: ask
+    // QSerialPortInfo directly.
+    const QList<QSerialPortInfo> infos = QSerialPortInfo::availablePorts();
+    return std::any_of(infos.cbegin(), infos.cend(),
+                       [&sameName](const QSerialPortInfo& info) { return sameName(info.portName()); });
 }
 
 void SerialConnection::setState(State state)
@@ -717,6 +823,7 @@ bool SerialConnection::openSimulator(bool quiet)
     });
 
     m_errorString.clear();
+    m_reconnectParamErrorReported = false;
     m_reconnectTimer.stop();
     qCInfo(lcSerial) << "opened" << name << m_settings.summary() << "(simulated device)";
     setState(State::Connected);
@@ -740,12 +847,19 @@ void SerialConnection::handleDeviceVanished()
     const QString name = m_settings.portName;
     m_breakTimer.stop();
     if (m_port.isOpen()) {
+        const qint64 dropped = m_port.bytesToWrite();
+        if (dropped > 0) {
+            qCWarning(lcSerial) << name << "closed with" << dropped << "unsent bytes discarded";
+        }
         m_port.close();
     }
-    emit portDisappeared(name);
+    // errorOccurred() first (generic, keeps the header contract that every port error is
+    // forwarded), then portDisappeared() so its more specific status message wins in the UI.
     m_errorString = tr("Port %1 disconnected").arg(name);
     emit errorOccurred(m_errorString);
+    emit portDisappeared(name);
     if (m_autoReconnect) {
+        m_reconnectParamErrorReported = false;
         setState(State::Reconnecting);
         m_reconnectTimer.start();
         qCInfo(lcSerial) << "waiting for" << name << "to come back (every" << m_reconnectTimer.interval() << "ms)";

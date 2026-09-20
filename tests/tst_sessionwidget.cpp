@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIntValidator>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -19,8 +20,10 @@
 #include <QStackedWidget>
 #include <QStandardItemModel>
 #include <QStandardPaths>
+#include <QStringEncoder>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QTranslator>
 
 #include <memory>
 
@@ -174,12 +177,16 @@ private slots:
     void loopbackCommandInputSend();
     void loopbackHexModeRoundTrip();
     void loopbackEscapeMode();
+    void loopbackEscapeModeGbk();
+    void loopbackEscapeModeLatin1();
     void loopbackHistoryNavigation();
     void loopbackQuickCommand();
     void loopbackQuickCommandBarClick();
     void loopbackLogging();
     void loopbackLoggingRawFormat();
     void loopbackAutoLogOnConnect();
+    void autoLogSwitchesFileOnPortChange();
+    void manualLogKeptAcrossPortChange();
     void loopbackViewModeSwitch();
     void loopbackDisconnect();
     void loopbackSendFileDialog();
@@ -198,6 +205,7 @@ private slots:
     void replayRawFile();
     void replayRefusedWhileConnected();
     void replayStopMidway();
+    void connectDuringReplayStopsReplay();
     void replayTimestampedCapture();
 
     // ---- ConnectionBar --------------------------------------------------------------
@@ -224,6 +232,7 @@ private slots:
     void quickBarButtonsMatchGroup();
     void quickBarClickEmits();
     void quickBarGroupFilterPersists();
+    void quickBarGroupTranslated();
     void quickBarGearEmitsEdit();
     void quickBarRebuildOnStoreChanged();
     void quickBarEnabledForConnection();
@@ -287,6 +296,7 @@ void Tst_sessionwidget::init()
     app.setAutoLog(false);
     app.setLogFormat(QStringLiteral("text"));
     app.setLogIncludeTx(true);
+    app.setEncoding(QStringLiteral("UTF-8"));
 }
 
 std::unique_ptr<SessionWidget> Tst_sessionwidget::newSession()
@@ -482,6 +492,93 @@ void Tst_sessionwidget::loopbackEscapeMode()
     const QString row = firstRow(session->terminal());
     QVERIFY2(row.startsWith(QLatin1Char('a')), qPrintable(row));
     QCOMPARE(row.indexOf(QLatin1Char('b')), qsizetype(8));
+}
+
+void Tst_sessionwidget::loopbackEscapeModeGbk()
+{
+    // In a non-UTF-8 session, Esc mode transcodes the text runs but keeps every \xHH byte exact.
+    if (!QStringEncoder("GBK").isValid()) {
+        QSKIP("This Qt build has no GBK codec (built without ICU)");
+    }
+    AppSettings::instance().setEncoding(QStringLiteral("GBK"));
+    auto session = newSession();
+    QVERIFY(session);
+    QCOMPARE(session->terminal()->encoding(), QStringLiteral("GBK"));
+    QVERIFY(connectTo(session.get(), kLoopback));
+    CommandInput* input = session->commandInput();
+
+    QByteArray sent;
+    connect(session->connection(), &SerialConnection::dataSent, this,
+            [&sent](const QByteArray& bytes) { sent += bytes; });
+
+    input->setEscapeMode(true);
+    input->setLineEnding(LineEnding::Mode::CR);
+    input->setText(QStringLiteral("\\xb0\\xa1"));   // GBK for U+554A, typed byte by byte
+    input->send();
+    QCOMPARE(sent, QByteArray("\xb0\xa1\r", 3));
+
+    // A literal CJK character is transcoded to its GBK bytes; the \xff next to it stays 0xFF.
+    sent.clear();
+    input->setText(QString::fromUtf8("\xe5\x95\x8a") + QStringLiteral("\\xff"));   // U+554A + "\xff"
+    input->send();
+    QCOMPARE(sent, QByteArray("\xb0\xa1\xff\r", 4));
+
+    // Quick commands with escapes follow the same rule (an MCU token, no line ending).
+    sent.clear();
+    QuickCommand token = makeCommand(QStringLiteral("token"), QStringLiteral("\\xff\\x55"), QStringLiteral("MCU"));
+    token.escapes = true;
+    token.lineEnding = LineEnding::Mode::None;
+    session->sendQuickCommand(token);
+    QCOMPARE(sent, QByteArray("\xff\x55", 2));
+
+    // Plain (non-Esc) text is still transcoded as a whole.
+    sent.clear();
+    input->setEscapeMode(false);
+    input->setText(QString::fromUtf8("\xe5\x95\x8a"));
+    input->send();
+    QCOMPARE(sent, QByteArray("\xb0\xa1\r", 3));
+
+    AppSettings::instance().setEncoding(QStringLiteral("UTF-8"));
+}
+
+void Tst_sessionwidget::loopbackEscapeModeLatin1()
+{
+    // Same contract with a codec every Qt build has (no ICU needed): the text run is transcoded
+    // to Latin-1, the \xHH bytes stay exact, even when they would be invalid UTF-8.
+    AppSettings::instance().setEncoding(QStringLiteral("ISO-8859-1"));
+    auto session = newSession();
+    QVERIFY(session);
+    QCOMPARE(session->terminal()->encoding(), QStringLiteral("ISO-8859-1"));
+    QVERIFY(connectTo(session.get(), kLoopback));
+    CommandInput* input = session->commandInput();
+
+    QByteArray sent;
+    connect(session->connection(), &SerialConnection::dataSent, this,
+            [&sent](const QByteArray& bytes) { sent += bytes; });
+
+    input->setEscapeMode(true);
+    input->setLineEnding(LineEnding::Mode::CR);
+    input->setText(QString::fromUtf8("caf\xc3\xa9") + QStringLiteral("\\xff\\x80") + QString::fromUtf8("\xc3\xa9"));
+    input->send();
+    QCOMPARE(sent, QByteArray("caf\xe9\xff\x80\xe9\r", 8));
+
+    // The \u escape is text too and follows the encoding; the quick command path agrees.
+    sent.clear();
+    QuickCommand qc = makeCommand(QStringLiteral("u"), QStringLiteral("\\u00e9\\xfe"), QStringLiteral("Test"));
+    qc.escapes = true;
+    qc.lineEnding = LineEnding::Mode::CRLF;
+    session->sendQuickCommand(qc);
+    QCOMPARE(sent, QByteArray("\xe9\xfe\r\n", 4));
+
+    // HEX mode is unaffected by the encoding.
+    sent.clear();
+    input->setEscapeMode(false);
+    input->setHexMode(true);
+    input->setText(QStringLiteral("C3 A9"));
+    input->send();
+    QCOMPARE(sent, QByteArray("\xc3\xa9", 2));
+
+    AppSettings::instance().setEncoding(QStringLiteral("UTF-8"));
 }
 
 void Tst_sessionwidget::loopbackHistoryNavigation()
@@ -699,6 +796,72 @@ void Tst_sessionwidget::loopbackAutoLogOnConnect()
     QVERIFY(text.contains(QStringLiteral("TX> auto\\r")));
 }
 
+void Tst_sessionwidget::autoLogSwitchesFileOnPortChange()
+{
+    AppSettings::instance().setAutoLog(true);
+    auto session = newSession();
+    QVERIFY(session);
+    QSignalSpy loggingSpy(session.get(), &SessionWidget::loggingChanged);
+
+    QVERIFY(connectTo(session.get(), kLoopback));
+    QVERIFY(session->isLogging());
+    const QString pathA = session->logFilePath();
+    QVERIFY2(QFileInfo(pathA).fileName().startsWith(QStringLiteral("SIM_loopback_")), qPrintable(pathA));
+
+    // Disconnecting alone keeps the auto-log open and unchanged (same port may reconnect).
+    session->disconnectPort();
+    QVERIFY(session->isLogging());
+    QCOMPARE(session->logFilePath(), pathA);
+    QCOMPARE(loggingSpy.count(), 1);
+
+    // Connecting to a different port closes the loopback log and starts one named after the new port.
+    QVERIFY(connectTo(session.get(), kLinux));
+    QVERIFY(session->isLogging());
+    const QString pathB = session->logFilePath();
+    QVERIFY2(pathB != pathA, qPrintable(pathB));
+    QVERIFY2(QFileInfo(pathB).fileName().startsWith(QStringLiteral("SIM_linux_")), qPrintable(pathB));
+    QCOMPARE(loggingSpy.count(), 3);
+    QCOMPARE(loggingSpy.at(0).at(0).toBool(), true);
+    QCOMPARE(loggingSpy.at(0).at(1).toString(), pathA);
+    QCOMPARE(loggingSpy.at(1).at(0).toBool(), false);
+    QCOMPARE(loggingSpy.at(1).at(1).toString(), pathA);
+    QCOMPARE(loggingSpy.at(2).at(0).toBool(), true);
+    QCOMPARE(loggingSpy.at(2).at(1).toString(), pathB);
+
+    // Each file's header names its own port.
+    const QString headerA = QString::fromUtf8(readFile(pathA)).section(QLatin1Char('\n'), 0, 0);
+    QVERIFY2(headerA.startsWith(QStringLiteral("# BuildAI Serial Utility log - SIM:loopback ")), qPrintable(headerA));
+    const QString headerB = QString::fromUtf8(readFile(pathB)).section(QLatin1Char('\n'), 0, 0);
+    QVERIFY2(headerB.startsWith(QStringLiteral("# BuildAI Serial Utility log - SIM:linux ")), qPrintable(headerB));
+
+    session->disconnectPort();
+}
+
+void Tst_sessionwidget::manualLogKeptAcrossPortChange()
+{
+    AppSettings::instance().setAutoLog(true);
+    auto session = newSession();
+    QVERIFY(session);
+    QVERIFY(connectTo(session.get(), kLoopback));
+    QVERIFY(session->isLogging());
+
+    // The user replaces the auto-log by a file of their own choice.
+    session->stopLogging();
+    QVERIFY(!session->isLogging());
+    const QString manual = tempPath(QStringLiteral("manual.log"));
+    session->startLoggingTo(manual);
+    QVERIFY(session->isLogging());
+    QCOMPARE(session->logFilePath(), manual);
+
+    // Switching ports must not throw the user's file away in favour of an auto-log.
+    session->disconnectPort();
+    QVERIFY(connectTo(session.get(), kLinux));
+    QVERIFY(session->isLogging());
+    QCOMPARE(session->logFilePath(), manual);
+
+    session->disconnectPort();
+}
+
 void Tst_sessionwidget::loopbackViewModeSwitch()
 {
     auto session = newSession();
@@ -872,6 +1035,11 @@ void Tst_sessionwidget::loopbackSyncTerminalSize()
     // The terminal's context-menu request takes the same path.
     emit terminal->syncSizeRequested();
     QCOMPARE(sent, expected + expected);
+
+    // The context-menu "Find..." request is forwarded for MainWindow to show the prompt.
+    QSignalSpy findSpy(session.get(), &SessionWidget::findRequested);
+    emit terminal->findRequested();
+    QCOMPARE(findSpy.count(), 1);
 }
 
 void Tst_sessionwidget::loopbackLiveBaudChange()
@@ -898,6 +1066,10 @@ void Tst_sessionwidget::loopbackLiveBaudChange()
     QCOMPARE(session->connection()->settings().baudRate, 1500000);
     QCOMPARE(bar->settings().baudRate, 1500000);
     QVERIFY(session->isConnected());
+    // After onBarSettingsChanged the bar shows exactly what the connection accepted. A SIM: port
+    // accepts everything, so both sides agree; the driver-rejection branch (combo snaps back to
+    // the value the port really uses) cannot be provoked without hardware and is review-only.
+    QCOMPARE(bar->settings(), session->connection()->settings());
 
     auto* parityCombo = child<QComboBox>(bar, "parityCombo");
     QVERIFY(parityCombo);
@@ -905,6 +1077,7 @@ void Tst_sessionwidget::loopbackLiveBaudChange()
     QCOMPARE(changes.size(), qsizetype(2));
     QCOMPARE(session->connection()->settings().parity, QSerialPort::EvenParity);
     QCOMPARE(session->connection()->settings().summary(), QStringLiteral("1500000 8E1"));
+    QCOMPARE(bar->settings(), session->connection()->settings());
 
     // The device still echoes after the live change.
     QByteArray received;
@@ -1230,6 +1403,51 @@ void Tst_sessionwidget::replayStopMidway()
     QCOMPARE(replayStates.size(), qsizetype(2));
 }
 
+void Tst_sessionwidget::connectDuringReplayStopsReplay()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    const QString path = tempPath(QStringLiteral("slow.log"));
+    QByteArray payload(2000, 'x');
+    payload += QByteArrayLiteral("\r\nEND\r\n");
+    QVERIFY(writeFile(path, payload));
+
+    QList<bool> replayStates;
+    connect(session.get(), &SessionWidget::replayStateChanged, this,
+            [&replayStates](bool active) { replayStates.append(active); });
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+
+    session->replayLogFile(path, 100); // 100 bytes/s: the 2 KB file would take 20 s
+    QVERIFY(session->isReplaying());
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("xx")), kSimTimeoutMs);
+    QVERIFY(session->isReplaying());
+
+    // Connecting while the replay streams stops the replay first, then opens the port.
+    statusSpy.clear();
+    session->setPortName(kLoopback);
+    QVERIFY(session->connectPort());
+    QVERIFY(!session->isReplaying());
+    QVERIFY(session->isConnected());
+    QCOMPARE(replayStates, (QList<bool>{true, false}));
+    QCOMPARE(session->title(), kLoopback);
+    QVERIFY2(allText(terminal).contains(QStringLiteral("replay of slow.log stopped")), qPrintable(allText(terminal)));
+    bool sawConnected = false;
+    for (const QList<QVariant>& args : statusSpy) {
+        const QString message = args.at(0).toString();
+        sawConnected =
+            sawConnected || (message.contains(QStringLiteral("Connected to")) && message.contains(kLoopback));
+    }
+    QVERIFY(sawConnected);
+
+    // No further replay chunks arrive once the port is open.
+    QTest::qWait(150);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("END")));
+    QVERIFY(session->isConnected());
+
+    session->disconnectPort();
+}
+
 void Tst_sessionwidget::replayTimestampedCapture()
 {
     auto session = newSession();
@@ -1237,6 +1455,7 @@ void Tst_sessionwidget::replayTimestampedCapture()
     const QString path = tempPath(QStringLiteral("capture-text.log"));
     const QByteArray capture =
         QByteArrayLiteral("# BuildAI Serial Utility log - SIM:linux 115200 8N1 - started 2026-09-20 10:00:00.000\n"
+                          "[2026-09-20 10:00:00.900] [root@rv1106:~]# \n"
                           "[2026-09-20 10:00:01.000] TX> uname -a\\r\n"
                           "[2026-09-20 10:00:01.050] uname -a\n"
                           "[2026-09-20 10:00:01.100] Linux rv1106 5.10.160 armv7l GNU/Linux\n"
@@ -1253,6 +1472,9 @@ void Tst_sessionwidget::replayTimestampedCapture()
     const QString text = allText(session->terminal());
     QVERIFY2(text.contains(QStringLiteral("Linux rv1106 5.10.160 armv7l GNU/Linux")), qPrintable(text));
     QVERIFY(text.contains(QStringLiteral("[root@rv1106:~]#")));
+    // The synthetic line break the logger put before the TX line is not replayed: prompt and
+    // echoed command stay on one line as in the live session.
+    QVERIFY2(text.contains(QStringLiteral("[root@rv1106:~]# uname -a")), qPrintable(text));
     // The host's own input and the header are not part of the device stream.
     QVERIFY(!text.contains(QStringLiteral("TX>")));
     QVERIFY(!text.contains(QStringLiteral("# BuildAI")));
@@ -1365,6 +1587,10 @@ void Tst_sessionwidget::barSettingsRoundTrip()
     auto* baudCombo = child<QComboBox>(&bar, "baudCombo");
     QVERIFY(baudCombo);
     QVERIFY(baudCombo->isEditable());
+    const auto* baudValidator = qobject_cast<const QIntValidator*>(baudCombo->validator());
+    QVERIFY(baudValidator);
+    QCOMPARE(baudValidator->bottom(), SerialSettings::kMinBaudRate);
+    QCOMPARE(baudValidator->top(), SerialSettings::kMaxBaudRate);
     int changes = 0;
     connect(&bar, &ConnectionBar::settingsChanged, this, [&changes](const SerialSettings&) { ++changes; });
 
@@ -1700,6 +1926,19 @@ void Tst_sessionwidget::inputHexModeDisablesControls()
     QVERIFY(escapeCheck->isEnabled());
     QVERIFY(!input.hexMode());
     const QString textPlaceholder = edit->placeholderText();
+
+    // The placeholder explains the current mode: plain / escapes / HEX (hex wins over a still-checked
+    // escape box, matching the precedence in send()).
+    input.setEscapeMode(true);
+    QVERIFY2(edit->placeholderText().contains(QStringLiteral("escape"), Qt::CaseInsensitive),
+             qPrintable(edit->placeholderText()));
+    QVERIFY(edit->placeholderText() != textPlaceholder);
+    input.setHexMode(true);
+    QVERIFY(edit->placeholderText().contains(QStringLiteral("Hex")));
+    input.setHexMode(false);
+    QVERIFY(edit->placeholderText().contains(QStringLiteral("escape"), Qt::CaseInsensitive));
+    input.setEscapeMode(false);
+    QCOMPARE(edit->placeholderText(), textPlaceholder);
 
     input.setHexMode(true);
     QVERIFY(hexCheck->isChecked());
@@ -2047,13 +2286,64 @@ void Tst_sessionwidget::quickBarGroupFilterPersists()
     QCOMPARE(bar.currentGroup(), QStringLiteral("MCU"));
     QCOMPARE(QSettings().value(kGroupKey).toString(), QStringLiteral("MCU"));
     QCOMPARE(buttonTexts(commandButtons(&bar)), commandNames(all, QStringLiteral("MCU")));
+    QCOMPARE(second.currentGroup(), QStringLiteral("Linux")); // the other bar keeps its own group
+
+    // A store change rebuilds every bar, each with its own group (not the last persisted one).
+    QList<QuickCommand> edited = all;
+    edited.first().name = QStringLiteral("renamed");
+    m_store->setCommands(edited);
+    QCOMPARE(bar.currentGroup(), QStringLiteral("MCU"));
+    QCOMPARE(second.currentGroup(), QStringLiteral("Linux"));
+    QCOMPARE(buttonTexts(commandButtons(&second)), commandNames(edited, QStringLiteral("Linux")));
+    QuickCommandBar third(m_store);
+    QCOMPARE(third.currentGroup(), QStringLiteral("MCU")); // a new bar starts from the last chosen group
 
     // An unknown group means "All".
     bar.setCurrentGroup(QStringLiteral("Nope"));
     QCOMPARE(bar.currentGroup(), QString());
     QCOMPARE(combo->currentIndex(), 0);
     QVERIFY(QSettings().value(kGroupKey).toString().isEmpty());
-    QCOMPARE(buttonTexts(commandButtons(&bar)), commandNames(all));
+    QCOMPARE(buttonTexts(commandButtons(&bar)), commandNames(edited));
+}
+
+void Tst_sessionwidget::quickBarGroupTranslated()
+{
+    // The general group is stored under one untranslated key and only displayed translated.
+    QTranslator translator;
+    QVERIFY(translator.load(QStringLiteral(":/translations/zh_CN.qm")));
+    QVERIFY(qApp->installTranslator(&translator));
+    const QString general = QStringLiteral(u"常规"); // zh_CN translation of "General"
+
+    const QList<QuickCommand> custom{
+        makeCommand(QStringLiteral("hello"), QStringLiteral("echo hello"), QStringLiteral("Test")),
+        makeCommand(QStringLiteral("AT"), QStringLiteral("AT"), QString())};
+    m_store->setCommands(custom);
+    QCOMPARE(m_store->groups(), (QStringList{QStringLiteral("Test"), QStringLiteral("General")}));
+
+    QuickCommandBar bar(m_store);
+    QVERIFY(expose(&bar));
+    auto* combo = child<QComboBox>(&bar, "groupCombo");
+    QVERIFY(combo);
+    QCOMPARE(combo->count(), 3);
+    QCOMPARE(combo->itemText(1), QStringLiteral("Test"));
+    QCOMPARE(combo->itemText(2), general);
+    QCOMPARE(combo->itemData(2).toString(), QStringLiteral("General"));
+
+    bar.setCurrentGroup(QStringLiteral("General"));
+    QCOMPARE(bar.currentGroup(), QStringLiteral("General"));
+    QCOMPARE(combo->currentText(), general);
+    QCOMPARE(buttonTexts(commandButtons(&bar)), QStringList{QStringLiteral("AT")});
+    QCOMPARE(QSettings().value(kGroupKey).toString(), QStringLiteral("General"));
+
+    // Switching the language back relabels the item without a rebuild; the group is kept.
+    QVERIFY(qApp->removeTranslator(&translator));
+    QEvent languageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(&bar, &languageChange);
+    QCOMPARE(combo->itemText(2), QStringLiteral("General"));
+    QCOMPARE(combo->itemData(2).toString(), QStringLiteral("General"));
+    QCOMPARE(bar.currentGroup(), QStringLiteral("General"));
+    QCOMPARE(buttonTexts(commandButtons(&bar)), QStringList{QStringLiteral("AT")});
+    QCOMPARE(QSettings().value(kGroupKey).toString(), QStringLiteral("General"));
 }
 
 void Tst_sessionwidget::quickBarGearEmitsEdit()

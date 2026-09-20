@@ -39,7 +39,7 @@ public:
     void setLanguage(const QString& code);
 
     // ---- Terminal appearance --------------------------------------------------------
-    QFont terminalFont() const;               ///< default: "Consolas" 10pt on Windows, "Monospace" 10pt elsewhere
+    QFont terminalFont() const;               ///< default: defaultTerminalFont()
     void setTerminalFont(const QFont& font);
     QString themeName() const;                ///< TerminalTheme name; default "dark"
     void setThemeName(const QString& name);
@@ -77,7 +77,7 @@ public:
     void setShowSimulatedPorts(bool on);
 
     // ---- Logging --------------------------------------------------------------------
-    QString logDirectory() const;             ///< default: <Documents>/BuildAI/SerialLogs
+    QString logDirectory() const;             ///< default: defaultLogDirectory()
     void setLogDirectory(const QString& dir);
     bool autoLog() const;                     ///< start a log automatically on connect; default false
     void setAutoLog(bool on);
@@ -101,6 +101,13 @@ public:
     /// Location of per-user data files (quick_commands.json, history.txt):
     /// QStandardPaths::AppConfigLocation, created on demand.
     static QString dataDirectory();
+
+    /// Font used when terminal/font is absent: "Consolas" 10pt on Windows, "Monospace" 10pt
+    /// elsewhere (style hint Monospace, fixed pitch).
+    static QFont defaultTerminalFont();
+    /// Directory used when logging/directory is absent: <Documents>/BuildAI/SerialLogs, or
+    /// <home>/BuildAI/SerialLogs when QStandardPaths reports no Documents location. Forward slashes.
+    static QString defaultLogDirectory();
 
     void sync();
 

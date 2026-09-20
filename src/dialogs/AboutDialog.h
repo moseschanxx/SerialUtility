@@ -13,6 +13,7 @@ QT_END_NAMESPACE
  * ("Copyright © 2026 BuildAI. All rights reserved."). Modeless, like the reference tool.
  * Layout in AboutDialog.ui: labelLogo, labelAppName, textDescription (QTextBrowser,
  * openExternalLinks), textCredits, textLicense, buttonBox (Close).
+ * Retranslates itself on QEvent::LanguageChange (it can stay open across a language switch).
  */
 class AboutDialog : public QDialog
 {
@@ -20,6 +21,9 @@ class AboutDialog : public QDialog
 public:
     explicit AboutDialog(QWidget* parent = nullptr);
     ~AboutDialog() override;
+
+protected:
+    void changeEvent(QEvent* event) override;   ///< LanguageChange -> retranslateUi + setupContent()
 
 private:
     void setupContent();

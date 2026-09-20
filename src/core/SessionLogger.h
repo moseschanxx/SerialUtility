@@ -17,9 +17,11 @@
  *          Non-UTF-8 sequences are passed through unchanged.
  *  - HexDump: every chunk becomes "[timestamp] RX/TX (N bytes)\n" + HexUtils::hexDump(chunk) + "\n".
  *
- * File is opened in append mode; a header line "# BuildAI Serial Utility log - <port> <settings> - started <time>"
- * is written on start for Text/HexDump formats. Data is flushed after every write (logs
- * must survive a crash of the board or the app).
+ * File is opened in append mode; for Text/HexDump formats a header line
+ * "# BuildAI Serial Utility log - <port> <settings> - started <time>" is written on start, preceded
+ * by '\n' when the existing file does not already end in one, so the header always begins a new
+ * line (Raw captures stay a verbatim byte stream). Data is flushed after every write (logs must
+ * survive a crash of the board or the app); a failed write or flush stops the log and emits error().
  */
 class SessionLogger : public QObject
 {
@@ -32,7 +34,8 @@ public:
     ~SessionLogger() override;
 
     /// Start logging to `filePath` (directories are created). `header` is written for
-    /// Text/HexDump formats. Returns false and emits error() when the file cannot be opened.
+    /// Text/HexDump formats. Returns false and emits error() when the file cannot be opened or
+    /// the header cannot be written; started() is emitted only when true is returned.
     bool start(const QString& filePath, Format format, bool includeTx, const QString& header = QString());
     void stop();
     bool isActive() const;

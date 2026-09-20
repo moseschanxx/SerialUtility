@@ -18,6 +18,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
+#include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStatusBar>
@@ -328,6 +329,7 @@ void MainWindow::connectSession(SessionWidget* session)
     connect(session, &SessionWidget::loggingChanged, this, &MainWindow::onSessionLoggingChanged);
     connect(session, &SessionWidget::gridSizeChanged, this, &MainWindow::onSessionGridSize);
     connect(session, &SessionWidget::quickCommandsEditRequested, this, &MainWindow::onQuickCommands);
+    connect(session, &SessionWidget::findRequested, this, &MainWindow::onFind);
     connect(session, &SessionWidget::viewModeChanged, this, [this, session](SessionWidget::ViewMode) {
         if (session == currentSession()) {
             updateActions();
@@ -340,7 +342,7 @@ void MainWindow::connectSession(SessionWidget* session)
     });
 }
 
-bool MainWindow::confirmCloseSessions(const QList<SessionWidget*>& connected)
+bool MainWindow::confirmCloseSessions(const QList<SessionWidget*>& connected, bool quitting)
 {
     if (connected.isEmpty()) {
         return true;
@@ -350,19 +352,29 @@ bool MainWindow::confirmCloseSessions(const QList<SessionWidget*>& connected)
     for (SessionWidget* session : connected) {
         names.append(session->title());
     }
+    const QString joined = names.join(QStringLiteral(", "));
+    const int count = static_cast<int>(connected.size());
 
+    QString title;
     QString text;
-    if (connected.size() == 1) {
-        text = tr("Session %1 is still connected.\nClose it anyway?").arg(names.first());
+    QString yesLabel;
+    if (quitting) {
+        title = tr("Quit %1").arg(QStringLiteral(APP_DISPLAY_NAME));
+        text = tr("%n session(s) are still connected (%1).\nQuit anyway? All tabs will be closed and logging stopped.",
+                  nullptr, count)
+                   .arg(joined);
+        yesLabel = tr("Quit");
     } else {
-        text = tr("%n sessions are still connected (%1).\nClose them anyway?", nullptr,
-                  static_cast<int>(connected.size()))
-                   .arg(names.join(QStringLiteral(", ")));
+        title = tr("Close Session");
+        text = count == 1 ? tr("Session %1 is still connected.\nClose it anyway?").arg(names.first())
+                          : tr("%n sessions are still connected (%1).\nClose them anyway?", nullptr, count).arg(joined);
+        yesLabel = tr("Close");
     }
 
-    const auto answer =
-        QMessageBox::question(this, tr("Close Session"), text, QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    return answer == QMessageBox::Yes;
+    QMessageBox box(QMessageBox::Question, title, text, QMessageBox::Yes | QMessageBox::No, this);
+    box.setDefaultButton(QMessageBox::No);
+    box.button(QMessageBox::Yes)->setText(yesLabel);
+    return box.exec() == QMessageBox::Yes;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -379,7 +391,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     }
 
     if (!connected.isEmpty() && AppSettings::instance().confirmCloseWhenConnected() &&
-        !confirmCloseSessions(connected)) {
+        !confirmCloseSessions(connected, /*quitting=*/true)) {
         event->ignore();
         return;
     }
@@ -631,9 +643,15 @@ void MainWindow::onCopy()
 
 void MainWindow::onPaste()
 {
-    if (SessionWidget* session = currentSession(); session && session->terminal()) {
-        session->terminal()->paste();
+    SessionWidget* session = currentSession();
+    if (!session || !session->terminal()) {
+        return;
     }
+    if (!session->isConnected()) {   // unreachable from the menu (updateActions gates Paste), keyboard-safe
+        statusBar()->showMessage(tr("Not connected"), 3000);
+        return;
+    }
+    session->terminal()->paste();
 }
 
 void MainWindow::onSelectAll()
@@ -818,14 +836,23 @@ void MainWindow::switchLanguage(const QString& code)
         qCWarning(lcApp) << "no application translation for" << code;
     }
 
-    // Qt's own dialogs / buttons: qtbase_<code>, falling back to the bare language.
-    const QString qtDir = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+    // Qt's own dialogs / buttons. Preferred: the qtbase catalogue embedded at build time
+    // (see CMakeLists.txt). Fallbacks: the Qt translations dir - an SDK has qtbase_<code>.qm,
+    // a windeployqt tree has the merged qt_<code>.qm - trying full code then bare language.
     const QString language = code.section(QLatin1Char('_'), 0, 0);
-    if (m_qtTranslator.load(QStringLiteral("qtbase_") + code, qtDir) ||
-        m_qtTranslator.load(QStringLiteral("qtbase_") + language, qtDir)) {
+    const QString qtDir = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+    bool qtLoaded = m_qtTranslator.load(QStringLiteral(":/translations/qtbase_%1.qm").arg(code));
+    for (const QString& name : {QStringLiteral("qtbase_") + code, QStringLiteral("qt_") + code,
+                                QStringLiteral("qtbase_") + language, QStringLiteral("qt_") + language}) {
+        if (qtLoaded) {
+            break;
+        }
+        qtLoaded = m_qtTranslator.load(name, qtDir);
+    }
+    if (qtLoaded) {
         qApp->installTranslator(&m_qtTranslator);
     } else if (code != kLanguageEnglish) {
-        qCDebug(lcApp) << "no qtbase translation for" << code << "in" << qtDir;
+        qCWarning(lcApp) << "no Qt base translation for" << code << "(resource or" << qtDir << ")";
     }
 
     m_currentLanguage = code;
@@ -900,7 +927,7 @@ void MainWindow::updateActions()
     ui->actionStopReplay->setEnabled(hasSession && session->isReplaying());
 
     ui->actionCopy->setEnabled(hasSession);
-    ui->actionPaste->setEnabled(hasSession);
+    ui->actionPaste->setEnabled(connected);   // the terminal drops input unless connected
     ui->actionSelectAll->setEnabled(hasSession);
     ui->actionFind->setEnabled(hasSession);
 
@@ -987,7 +1014,7 @@ QString MainWindow::formatBytes(quint64 bytes)
     if (bytes < kMiB) {
         return QStringLiteral("%1 KB").arg(QString::number(value / static_cast<double>(kKiB), 'f', 1));
     }
-    return QStringLiteral("%1 MB").arg(QString::number(value / static_cast<double>(kMiB), 'f', 2));
+    return QStringLiteral("%1 MB").arg(QString::number(value / static_cast<double>(kMiB), 'f', 1));
 }
 
 // ---------------------------------------------------------------------------------------

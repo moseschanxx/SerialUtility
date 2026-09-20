@@ -40,6 +40,7 @@ su_add_test(tst_ansiparser        tst_ansiparser.cpp)
 su_add_test(tst_serialsettings    tst_serialsettings.cpp)
 su_add_test(tst_devicesimulator   tst_devicesimulator.cpp)
 su_add_test(tst_logreplayer       tst_logreplayer.cpp)
+su_add_test(tst_sessionlogger     tst_sessionlogger.cpp)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

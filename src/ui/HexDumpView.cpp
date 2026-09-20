@@ -148,8 +148,15 @@ void HexDumpView::trimToMaxLines()
     if (excess <= 0) {
         return;
     }
+    QScrollBar* bar = verticalScrollBar();
+    const int oldValue = bar->value();
     QTextCursor cursor(document());
     cursor.movePosition(QTextCursor::Start);
     cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor, excess);
     cursor.removeSelectedText();
+    // QPlainTextEdit remembers the first visible line as a block *number* (see
+    // QPlainTextEditPrivate::append(), which does topBlock-- for the same reason). Removing blocks
+    // in front of it would otherwise show a later block, so re-anchor on the same content.
+    // The view is NoWrap, so one block == one scrollbar line.
+    bar->setValue(qMax(0, oldValue - excess));
 }

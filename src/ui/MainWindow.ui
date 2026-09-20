@@ -146,9 +146,9 @@
     <property name="title">
      <string>&amp;Help</string>
     </property>
+    <addaction name="actionVersion"/>
     <addaction name="actionHomepage"/>
     <addaction name="separator"/>
-    <addaction name="actionVersion"/>
     <addaction name="actionAbout"/>
    </widget>
    <addaction name="menuFile"/>
@@ -544,7 +544,7 @@
   </action>
   <action name="actionZoomIn">
    <property name="text">
-    <string>Zoom &amp;In</string>
+    <string>&amp;Zoom In</string>
    </property>
    <property name="shortcut">
     <string>Ctrl++</string>

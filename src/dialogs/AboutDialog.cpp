@@ -1,6 +1,7 @@
 #include "dialogs/AboutDialog.h"
 #include "ui_AboutDialog.h"
 
+#include <QEvent>
 #include <QPixmap>
 
 #include "Version.h"
@@ -23,6 +24,16 @@ AboutDialog::AboutDialog(QWidget* parent)
 AboutDialog::~AboutDialog()
 {
     delete ui;
+}
+
+void AboutDialog::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        ui->retranslateUi(this);
+        setWindowTitle(tr("About %1").arg(QStringLiteral(APP_DISPLAY_NAME)));
+        setupContent();
+    }
+    QDialog::changeEvent(event);
 }
 
 void AboutDialog::setupContent()

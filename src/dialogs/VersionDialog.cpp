@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QEvent>
 #include <QPushButton>
 #include <QStringConverter>
 #include <QSysInfo>
@@ -77,6 +78,17 @@ VersionDialog::VersionDialog(QWidget* parent)
 VersionDialog::~VersionDialog()
 {
     delete ui;
+}
+
+void VersionDialog::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        // Also resets a transient "Copied" button text to the .ui default, which is fine.
+        ui->retranslateUi(this);
+        setWindowTitle(tr("Version Information"));
+        setupVersionInfo();
+    }
+    QDialog::changeEvent(event);
 }
 
 QString VersionDialog::compilerInfo()

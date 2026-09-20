@@ -11,7 +11,7 @@ cd SerialUtility
 .\scripts\run.ps1   -Config Release
 ```
 
-Linux: `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/BuildAI-SerialUtility`
+Linux: install Qt >= 6.8 first (see README "Plain CMake (Linux)": Debian 13 / Ubuntu 25.10+ apt packages incl. `qt6-l10n-tools`, or aqtinstall 6.8.3 gcc_64 + `-DCMAKE_PREFIX_PATH`), then `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/BuildAI-SerialUtility`
 
 Qt Creator: open `CMakeLists.txt`, pick the `Release` preset, press Run.
 
@@ -76,4 +76,5 @@ connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear, `Ctrl+Shift+O` send
 `Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
 `Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,
 `Ctrl+Shift+Q` quit.
-Everything else (Tab, arrows, bare Ctrl+letters, F-keys) goes to the device.
+Everything else (Tab, arrows, bare Ctrl+letters, F-keys other than F3 / F5) goes to the device;
+F3 / F5 stay Disconnect / Refresh Ports, and F2 only reaches the device while connected.

@@ -29,14 +29,15 @@ class SystemLogViewer;
  *   Session: actionConnect (F2), actionDisconnect (F3), actionClear (Ctrl+Shift+L),
  *            actionResetTerminal, actionSendFile (Ctrl+Shift+O), actionSendBreak,
  *            actionSyncTerminalSize, actionRefreshPorts (F5)
- *   Edit:    actionCopy (Ctrl+Shift+C), actionPaste (Ctrl+Shift+V), actionSelectAll,
- *            actionFind (Ctrl+Shift+F), actionQuickCommands, actionPreferences (Ctrl+,)
+ *   Edit:    actionCopy (Ctrl+Shift+C), actionPaste (Ctrl+Shift+V, enabled only while
+ *            connected), actionSelectAll, actionFind (Ctrl+Shift+F), actionQuickCommands,
+ *            actionPreferences (Ctrl+,)
  *   View:    actionHexView (checkable, Ctrl+Shift+H), actionShowCommandInput (checkable),
  *            actionShowQuickCommands (checkable), actionSystemLog (checkable),
  *            actionZoomIn (Ctrl++), actionZoomOut (Ctrl+-), actionZoomReset (Ctrl+0),
  *            actionNextTab (Ctrl+Tab), actionPreviousTab (Ctrl+Shift+Tab)
  *   Language: actionLanguageEnglish, actionLanguageChinese (checkable, exclusive)
- *   Help:    actionAbout, actionVersion, actionHomepage
+ *   Help:    actionVersion, actionHomepage, actionAbout
  * plus a central QTabWidget named tabWidget (movable, closable, document mode) with a "+"
  * corner button that creates a session.
  *
@@ -61,10 +62,10 @@ class SystemLogViewer;
  *    AppSettings::confirmCloseWhenConnected().
  *  - closeEvent saves geometry/state, open port names, history (dataDirectory()/history.txt)
  *    and quick commands.
- *  - Language menu: same approach as the Vispek reference (QTranslator for app + Qt base
- *    translations from QLibraryInfo::path(TranslationsPath)); LanguageChange event ->
- *    ui->retranslateUi(this) + retranslateStatusBar(); child widgets handle their own
- *    changeEvent.
+ *  - Language menu: QTranslator for app strings (:/translations/<code>.qm) + Qt base strings
+ *    (embedded :/translations/qtbase_<code>.qm, falling back to qtbase_/qt_<code> in
+ *    QLibraryInfo::path(TranslationsPath)); LanguageChange event -> ui->retranslateUi(this) +
+ *    retranslateStatusBar(); child widgets handle their own changeEvent.
  *  - The window title is "BuildAI Serial Utility <version>" plus " - <port>" of the active tab.
  */
 class MainWindow : public QMainWindow
@@ -141,7 +142,9 @@ private:
     void retranslateStatusBar();
     void connectSession(SessionWidget* session);
     int indexOf(SessionWidget* session) const;
-    bool confirmCloseSessions(const QList<SessionWidget*>& connected);
+    /// quitting=true is the closeEvent variant (title "Quit <app>", button "Quit"); false is the
+    /// single-tab close variant (title "Close Session", button "Close").
+    bool confirmCloseSessions(const QList<SessionWidget*>& connected, bool quitting = false);
     void saveState();
     void restoreState();
     static QIcon stateIcon(SerialConnection::State state);

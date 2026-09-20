@@ -19,14 +19,18 @@
  *    ANSI file).
  *  - TimestampedText: a SessionLogger "text" capture. Each line starts with
  *    "[yyyy-MM-dd HH:mm:ss.zzz] "; the prefix is removed, lines that continue with "TX> "
- *    are dropped (they are the host's own input), header lines starting with "# " are
- *    dropped, and the original line break is re-emitted as "\r\n" so the terminal renders
- *    it like the live session did. detectFormat() recognises this format from the first
- *    line.
+ *    are dropped (they are the host's own input), unprefixed header lines starting with "# "
+ *    are dropped, and the original line break is re-emitted as "\r\n" so the terminal renders
+ *    it like the live session did. The bare '\n' that SessionLogger inserts before a "TX> "
+ *    line when the device had left the cursor mid-line (a prompt) is not re-emitted, so the
+ *    prompt and the echoed command stay on one line as in the live session. (Trade-off: an
+ *    LF-only device line that is immediately followed by host input loses its LF.)
+ *    detectFormat() recognises this format from the first line.
  *
  * Pacing: bytesPerSecond > 0 streams in chunks every ~20 ms (baud / 10 bytes per second,
  * so "--speed 115200" replays at the real line rate); 0 = as fast as the event loop allows
- * (chunks of 4 KB per timer tick, still asynchronous so the UI stays responsive).
+ * (4 KB chunks from a zero-interval timer, one per event-loop iteration, still asynchronous
+ * so the UI stays responsive).
  *
  * Emits chunkReady() for every chunk (SessionWidget feeds it to the terminal, hex view and
  * logger exactly like received data), progress() after every chunk and finished() exactly
@@ -84,6 +88,7 @@ private slots:
     void onTimer();
 
 private:
+    void applyInterval();   ///< timer interval from m_options.bytesPerSecond (paced tick or 0)
     void finish(bool completed);
 
     Options m_options;

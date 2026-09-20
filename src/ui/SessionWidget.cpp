@@ -67,6 +67,7 @@ SessionWidget::SessionWidget(QuickCommandStore* quickCommands, CommandHistory* h
     connect(m_terminal, &TerminalWidget::sendData, this, &SessionWidget::sendBytes);
     connect(m_terminal, &TerminalWidget::fileDropped, this, [this](const QString& path) { sendFile(path); });
     connect(m_terminal, &TerminalWidget::syncSizeRequested, this, &SessionWidget::syncTerminalSize);
+    connect(m_terminal, &TerminalWidget::findRequested, this, &SessionWidget::findRequested);
     connect(m_terminal, &TerminalWidget::gridSizeChanged, this, &SessionWidget::gridSizeChanged);
     connect(m_terminal, &TerminalWidget::titleChanged, this, [this](const QString& deviceTitle) {
         if (!deviceTitle.trimmed().isEmpty()) {
@@ -98,6 +99,7 @@ SessionWidget::SessionWidget(QuickCommandStore* quickCommands, CommandHistory* h
     });
     connect(m_logger, &SessionLogger::stopped, this, [this](const QString& filePath, qint64 bytesWritten) {
         qCInfo(lcApp) << "session log stopped:" << filePath << bytesWritten << "bytes";
+        m_autoLogPort.clear();   // any stop, from any path, ends the auto-log association
         emit loggingChanged(false, filePath);
         emit statusMessage(tr("Log closed: %1 (%2 bytes)").arg(QDir::toNativeSeparators(filePath)).arg(bytesWritten),
                            kStatusShortMs);
@@ -319,6 +321,15 @@ bool SessionWidget::connectPort()
         return false;
     }
 
+    if (isReplaying()) {
+        // The replay streams into the same terminal/hex view/logger as live data; opening the
+        // port would interleave the two (the mirror of the refusal in replayLogFile()).
+        qCInfo(lcApp) << "stopping replay before opening" << settings.portName;
+        // Synchronous: emits finished(false) -> "replay of <file> stopped" line,
+        // replayStateChanged(false), titleChanged(); isReplaying() is false before open().
+        stopReplay();
+    }
+
     m_connection->setSettings(settings);
     qCInfo(lcSerial) << "opening" << settings.portName << settings.summary();
     const bool ok = m_connection->open();
@@ -330,8 +341,19 @@ bool SessionWidget::connectPort()
     AppSettings::instance().setLastPortName(settings.portName);
     emit statusMessage(tr("Connected to %1 (%2)").arg(settings.portName, settings.summary()), kStatusShortMs);
 
-    if (AppSettings::instance().autoLog() && !m_logger->isActive()) {
-        startLoggingTo(SessionLogger::suggestFileName(settings.portName, AppSettings::instance().logDirectory()));
+    if (AppSettings::instance().autoLog()) {
+        // A log the user started by hand is kept; an auto-started log for a *different* port is
+        // closed so the new session gets its own "<port>_<time>.log" with a matching header.
+        const bool autoLogForOtherPort =
+            m_logger->isActive() && !m_autoLogPort.isEmpty() && m_autoLogPort != settings.portName;
+        if (!m_logger->isActive() || autoLogForOtherPort) {
+            // startLoggingTo() stops the old log first (stopped -> m_autoLogPort cleared), so the
+            // assignment below re-establishes the association for the new file.
+            startLoggingTo(SessionLogger::suggestFileName(settings.portName, AppSettings::instance().logDirectory()));
+            if (m_logger->isActive()) {
+                m_autoLogPort = settings.portName;
+            }
+        }
     }
 
     focusTerminal();
@@ -341,10 +363,17 @@ bool SessionWidget::connectPort()
 void SessionWidget::disconnectPort()
 {
     const SerialConnection::State before = m_connection->state();
+    const qint64 dropped = m_connection->pendingTxBytes();
     m_connection->close();
     if (before != SerialConnection::State::Disconnected) {
         qCInfo(lcSerial) << "closed" << m_connection->portName();
-        emit statusMessage(tr("Disconnected from %1").arg(m_connection->portName()), kStatusShortMs);
+        if (dropped > 0) {
+            writeSystemLine(tr("%1 unsent bytes discarded on disconnect").arg(dropped));
+            emit statusMessage(tr("Disconnected from %1 (%2 unsent bytes discarded)").arg(portName()).arg(dropped),
+                               kStatusLongMs);
+        } else {
+            emit statusMessage(tr("Disconnected from %1").arg(m_connection->portName()), kStatusShortMs);
+        }
     }
 }
 
@@ -435,7 +464,14 @@ void SessionWidget::sendFile(const QString& path)
     if (!m_sendFileDialog) {
         m_sendFileDialog = new SendFileDialog(this);
         m_sendFileDialog->setModal(false);
-        connect(m_sendFileDialog, &SendFileDialog::sendChunk, this, &SessionWidget::sendBytes);
+        // Backpressure: the dialog learns how much of what it queued is still in the port's
+        // write buffer, after every chunk and whenever the driver drains some of it.
+        connect(m_sendFileDialog, &SendFileDialog::sendChunk, this, [this](const QByteArray& chunk) {
+            sendBytes(chunk);
+            m_sendFileDialog->updatePendingTx(m_connection->pendingTxBytes());
+        });
+        connect(m_connection, &SerialConnection::txBytesWritten, m_sendFileDialog,
+                [this](qint64) { m_sendFileDialog->updatePendingTx(m_connection->pendingTxBytes()); });
         connect(m_sendFileDialog, &SendFileDialog::sendingStarted, this, [this]() {
             emit statusMessage(tr("Sending %1...").arg(QFileInfo(m_sendFileDialog->filePath()).fileName()),
                                kStatusShortMs);
@@ -463,7 +499,10 @@ void SessionWidget::sendBreak()
         emit statusMessage(tr("Not connected"), kStatusShortMs);
         return;
     }
-    m_connection->sendBreak();
+    if (!m_connection->sendBreak()) {
+        // The connection already reported the reason through errorOccurred() -> onConnectionError().
+        return;
+    }
     qCInfo(lcSerial) << "BREAK sent on" << m_connection->portName();
     emit statusMessage(tr("BREAK sent"), kStatusShortMs);
 }
@@ -502,7 +541,22 @@ void SessionWidget::sendQuickCommand(const QuickCommand& command)
         qCWarning(lcUi) << "quick command" << name << "has an invalid payload:" << error;
         return;
     }
-    sendBytes(command.hex ? payload : encodeForDevice(payload));
+    if (command.hex) {
+        sendBytes(payload);   // hex payloads are never transcoded
+    } else if (command.escapes) {
+        // Re-run the unescape with the session encoding so text runs are transcoded while
+        // \xHH stays the exact byte; payload() already validated the same text.
+        QString unescapeError;
+        QByteArray bytes = unescapeForDevice(command.command, &unescapeError);
+        if (!unescapeError.isEmpty()) {
+            bytes = encodeForDevice(payload);
+        } else {
+            bytes += LineEnding::bytes(command.lineEnding);
+        }
+        sendBytes(bytes);
+    } else {
+        sendBytes(encodeForDevice(payload));
+    }
 }
 
 void SessionWidget::focusTerminal()
@@ -545,7 +599,8 @@ void SessionWidget::onConnectionError(const QString& message)
 
 void SessionWidget::onPortDisappeared(const QString& portName)
 {
-    qCWarning(lcSerial) << "port" << portName << "disappeared";
+    // Info only: the connection layer already logged the warning with the underlying error.
+    qCInfo(lcSerial) << "port" << portName << "disappeared";
     if (m_connection->autoReconnect()) {
         writeSystemLine(tr("port %1 disappeared, waiting to reconnect").arg(portName));
         emit statusMessage(tr("Port %1 disappeared - waiting for it to come back").arg(portName), kStatusLongMs);
@@ -565,6 +620,10 @@ void SessionWidget::onReconnected(const QString& portName)
 void SessionWidget::onBarSettingsChanged(const SerialSettings& settings)
 {
     m_connection->setSettings(settings); // applied live while open (port name only at next open)
+    const SerialSettings accepted = m_connection->settings();
+    if (accepted != settings) {
+        m_bar->setSettings(accepted);   // a driver-rejected value snaps the combo back; emits nothing
+    }
     emit titleChanged(title());
 }
 
@@ -580,7 +639,22 @@ void SessionWidget::onPortsChanged(const QList<SerialPortEntry>& ports)
 void SessionWidget::onInputSendRequested(const QByteArray& payload, const QString& displayText)
 {
     qCDebug(lcUi) << "command input:" << displayText;
-    sendBytes(m_input->hexMode() ? payload : encodeForDevice(payload));
+    if (m_input->hexMode()) {
+        sendBytes(payload);   // hex payloads are never transcoded
+    } else if (m_input->escapeMode()) {
+        // Re-run the unescape on the typed text with the session encoding: text runs are
+        // transcoded, \xHH stays the exact byte (payload flattened both into one byte array).
+        QString error;
+        QByteArray bytes = unescapeForDevice(displayText, &error);
+        if (!error.isEmpty()) {
+            bytes = encodeForDevice(payload);   // cannot happen: CommandInput validated the same text
+        } else {
+            bytes += LineEnding::bytes(m_input->lineEnding());
+        }
+        sendBytes(bytes);
+    } else {
+        sendBytes(encodeForDevice(payload));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -611,6 +685,26 @@ QByteArray SessionWidget::encodeForDevice(const QByteArray& utf8) const
     QStringDecoder decoder(QStringConverter::Utf8);
     const QString text = decoder.decode(utf8);
     return encoder.encode(text);
+}
+
+QByteArray SessionWidget::unescapeForDevice(const QString& text, QString* error) const
+{
+    const QString encoding = m_terminal->encoding();
+    const bool utf8 = encoding.isEmpty() || encoding.compare(QStringLiteral("UTF-8"), Qt::CaseInsensitive) == 0 ||
+                      !QStringEncoder(encoding.toUtf8().constData()).isValid();
+    if (utf8) {
+        return HexUtils::unescape(
+            text, [](const QString& s) { return s.toUtf8(); }, error);
+    }
+    // A fresh encoder per text run: runs are independent (a \xHH byte may sit between them),
+    // so no shift state must carry over.
+    return HexUtils::unescape(
+        text,
+        [&encoding](const QString& s) {
+            QStringEncoder encoder(encoding.toUtf8().constData());
+            return QByteArray(encoder.encode(s));
+        },
+        error);
 }
 
 // ---------------------------------------------------------------------------

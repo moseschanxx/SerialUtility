@@ -19,11 +19,11 @@
 #include "app/Logging.h"
 #include "core/HexUtils.h"
 #include "core/LineEnding.h"
+#include "dialogs/QuickCommandsDialog.h"
 
 namespace {
 
 const char kGroupSettingsKey[] = "ui/quickCommandGroup";
-const char kGeneralGroup[] = "General";
 const char kMiddleFilterName[] = "quickCommandMiddleClickFilter";
 const char kBaseToolTipProperty[] = "baseToolTip";
 
@@ -97,12 +97,6 @@ private:
     QScrollBar* m_bar;
 };
 
-/// Effective group of a command ("General" when the field is empty), matching QuickCommandStore::groups().
-QString effectiveGroup(const QuickCommand& command)
-{
-    return command.group.trimmed().isEmpty() ? QString::fromLatin1(kGeneralGroup) : command.group;
-}
-
 /// Technical part of a button tooltip: the bytes that will be sent plus the line ending / HEX marker.
 QString commandToolTip(const QuickCommand& command)
 {
@@ -154,6 +148,8 @@ QuickCommandBar::QuickCommandBar(QuickCommandStore* store, QWidget* parent)
     if (m_store) {
         connect(m_store, &QuickCommandStore::changed, this, &QuickCommandBar::rebuild);
     }
+    // A new bar starts from the group last chosen in any bar.
+    m_group = QSettings().value(QString::fromLatin1(kGroupSettingsKey)).toString();
     rebuild();
 }
 
@@ -215,8 +211,8 @@ void QuickCommandBar::setupUi()
         if (index < 0) {
             return;
         }
-        QSettings settings;
-        settings.setValue(QString::fromLatin1(kGroupSettingsKey), m_groupCombo->itemData(index).toString());
+        m_group = m_groupCombo->itemData(index).toString();
+        QSettings().setValue(QString::fromLatin1(kGroupSettingsKey), m_group);
         rebuild();
     });
     connect(m_editButton, &QToolButton::clicked, this, &QuickCommandBar::editRequested);
@@ -225,6 +221,9 @@ void QuickCommandBar::setupUi()
 void QuickCommandBar::retranslate()
 {
     m_groupCombo->setItemText(0, tr("All"));
+    for (int i = 1; i < m_groupCombo->count(); ++i) {
+        m_groupCombo->setItemText(i, QuickCommandStore::groupDisplayName(m_groupCombo->itemData(i).toString()));
+    }
     m_groupCombo->setToolTip(tr("Quick command group"));
     m_editButton->setToolTip(tr("Edit quick commands..."));
     for (QToolButton* button : std::as_const(m_buttons)) {
@@ -285,12 +284,8 @@ void QuickCommandBar::setEnabledForConnection(bool connected)
 
 void QuickCommandBar::rebuild()
 {
-    // ---- Group combo: "All" + the store's groups; restore the remembered choice ---------
-    QString wanted;
-    {
-        QSettings settings;
-        wanted = settings.value(QString::fromLatin1(kGroupSettingsKey)).toString();
-    }
+    // ---- Group combo: "All" + the store's groups; restore this bar's group ---------------
+    const QString wanted = m_group;
 
     const QStringList groups = m_store ? m_store->groups() : QStringList();
     {
@@ -299,11 +294,11 @@ void QuickCommandBar::rebuild()
             m_groupCombo->removeItem(m_groupCombo->count() - 1);
         }
         for (const QString& group : groups) {
-            m_groupCombo->addItem(group, group);
+            m_groupCombo->addItem(QuickCommandStore::groupDisplayName(group), group);
         }
         int index = wanted.isEmpty() ? 0 : m_groupCombo->findData(wanted);
         if (index < 0) {
-            index = 0; // remembered group no longer exists -> All (the setting is kept for when it returns)
+            index = 0; // this bar's group no longer exists -> All (m_group is kept for when it returns)
         }
         m_groupCombo->setCurrentIndex(index);
     }
@@ -322,7 +317,7 @@ void QuickCommandBar::rebuild()
     const QList<QuickCommand> commands = m_store ? m_store->commands() : QList<QuickCommand>();
     int inserted = 0;
     for (const QuickCommand& command : commands) {
-        if (!group.isEmpty() && effectiveGroup(command) != group) {
+        if (!group.isEmpty() && QuickCommandStore::effectiveGroup(command) != group) {
             continue;
         }
 
@@ -339,6 +334,9 @@ void QuickCommandBar::rebuild()
             if (!sequence.isEmpty()) {
                 button->setShortcut(sequence);
                 baseTip += QLatin1Char('\n') + tr("Shortcut: %1").arg(sequence.toString(QKeySequence::NativeText));
+                if (!QuickCommandModel::isTerminalSafeShortcut(sequence)) {
+                    baseTip += tr(" (not available while the terminal has focus)");
+                }
             }
         }
         button->setProperty(kBaseToolTipProperty, baseTip);

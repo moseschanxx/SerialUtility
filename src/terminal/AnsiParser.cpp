@@ -14,6 +14,19 @@ constexpr int kMaxParams = 32;
 constexpr int kMaxSubParams = 8;
 constexpr int kMaxParamValue = 65535;
 constexpr qsizetype kMaxOscLength = 4096;
+/// Code points a DCS/SOS/PM/APC string may consume before the parser gives up and returns to
+/// Ground: a stray introducer from line noise must not silence the console forever.
+constexpr qsizetype kMaxControlStringLength = 4096;
+
+/// DEC Special Graphics (ESC ( 0): the glyphs for 0x5F..0x7E while that set is GL.
+constexpr char32_t kDecSpecialGraphics[32] = {
+    0x00A0, 0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0x00B0, // _ ` a b c d e f
+    0x00B1, 0x2424, 0x240B, 0x2518, 0x2510, 0x250C, 0x2514, 0x253C, // g h i j k l m n
+    0x23BA, 0x23BB, 0x2500, 0x23BC, 0x23BD, 0x251C, 0x2524, 0x2534, // o p q r s t u v
+    0x252C, 0x2502, 0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7, // w x y z { | } ~
+};
+constexpr char kCharsetAscii = 'B';
+constexpr char kCharsetGraphics = '0';
 
 const char kUtf8Name[] = "UTF-8";
 const char kSystemName[] = "System";
@@ -232,6 +245,7 @@ void AnsiParser::reset()
     m_pendingBytes.clear();
     m_decoder.resetState();
     m_lineFeedNewLine = false;
+    resetCharsets();
     setCursorKeyApplicationMode(false);
     setBracketedPaste(false);
 }
@@ -263,6 +277,7 @@ QString AnsiParser::decodeChunk(const QByteArray& data)
         // A sequence can only run past the end of the chunk if its lead byte is among the
         // last three bytes; every C2..F4 byte is processed as a lead (it is never a valid
         // continuation), so the first such overrunning byte is where the decoder would stop.
+        // The split is then moved back over any sequence it would cut.
         qsizetype lead = -1;
         for (qsizetype i = std::max<qsizetype>(0, n - 3); i < n; ++i) {
             const int length = utf8SequenceLength(static_cast<uchar>(bytes[i]));
@@ -274,6 +289,22 @@ QString AnsiParser::decodeChunk(const QByteArray& data)
         if (lead < 0) {
             out.append(QString(m_decoder.decode(bytes)));
             break;
+        }
+        // The prefix handed to the decoder must not itself end inside a multi-byte sequence:
+        // a lead byte within three bytes before `lead` whose sequence is cut off by `lead`
+        // would be carried over as decoder state, and QStringDecoder then swallows the first
+        // byte of the next call - the pending lead byte. Move the split back over every such
+        // byte (repeat until stable: the new prefix can end in another cut-off sequence).
+        for (bool moved = true; moved && lead > 0;) {
+            moved = false;
+            for (qsizetype i = std::max<qsizetype>(0, lead - 3); i < lead; ++i) {
+                const int length = utf8SequenceLength(static_cast<uchar>(bytes[i]));
+                if (length > 0 && i + length > lead) { // i + length == lead is a complete character
+                    lead = i;
+                    moved = true;
+                    break;
+                }
+            }
         }
         if (lead > 0) {
             out.append(QString(m_decoder.decode(bytes.first(lead))));
@@ -353,8 +384,9 @@ void AnsiParser::processCodePoint(char32_t cp)
         return;
     }
 
-    // Printable non-ASCII text inside a (non-string) control sequence is garbage: abandon
-    // the sequence and print the character instead of swallowing the text that follows.
+    // Printable non-ASCII text inside a control sequence or a DCS/SOS/PM/APC string is garbage:
+    // abandon it and print the character instead of swallowing the text that follows (ECMA-48
+    // command strings are 7-bit; OSC is excluded because titles may contain non-ASCII text).
     if (cp >= 0xA0) {
         switch (m_state) {
         case State::Escape:
@@ -363,11 +395,28 @@ void AnsiParser::processCodePoint(char32_t cp)
         case State::CsiParam:
         case State::CsiIntermediate:
         case State::CsiIgnore:
+        case State::DcsEntry:
+        case State::DcsParam:
+        case State::DcsIntermediate:
+        case State::DcsPassthrough:
+        case State::DcsIgnore:
+        case State::SosPmApcString:
             clearSequence();
             m_state = State::Ground;
             break;
         default:
             break;
+        }
+    }
+
+    // A stray introducer from line noise must not swallow the console until an ST arrives:
+    // give up on an over-long string and print from here on.
+    if (m_state == State::DcsEntry || m_state == State::DcsParam || m_state == State::DcsIntermediate ||
+        m_state == State::DcsPassthrough || m_state == State::DcsIgnore || m_state == State::SosPmApcString) {
+        if (++m_stringLength > kMaxControlStringLength) {
+            qCDebug(lcTerminal) << "abandoning over-long control string";
+            clearSequence();
+            m_state = State::Ground; // cp is then handled by the Ground case below and printed
         }
     }
 
@@ -377,7 +426,7 @@ void AnsiParser::processCodePoint(char32_t cp)
             flushText();
             executeC0(cp);
         } else if (cp != 0x7F) {
-            appendCodePoint(m_textRun, cp);
+            appendCodePoint(m_textRun, mapCharset(cp));
         }
         break;
 
@@ -566,9 +615,31 @@ void AnsiParser::executeC0(char32_t cp)
     case 0x0D: // CR
         m_screen->carriageReturn();
         break;
-    default: // NUL, ENQ, SO, SI, XON, XOFF and the rest are ignored
+    case 0x0E: // SO (LS1): G1 becomes the active set
+        m_glCharset = 1;
+        break;
+    case 0x0F: // SI (LS0): back to G0
+        m_glCharset = 0;
+        break;
+    default: // NUL, ENQ, XON, XOFF and the rest are ignored
         break;
     }
+}
+
+char32_t AnsiParser::mapCharset(char32_t cp) const
+{
+    if (m_charset[m_glCharset] == kCharsetGraphics && cp >= 0x5F && cp <= 0x7E) {
+        return kDecSpecialGraphics[cp - 0x5F];
+    }
+    return cp;
+}
+
+void AnsiParser::resetCharsets()
+{
+    m_charset[0] = m_charset[1] = kCharsetAscii;
+    m_glCharset = 0;
+    m_savedCharset[0] = m_savedCharset[1] = kCharsetAscii;
+    m_savedGl = 0;
 }
 
 // ---- ESC sequences ------------------------------------------------------------------------
@@ -577,11 +648,17 @@ void AnsiParser::dispatchEscape(char32_t final)
 {
     if (m_intermediates.isEmpty()) {
         switch (final) {
-        case U'7': // DECSC
+        case U'7': // DECSC: the charset state is saved in a single parser-side slot (not per screen)
             m_screen->saveCursor();
+            m_savedCharset[0] = m_charset[0];
+            m_savedCharset[1] = m_charset[1];
+            m_savedGl = m_glCharset;
             break;
         case U'8': // DECRC
             m_screen->restoreCursor();
+            m_charset[0] = m_savedCharset[0];
+            m_charset[1] = m_savedCharset[1];
+            m_glCharset = m_savedGl;
             break;
         case U'D': // IND
             m_screen->index();
@@ -601,6 +678,7 @@ void AnsiParser::dispatchEscape(char32_t final)
         case U'c': // RIS
             m_screen->reset();
             m_lineFeedNewLine = false;
+            resetCharsets();
             setCursorKeyApplicationMode(false);
             setBracketedPaste(false);
             break;
@@ -630,10 +708,14 @@ void AnsiParser::dispatchEscape(char32_t final)
             alignmentPattern(); // DECALN
         }
         // ESC # 3 / 4 / 5 / 6 (double-height / double-width lines) are ignored.
-    } else if (inter == QLatin1Char('(') || inter == QLatin1Char(')') || inter == QLatin1Char('*') ||
-               inter == QLatin1Char('+') || inter == QLatin1Char('-') || inter == QLatin1Char('.') ||
-               inter == QLatin1Char('/')) {
-        // Character set designation (G0..G3): ignored, the display is always Unicode.
+    } else if (inter == QLatin1Char('(') || inter == QLatin1Char(')')) {
+        // SCS for G0 / G1: '0' and '2' (alternate ROM) select DEC Special Graphics; every other
+        // set (ASCII 'B', UK 'A', national replacement sets, `ESC ( % 5` ...) is treated as ASCII.
+        const bool graphics = m_intermediates.size() == 1 && (final == U'0' || final == U'2');
+        m_charset[inter == QLatin1Char('(') ? 0 : 1] = graphics ? kCharsetGraphics : kCharsetAscii;
+    } else if (inter == QLatin1Char('*') || inter == QLatin1Char('+') || inter == QLatin1Char('-') ||
+               inter == QLatin1Char('.') || inter == QLatin1Char('/')) {
+        // G2 / G3 designations and 96-character sets: ignored (never selected into GL).
     } else if (inter == QLatin1Char(' ') || inter == QLatin1Char('%')) {
         // S7C1T / S8C1T / ANSI conformance level, ESC % G / ESC % @ (UTF-8 selection): ignored.
     } else {
@@ -893,7 +975,16 @@ void AnsiParser::setMode(int mode, bool on, bool isPrivate)
         }
         break;
     case 1049:
-        m_screen->setAlternateScreen(on, true);
+        // xterm (srm_ALTBUF_CURSOR) always runs CursorSave/ClearScreen on set and
+        // CursorRestore on reset; only the buffer switch itself is guarded.
+        if (on && m_screen->alternateScreenActive()) {
+            m_screen->saveCursor();      // alternate-screen slot, like xterm's sc[whichBuf]
+            m_screen->eraseInDisplay(2); // ClearScreen: erase cells, cursor stays put
+        } else if (!on && !m_screen->alternateScreenActive()) {
+            m_screen->restoreCursor(); // primary slot; homes + resets attrs when nothing saved
+        } else {
+            m_screen->setAlternateScreen(on, true);
+        }
         break;
     case 2004:
         setBracketedPaste(on);
@@ -939,6 +1030,7 @@ void AnsiParser::softReset()
     m_screen->setScrollRegion(0, m_screen->rows() - 1);
     m_screen->moveCursorTo(c.row, c.col);
     m_lineFeedNewLine = false;
+    resetCharsets(); // xterm: DECSTR designates ASCII into G0..G3 and selects G0
     setCursorKeyApplicationMode(false);
     setBracketedPaste(false);
 }
@@ -1120,13 +1212,13 @@ void AnsiParser::collectParam(char32_t cp)
         m_subParams.append(QVector<int>());
     }
     if (cp == U';') {
-        if (m_params.size() >= kMaxParams) {
-            m_paramOverflow = true;
-        } else {
-            m_params.append(0);
-            m_subParams.append(QVector<int>());
-        }
         m_inSubParam = false;
+        if (m_paramOverflow || m_params.size() >= kMaxParams) {
+            m_paramOverflow = true; // extra parameters are ignored, never synthesized as 0
+            return;
+        }
+        m_params.append(0);
+        m_subParams.append(QVector<int>());
         return;
     }
     if (m_paramOverflow) {
@@ -1168,6 +1260,7 @@ void AnsiParser::clearSequence()
     m_oscString.clear();
     m_inSubParam = false;
     m_paramOverflow = false;
+    m_stringLength = 0;
 }
 
 QString AnsiParser::describeSequence(const QString& prefix, char32_t final) const

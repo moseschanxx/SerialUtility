@@ -39,6 +39,10 @@ SessionWidget* selectPortSession(MainWindow& window, const QString& port)
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
+    // Install first so Qt's own start-up warnings and everything MainWindow's constructor logs
+    // (quick-command file problems, font spec, translations, enumerator) reach the System Log
+    // dock: the handler buffers messages until the dock's viewer registers itself.
+    SystemLogViewer::installMessageHandler();
     QCoreApplication::setOrganizationName(QStringLiteral(APP_ORGANIZATION));
     QCoreApplication::setOrganizationDomain(QStringLiteral(APP_ORGANIZATION_DOMAIN));
     QCoreApplication::setApplicationName(QStringLiteral(APP_NAME));
@@ -77,7 +81,6 @@ int main(int argc, char* argv[])
     const bool connectNow = parser.isSet(connectOption);
 
     MainWindow window;
-    SystemLogViewer::installMessageHandler();
 
     qCInfo(lcApp) << "BuildAI Serial Utility" << APP_VERSION << APP_GIT_HASH << "Qt" << qVersion();
 

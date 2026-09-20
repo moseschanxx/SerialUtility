@@ -52,6 +52,7 @@ private slots:
     void startErrors();
     void rawReplayIsPaced();
     void unlimitedSpeed();
+    void unlimitedSpeedLargeFile();
     void pauseResumeStop();
     void loopReplay();
     void timestampedReplay();
@@ -120,6 +121,34 @@ void Tst_logreplayer::stripTimestamps()
              QByteArrayLiteral("\r\n"));
     // A raw byte stream survives (nothing to strip) apart from LF -> CRLF normalisation.
     QCOMPARE(LogReplayer::stripTimestamps(QByteArrayLiteral("a\r\nb\nc")), QByteArrayLiteral("a\r\nb\r\nc"));
+
+    // Prompt + per-keystroke TX + echo, as SessionLogger writes an interactive session: the
+    // bare '\n' it inserts before each TX line is synthetic and must not break the prompt.
+    QCOMPARE(LogReplayer::stripTimestamps(QByteArrayLiteral("[2026-09-20 10:00:00.000] [root@rv1106:~]# \n"
+                                                            "[2026-09-20 10:00:00.001] TX> l\n"
+                                                            "[2026-09-20 10:00:00.002] l\n"
+                                                            "[2026-09-20 10:00:00.003] TX> s\n"
+                                                            "[2026-09-20 10:00:00.004] s\n"
+                                                            "[2026-09-20 10:00:00.005] TX> \\r\n"
+                                                            "[2026-09-20 10:00:00.006] \r\n"
+                                                            "[2026-09-20 10:00:00.007] bin\r\n"
+                                                            "[2026-09-20 10:00:00.008] [root@rv1106:~]# ")),
+             QByteArrayLiteral("[root@rv1106:~]# ls\r\nbin\r\n[root@rv1106:~]# "));
+    // Whole command from the command input bar.
+    QCOMPARE(LogReplayer::stripTimestamps(QByteArrayLiteral("[2026-09-20 10:00:00.000] => \n"
+                                                            "[2026-09-20 10:00:00.001] TX> printenv\\r\n"
+                                                            "[2026-09-20 10:00:00.002] printenv\r\n")),
+             QByteArrayLiteral("=> printenv\r\n"));
+    // A real CRLF before a TX line is kept; a bare LF followed by a non-TX line is kept.
+    QCOMPARE(LogReplayer::stripTimestamps(QByteArrayLiteral("[2026-09-20 10:00:00.000] done\r\n"
+                                                            "[2026-09-20 10:00:00.001] TX> x\n"
+                                                            "[2026-09-20 10:00:00.002] y\n"
+                                                            "[2026-09-20 10:00:00.003] z")),
+             QByteArrayLiteral("done\r\ny\r\nz"));
+    // Synthetic break before a trailing TX line at end of file is dropped too.
+    QCOMPARE(LogReplayer::stripTimestamps(QByteArrayLiteral("[2026-09-20 10:00:00.000] # \n"
+                                                            "[2026-09-20 10:00:00.001] TX> q\n")),
+             QByteArrayLiteral("# "));
 }
 
 void Tst_logreplayer::standardSpeeds()
@@ -225,6 +254,24 @@ void Tst_logreplayer::unlimitedSpeed()
     QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 2000);
     QCOMPARE(collected.data, content);
     QCOMPARE(collected.chunks, 3);   // 4096 + 4096 + 1808
+    QCOMPARE(finished.first().first().toBool(), true);
+}
+
+void Tst_logreplayer::unlimitedSpeedLargeFile()
+{
+    // 256 chunks of 4 KiB. With a 20 ms tick this would take ~5.1 s; "Unlimited" must drive the
+    // timer once per event-loop iteration instead, so the whole file goes through well within 2 s.
+    const QByteArray content = QByteArray(1024 * 1024, 'u');
+    LogReplayer replayer;
+    ChunkCollector collected(replayer);
+    QSignalSpy finished(&replayer, &LogReplayer::finished);
+    LogReplayer::Options options;
+    options.filePath = writeFile(QStringLiteral("large.bin"), content);
+    options.bytesPerSecond = 0;
+    QVERIFY(replayer.start(options));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 2000);
+    QCOMPARE(collected.data.size(), 1024 * 1024);
+    QCOMPARE(collected.chunks, 256);
     QCOMPARE(finished.first().first().toBool(), true);
 }
 
@@ -352,6 +399,17 @@ void Tst_logreplayer::liveSpeedChange()
     QCOMPARE(collected.data.size(), 20000);
     replayer.setBytesPerSecond(-5);   // clamped
     QCOMPARE(replayer.options().bytesPerSecond, qint64(0));
+
+    // Paced -> Unlimited must also switch the timer interval live: 1 MiB at the 20 ms tick would
+    // need ~5 s even with 4 KiB chunks, so finishing within 2 s proves the zero interval applies.
+    options.filePath = writeFile(QStringLiteral("speed-large.bin"), QByteArray(1024 * 1024, 'S'));
+    options.bytesPerSecond = 1000;
+    QVERIFY(replayer.start(options));
+    QTRY_VERIFY_WITH_TIMEOUT(collected.chunks >= 1, 1000);
+    replayer.setBytesPerSecond(0);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 2000);
+    QCOMPARE(finished.last().first().toBool(), true);
+    QCOMPARE(collected.data.size(), 20000 + 1024 * 1024);
 }
 
 void Tst_logreplayer::emptyFile()

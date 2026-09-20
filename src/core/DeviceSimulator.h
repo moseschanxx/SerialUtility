@@ -33,8 +33,9 @@
  *    Chinese UTF-8 text), then "rv1106 login: ". Any user name is accepted; "Password: "
  *    is not echoed; then a busybox-like shell with prompt "[root@rv1106:~]# " and
  *    canonical line editing performed BY THE DEVICE (like a real tty): printable bytes are
- *    echoed, 0x7F/0x08 erase with "\b \b", Ctrl+U clears the line, Ctrl+C prints "^C" and
- *    a fresh prompt, Ctrl+L clears the screen (ESC[H ESC[2J) and reprints the prompt,
+ *    echoed, 0x7F/0x08 erase with "\b \b", Ctrl+U clears the line, Ctrl+C discards any
+ *    not-yet-sent output (like a tty INTR flush), prints "^C" and a fresh prompt, Ctrl+L
+ *    clears the screen (ESC[H ESC[2J) and reprints the prompt,
  *    Ctrl+D at an empty line logs out, Tab is ignored, "\r" executes the line (a following
  *    "\n" is swallowed), arrow keys are ignored. Commands (with realistic output):
  *      help, uname -a, cat /proc/cpuinfo, cat /proc/meminfo, cat /proc/version, free,
@@ -46,13 +47,16 @@
  *      spinner), chinese (a few lines of Chinese text mixed with ASCII), wide (box drawing
  *      + CJK alignment test), stty cols N rows M (acknowledged silently; "stty size"
  *      prints them), env, export, cat <file> for the fake files, sleep N, reboot
- *      (prints "The system is going down for reboot NOW!", then emits vanished(3000):
- *      the device is gone for 3 s and comes back booting), poweroff (vanished(-1): never
+ *      (prints "The system is going down for reboot NOW!" and the shutdown lines, and once
+ *      they have all been sent emits vanished(3000): the device is gone for 3 s and comes
+ *      back booting), poweroff (vanished(-1): never
  *      returns until the user reconnects manually), exit / logout (back to the login
  *      prompt). Unknown -> "-sh: <cmd>: not found". Output lines end with "\r\n".
  *  - UBoot ("SIM:uboot"): prints the U-Boot banner and "Hit any key to stop autoboot:  3"
  *    counting down once per second by overwriting the digit with "\b" (like real U-Boot).
- *    Any byte during the countdown stops it and shows the "=> " prompt (same line editing
+ *    The countdown begins only once the banner and the "3" have actually been sent to the
+ *    host (at low baud rates the banner takes seconds to stream). Any byte during the
+ *    countdown stops it and shows the "=> " prompt (same line editing
  *    as Linux). Commands: help, version, printenv, setenv <k> <v>, saveenv, bdinfo,
  *    mmc info, mmc list, md <addr>, reset (banner again -> countdown), boot / run bootcmd
  *    (prints "## Booting kernel ..." then switches to Linux behaviour: boot log + login).
@@ -73,8 +77,10 @@
  * Presence: after vanished(ms) the pseudo-port is reported absent by isPresent() for that
  * many milliseconds (a static per-port "down until" table), so SerialConnection's reconnect
  * timer sees the port disappear and reappear exactly like an unplugged/rebooted board.
- * ms < 0 means absent until markPresent(portName) is called (SerialConnection calls it
- * when the user explicitly opens the port again).
+ * ms < 0 means the device is powered off: it stays listed by entries()/isListed() (the
+ * USB-UART bridge is still there) but isPresent() reports it absent until
+ * markPresent(portName) is called, which SerialConnection::open() does on an explicit user
+ * open of that port.
  *
  * Thread affinity: GUI thread; pure Qt Core; unit-tested in tests/tst_devicesimulator.cpp.
  */
@@ -92,6 +98,9 @@ public:
     static QString description(Kind kind);                    ///< translated, e.g. "Simulated Rockchip Linux console"
     static QList<SerialPortEntry> entries();                  ///< all kinds, manufacturer "BuildAI Simulator", in the order above
     static bool isPresent(const QString& portName);           ///< false while "rebooting" (see vanished())
+    /// false only during a timed reboot; a powered-off device (forMs < 0) stays listed so the
+    /// user can reopen it (which powers it on)
+    static bool isListed(const QString& portName);
     static void markPresent(const QString& portName);
     static void markAbsent(const QString& portName, int forMs); ///< forMs < 0 = until markPresent()
 
@@ -135,9 +144,14 @@ private:
     {
         QByteArray bytes;
         int delayMs = 0;
+        /// Invoked once when the last byte of this segment has been handed to dataReady(),
+        /// or when flushOutput() drains it.
+        std::function<void()> onDelivered;
     };
 
     void emitText(const QString& text);                       ///< enqueue UTF-8 text (no newline conversion)
+    /// enqueue UTF-8 text and run `onDelivered` once its last byte reached the host
+    void emitTextThen(const QString& text, std::function<void()> onDelivered);
     void emitLine(const QString& line);                       ///< text + "\r\n"
     void emitLines(const QStringList& lines, int delayEveryNLines, int delayMs);
     void emitRaw(const QByteArray& bytes, int delayBeforeMs = 0);
@@ -167,6 +181,8 @@ private:
     void resetEnvironment();
     void runDelayed(int ms, std::function<void()> action);
     void cancelDelayed();
+    void discardPendingOutput();                              ///< drop all queued device->host bytes (tty INTR flush)
+    void scheduleVanishIfDrained();                           ///< after reboot(): vanish once the queue is empty
     int bytesPerTick() const;
     double temperature() const;
     QString resolvePath(const QString& path) const;
@@ -188,6 +204,8 @@ private:
     QMap<QString, QString> m_env;                             ///< Linux shell environment (sorted output)
     QMap<QString, QString> m_ubootEnv;                        ///< U-Boot environment (printenv is sorted)
     int m_countdown = 3;
+    int m_countdownGeneration = 0;                            ///< invalidates a stale "3" delivery marker
+    int m_vanishDownMs = 0;                                   ///< argument of the pending vanished()
     int m_cols = 80;
     int m_rows = 24;
     int m_escState = 0;                                       ///< ESC sequence swallowing state
@@ -197,6 +215,7 @@ private:
     bool m_ledOn = false;
     bool m_telemetry = false;
     bool m_started = false;
+    bool m_vanishPending = false;                             ///< reboot() waits for the output queue to drain
     bool m_uBootMode = false;   ///< UBoot kind currently at the "=>" prompt (vs booted into Linux)
     std::function<void()> m_delayedAction;
 };

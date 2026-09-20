@@ -2,6 +2,8 @@
 #include "ui_QuickCommandsDialog.h"
 
 #include <QApplication>
+#include <QBrush>
+#include <QColor>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -16,6 +18,7 @@
 #include <QKeySequence>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStyle>
 #include <QStyledItemDelegate>
 #include <utility>
 
@@ -120,6 +123,73 @@ bool readQuickCommandFile(const QString& path, QList<QuickCommand>& out, QString
     return !out.isEmpty();
 }
 
+/// Keys the terminal always turns into device bytes (or uses itself), whatever the modifiers
+/// short of Meta: F1-F12 plus the editing / navigation block of TerminalWidget's key map.
+bool isAlwaysClaimedByTerminal(int key)
+{
+    if (key >= Qt::Key_F1 && key <= Qt::Key_F12) {
+        return true;
+    }
+    switch (key) {
+    case Qt::Key_Tab:
+    case Qt::Key_Backtab:
+    case Qt::Key_Escape:
+    case Qt::Key_Backspace:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Insert:
+    case Qt::Key_Delete:
+    case Qt::Key_Home:
+    case Qt::Key_End:
+    case Qt::Key_Left:
+    case Qt::Key_Up:
+    case Qt::Key_Right:
+    case Qt::Key_Down:
+    case Qt::Key_PageUp:
+    case Qt::Key_PageDown:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Ctrl+<key> combinations the terminal sends as control bytes or handles as zoom shortcuts.
+bool isTerminalControlKey(int key)
+{
+    switch (key) {
+    case Qt::Key_0:
+    case Qt::Key_Space:
+    case Qt::Key_At:
+    case Qt::Key_BracketLeft:
+    case Qt::Key_Backslash:
+    case Qt::Key_BracketRight:
+    case Qt::Key_AsciiCircum:
+    case Qt::Key_Underscore:
+    case Qt::Key_Question:
+    case Qt::Key_Plus:
+    case Qt::Key_Equal:
+    case Qt::Key_Minus:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Ctrl+<key> combinations MainWindow owns (a quick-command shortcut would be ambiguous).
+bool isMainWindowTabShortcut(int key)
+{
+    switch (key) {
+    case Qt::Key_T:
+    case Qt::Key_W:
+    case Qt::Key_Comma:
+        return true;
+    default:
+        return false;
+    }
+}
+
+const QColor kUnsafeShortcutColor(0xC0, 0x60, 0x00);   // amber, readable on light and dark palettes
+
 } // namespace
 
 // ---------------------------------------------------------------------------------------
@@ -128,6 +198,36 @@ bool readQuickCommandFile(const QString& path, QList<QuickCommand>& out, QString
 QuickCommandModel::QuickCommandModel(QObject* parent)
     : QAbstractTableModel(parent)
 {
+}
+
+bool QuickCommandModel::isTerminalSafeShortcut(const QKeySequence& sequence)
+{
+    if (sequence.isEmpty() || sequence.count() != 1) {
+        return false;
+    }
+    const QKeyCombination combo = sequence[0];
+    const int key = combo.key();
+    const Qt::KeyboardModifiers mods = combo.keyboardModifiers();
+
+    if (mods.testFlag(Qt::MetaModifier)) {
+        return true;   // never intercepted by the terminal
+    }
+    if (isAlwaysClaimedByTerminal(key)) {
+        return false;   // F-keys and navigation keys, with or without Ctrl / Shift / Alt
+    }
+    if (mods.testFlag(Qt::AltModifier)) {
+        return false;   // Alt+<key> -> ESC + key; also Ctrl+Alt (AltGr) text
+    }
+    if (!mods.testFlag(Qt::ControlModifier)) {
+        return false;   // bare key / Shift+<key> is typed text
+    }
+    if (key >= Qt::Key_A && key <= Qt::Key_Z && !mods.testFlag(Qt::ShiftModifier)) {
+        return false;   // Ctrl+<letter> control byte (Ctrl+Shift+<letter> passes through)
+    }
+    if (isTerminalControlKey(key) || isMainWindowTabShortcut(key)) {
+        return false;
+    }
+    return true;   // e.g. Ctrl+1..9, Ctrl+Shift+1..9, Ctrl+Shift+<letter>, Ctrl+<other punctuation>
 }
 
 QList<QuickCommand> QuickCommandModel::commands() const
@@ -190,7 +290,7 @@ QVariant QuickCommandModel::data(const QModelIndex& index, int role) const
         break;
     case Group:
         if (role == Qt::DisplayRole) {
-            return cmd.group.isEmpty() ? tr("General") : cmd.group;
+            return QuickCommandStore::groupDisplayName(QuickCommandStore::effectiveGroup(cmd));
         }
         if (role == Qt::EditRole) {
             return cmd.group;
@@ -229,19 +329,44 @@ QVariant QuickCommandModel::data(const QModelIndex& index, int role) const
             return static_cast<int>(Qt::AlignCenter);
         }
         break;
-    case Shortcut:
-        if (role == Qt::DisplayRole) {
-            return cmd.shortcut.isEmpty() ? QString()
-                                          : QKeySequence::fromString(cmd.shortcut, QKeySequence::PortableText)
-                                                .toString(QKeySequence::NativeText);
-        }
+    case Shortcut: {
         if (role == Qt::EditRole) {
             return cmd.shortcut;
         }
+        if (role != Qt::DisplayRole && role != Qt::ToolTipRole && role != Qt::ForegroundRole
+            && role != Qt::DecorationRole) {
+            break;
+        }
+        const QKeySequence sequence =
+            cmd.shortcut.isEmpty() ? QKeySequence() : QKeySequence(cmd.shortcut, QKeySequence::PortableText);
+        // Warn, do not reject: the shortcut still fires while another widget (e.g. the command
+        // input) has focus, only the connected terminal swallows it.
+        const bool unsafe = !cmd.shortcut.isEmpty() && !isTerminalSafeShortcut(sequence);
+        if (role == Qt::DisplayRole) {
+            return cmd.shortcut.isEmpty() ? QString() : sequence.toString(QKeySequence::NativeText);
+        }
         if (role == Qt::ToolTipRole) {
-            return tr("Optional keyboard shortcut, e.g. Ctrl+1 or Alt+Shift+R.");
+            if (!unsafe) {
+                return tr("Optional keyboard shortcut, e.g. Ctrl+1 or Ctrl+Shift+2. While connected the terminal "
+                          "consumes plain keys, Alt+<key>, Ctrl+<letter>, Ctrl+0 and F1-F12; use Ctrl+<digit 1-9>, "
+                          "optionally with Shift.");
+            }
+            return tr("%1 is consumed by the connected terminal and will not trigger this command while the "
+                      "terminal has focus. Use Ctrl+<digit 1-9>, optionally with Shift.")
+                .arg(sequence.toString(QKeySequence::NativeText));
+        }
+        if (!unsafe) {
+            return {};
+        }
+        if (role == Qt::ForegroundRole) {
+            return QBrush(kUnsafeShortcutColor);
+        }
+        // DecorationRole: a warning glyph next to the flagged shortcut (needs a widget style).
+        if (qobject_cast<QApplication*>(QCoreApplication::instance()) != nullptr) {
+            return QApplication::style()->standardIcon(QStyle::SP_MessageBoxWarning);
         }
         break;
+    }
     case Tooltip:
         if (role == Qt::DisplayRole || role == Qt::EditRole) {
             return cmd.tooltip;

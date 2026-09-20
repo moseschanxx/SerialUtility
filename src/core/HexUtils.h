@@ -3,6 +3,8 @@
 #include <QByteArray>
 #include <QString>
 
+#include <functional>
+
 /**
  * Byte <-> text helpers used by the command input (hex send), the hex-dump view and the
  * session logger. Pure functions, fully unit-tested (tests/tst_hexutils.cpp).
@@ -44,6 +46,17 @@ QString printableAscii(const QByteArray& data);
  * `ok` semantics: on success *error (if given) is cleared.
  */
 QByteArray unescape(const QString& text, QString* error = nullptr);
+
+/**
+ * Same parsing as unescape(text, error), but the caller chooses how *text* becomes bytes:
+ * every run of literal characters and simple escapes (\n \r \t \0 \a \b \e \f \v \\ and
+ * \uHHHH, surrogate pairs kept intact) is passed to `encodeText` when it is flushed, while
+ * every \xHH is appended as exactly that byte and never goes through `encodeText`. This lets
+ * a session in a non-UTF-8 encoding transcode the text while "\xHH = this exact byte" holds.
+ * unescape(text, error) is this overload with `[](const QString& s) { return s.toUtf8(); }`.
+ */
+QByteArray unescape(const QString& text, const std::function<QByteArray(const QString&)>& encodeText,
+                    QString* error = nullptr);
 
 /// Inverse of unescape for display: control bytes become \xHH (or \r \n \t), printable
 /// ASCII stays, bytes >= 0x80 are decoded as UTF-8 when valid otherwise \xHH.

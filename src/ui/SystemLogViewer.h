@@ -30,6 +30,9 @@ Q_DECLARE_METATYPE(LogLevel)
  *   from any thread) and then calls the previous handler so messages still reach the
  *   debugger / stderr. QtDebugMsg -> Debug, QtInfoMsg -> Info, QtWarningMsg -> Warning,
  *   QtCriticalMsg/QtFatalMsg -> Error.
+ * - Messages that arrive while no instance is registered are buffered (bounded, oldest
+ *   dropped) with their emission timestamp and delivered when the next instance is set via
+ *   the constructor or setInstance(); this is what lets the dock show start-up diagnostics.
  * - A level filter combo (All / Info+ / Warning+ / Error) hides lower levels.
  * - Bounded to maxLines() (default 2000) entries.
  * - Buttons: Clear, Copy All, Save... (plain text).
@@ -43,7 +46,10 @@ public:
 
     static SystemLogViewer* instance();
     static void setInstance(SystemLogViewer* viewer);
-    /// Route Qt messages to the instance (call once from main() after creating the window).
+    /// Route Qt messages to the instance. Call once from main() before creating the window;
+    /// messages that arrive while no instance is registered are buffered (bounded, oldest
+    /// dropped) and delivered when the next instance is set via the constructor or
+    /// setInstance().
     static void installMessageHandler();
 
     int maxLines() const;
@@ -84,6 +90,11 @@ private:
     QString formatEntry(const Entry& entry) const;   ///< formatMessage() with the entry's own timestamp
     void rebuildView();                              ///< re-render m_entries through the level filter
     void trimDocument();                             ///< drop leading blocks beyond m_maxLines
+    /// appendCategorised() with an explicit timestamp (buffered start-up lines keep their emission time).
+    void appendEntry(const QDateTime& timestamp, LogLevel level, const QString& category, const QString& message);
+    /// Deliver messages buffered while no instance was registered to `target` (queued, in order).
+    /// Precondition: caller holds s_instanceMutex and target != nullptr.
+    static void flushPendingLocked(SystemLogViewer* target);
     QList<Entry> m_entries;                          ///< retained so the filter can be changed after the fact
     QLabel* m_filterLabel = nullptr;
 

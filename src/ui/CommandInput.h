@@ -24,7 +24,7 @@ class CommandHistory;
  *   Invalid hex / escape -> the field turns red, a tooltip shows the error, nothing is sent.
  *   The text is added to the CommandHistory (when set) and the field is cleared.
  * - Up/Down arrows navigate the history (CommandHistory::previous/next); Esc clears.
- * - Ctrl+L clears the field; the placeholder text explains the mode.
+ * - Ctrl+L clears the field; the placeholder text explains the current mode (plain / HEX / escapes).
  * - setEnabledForConnection(false) disables Send (typing stays possible).
  * - A QCompleter over the history entries is optional.
  */
