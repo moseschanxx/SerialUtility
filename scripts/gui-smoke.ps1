@@ -22,11 +22,15 @@
 #>
 param(
     [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress')][string]$Scenario,
-    [string]$Exe = (Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'dist\Release\bin\BuildAI-SerialUtility.exe'),
-    [string]$OutDir = (Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'build\gui-run'),
+    [string]$Exe = '',      # default: <repo>\dist\Release\bin\BuildAI-SerialUtility.exe
+    [string]$OutDir = '',   # default: <repo>\build\gui-run
     [string]$HardwarePort = 'COM6'
 )
 $ErrorActionPreference = 'Stop'
+$repoRoot = Split-Path -Parent $PSScriptRoot   # $PSScriptRoot is not usable inside param() defaults on PowerShell 5.1
+if (-not $Exe) { $Exe = Join-Path $repoRoot 'dist\Release\bin\BuildAI-SerialUtility.exe' }
+if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'build\gui-run' }
+if (-not (Test-Path $Exe)) { throw "Executable not found: $Exe (run scripts\build.ps1 -Config Release -Deploy first)" }
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 Add-Type @"
 using System; using System.Runtime.InteropServices;
