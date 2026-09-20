@@ -7,6 +7,7 @@
 #include <QDropEvent>
 #include <QFocusEvent>
 #include <QFontMetricsF>
+#include <QGlyphRun>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMenu>
@@ -861,6 +862,10 @@ bool TerminalWidget::findPrevious(const QString& needle, bool caseSensitive)
 
 void TerminalWidget::paintEvent(QPaintEvent* event)
 {
+    QElapsedTimer paintTimer;
+    paintTimer.start();
+    m_paintPosted = false;
+
     QPainter painter(viewport());
     const QRect clip = event->rect();
     painter.fillRect(clip, currentBackground());
@@ -881,6 +886,10 @@ void TerminalWidget::paintEvent(QPaintEvent* event)
     paintCursor(painter);
     // The screen's dirty state is consumed by performRepaint() when it posts the update, never
     // here: mutations that land between the two set fresh bits for the next coalesced pass.
+
+    // scheduleRepaint() sizes the coalescing window from these (see the class comment).
+    m_lastPaintMs = paintTimer.elapsed();
+    m_lastPaintEnd.start();
 }
 
 void TerminalWidget::paintLine(QPainter& painter, const Terminal::Line& line, int absoluteIndex, int y)
@@ -956,12 +965,16 @@ void TerminalWidget::paintRun(QPainter& painter, const Terminal::Line& line, int
     painter.setPen(fg);
     if (!blank) {
         const int fontIndex = (bold ? 1 : 0) | (attr.has(Terminal::Italic) ? 2 : 0);
-        painter.setFont(m_renderFonts[fontIndex]);
         const qreal baseline = y + m_cellAscent;
         if (ascii && !wide) {
-            painter.drawText(QPointF(rect.x(), baseline), QString::fromUcs4(glyphs.constData(), glyphs.size()));
+            // Plain text: pre-shaped glyph run, one cell per glyph (no itemization/shaping per run).
+            if (!drawAsciiRun(painter, glyphs, fontIndex, QPointF(rect.x(), baseline))) {
+                painter.setFont(m_renderFonts[fontIndex]);
+                painter.drawText(QPointF(rect.x(), baseline), QString::fromUcs4(glyphs.constData(), glyphs.size()));
+            }
         } else {
             // Glyphs from fallback fonts do not share the cell advance: place each one.
+            painter.setFont(m_renderFonts[fontIndex]);
             qreal x = rect.x();
             for (const char32_t ch : glyphs) {
                 if (ch != U' ') {
@@ -979,6 +992,40 @@ void TerminalWidget::paintRun(QPainter& painter, const Terminal::Line& line, int
         const int sy = qMax(y, y + m_cellAscent - m_strikePos);
         painter.drawLine(rect.left(), sy, rect.right(), sy);
     }
+}
+
+bool TerminalWidget::drawAsciiRun(QPainter& painter, const QVarLengthArray<char32_t, 256>& glyphs, int fontIndex,
+                                  const QPointF& origin)
+{
+    const GlyphCache& cache = m_glyphCache[fontIndex];
+    if (!cache.valid) {
+        return false;
+    }
+    QVarLengthArray<quint32, 256> indexes;
+    QVarLengthArray<QPointF, 256> positions;
+    for (int i = 0; i < glyphs.size(); ++i) {
+        const char32_t ch = glyphs.at(i);
+        if (ch == U' ') {
+            continue;   // nothing to draw
+        }
+        if (ch < 0x20 || ch > 0x7E) {
+            return false;
+        }
+        const quint32 index = cache.glyphs[ch - 0x20];
+        if (index == 0) {
+            return false;   // the font has no glyph: drawText picks a fallback font
+        }
+        indexes.append(index);
+        positions.append(QPointF(i * m_cellWidth, 0));
+    }
+    if (indexes.isEmpty()) {
+        return true;
+    }
+    QGlyphRun run;
+    run.setRawFont(cache.rawFont);
+    run.setRawData(indexes.constData(), positions.constData(), static_cast<int>(indexes.size()));
+    painter.drawGlyphRun(origin, run);
+    return true;
 }
 
 void TerminalWidget::paintCursor(QPainter& painter)
@@ -1083,6 +1130,38 @@ void TerminalWidget::updateCellMetrics()
         m_renderFonts[i] = render;
         m_renderFonts[i].setBold((i & 1) != 0);
         m_renderFonts[i].setItalic((i & 2) != 0);
+    }
+    updateGlyphCache();
+}
+
+void TerminalWidget::updateGlyphCache()
+{
+    static const QString printable = [] {
+        QString s;
+        for (char16_t c = 0x20; c <= 0x7E; ++c) {
+            s.append(QChar(c));
+        }
+        return s;
+    }();
+    for (int i = 0; i < 4; ++i) {
+        GlyphCache& cache = m_glyphCache[i];
+        cache.valid = false;
+        // The raw font of the font the painter would resolve for the viewport; the letter spacing
+        // is irrelevant because drawAsciiRun() places every glyph on its cell itself.
+        QFont font(m_renderFonts[i], viewport());
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
+        cache.rawFont = QRawFont::fromFont(font);
+        if (!cache.rawFont.isValid()) {
+            continue;
+        }
+        const QList<quint32> indexes = cache.rawFont.glyphIndexesForString(printable);
+        if (indexes.size() != printable.size()) {
+            continue;
+        }
+        for (qsizetype c = 0; c < indexes.size(); ++c) {
+            cache.glyphs[c] = indexes.at(c);
+        }
+        cache.valid = true;
     }
 }
 
@@ -1954,7 +2033,17 @@ void TerminalWidget::scheduleRepaint()
         return;
     }
     m_repaintPending = true;
-    m_repaintTimer.start(kRepaintIntervalMs);
+    // Coalescing window, measured from the end of the previous paint: at least
+    // kRepaintIntervalMs, and at least as long as that paint took, so a paint that outlasts the
+    // interval (large window, slow blit) still leaves the parser half of the wall time instead
+    // of turning every chunk into a frame. After an idle period the change is painted at once.
+    qint64 delay = kRepaintIntervalMs;
+    if (m_lastPaintEnd.isValid()) {
+        const qint64 window = qMax<qint64>(kRepaintIntervalMs, m_lastPaintMs);
+        const qint64 since = m_paintPosted ? 0 : m_lastPaintEnd.elapsed();
+        delay = qBound<qint64>(0, window - since, window);
+    }
+    m_repaintTimer.start(static_cast<int>(delay));
 }
 
 void TerminalWidget::scheduleFullRepaint()
@@ -1976,6 +2065,7 @@ void TerminalWidget::performRepaint()
     }
     if (all) {
         m_screen->clearDirty();
+        m_paintPosted = true;
         viewport()->update();
         return;
     }
@@ -1997,5 +2087,6 @@ void TerminalWidget::performRepaint()
     if (region.isEmpty()) {
         return;
     }
+    m_paintPosted = true;
     viewport()->update(region);
 }

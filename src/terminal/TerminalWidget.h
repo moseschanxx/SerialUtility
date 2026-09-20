@@ -5,8 +5,10 @@
 #include <QTimer>
 #include <QPoint>
 #include <QByteArray>
+#include <QRawFont>
 #include <QStringEncoder>
 #include <QElapsedTimer>
+#include <QVarLengthArray>
 #include <memory>
 
 #include "terminal/TerminalTypes.h"
@@ -26,9 +28,13 @@ class AnsiParser;
  * Rendering
  *  - Monospace font; cell size = horizontalAdvance("M") x lineSpacing (wide chars = 2 cells).
  *  - Paints only the rows the screen marked dirty (or everything after a scroll/resize; the
- *    view repaints everything while scrolled up); repaints are coalesced with a 16 ms
- *    single-shot timer so 1.5 Mbaud boot logs do not starve the event loop. Scrollbar-driven
- *    repaints (follow-output and user scrolling) go through the same coalescer.
+ *    view repaints everything while scrolled up); repaints are coalesced with a single-shot
+ *    timer so 1.5 Mbaud boot logs do not starve the event loop: the next paint runs no sooner
+ *    than 16 ms after the previous one ended and no sooner than that paint took, so painting
+ *    never claims more than half of the wall time (the first change after an idle period is
+ *    painted right away). Scrollbar-driven repaints (follow-output and user scrolling) go
+ *    through the same coalescer. Runs of ASCII cells are drawn as pre-shaped glyph runs from a
+ *    per-font glyph-index cache (no text shaping per run); anything else goes through drawText.
  *  - Vertical scrollbar: range 0..scrollbackSize(), value = first visible absolute line.
  *    While the view is at the bottom it follows new output; scrolling up freezes it, including
  *    while a full scrollback drops its oldest lines (the scrollbar value is shifted so the same
@@ -220,6 +226,11 @@ private:
     void restartBlink();                      ///< show the cursor and restart the blink phase (on input)
     QColor currentBackground() const;         ///< palette background, or the bell-flash colour
     void paintRun(QPainter& painter, const Terminal::Line& line, int from, int to, int y, bool selected);
+    /// Draw `glyphs` (one per cell, U+0020..U+007E only) as a glyph run from m_glyphCache[fontIndex]
+    /// with the pen already set; false when the cache cannot serve the run (caller uses drawText).
+    bool drawAsciiRun(QPainter& painter, const QVarLengthArray<char32_t, 256>& glyphs, int fontIndex,
+                      const QPointF& origin);
+    void updateGlyphCache();                  ///< m_glyphCache from m_renderFonts (after updateCellMetrics)
     QRect cursorRect() const;                 ///< viewport rect of the cursor cell (meaningful when at bottom)
     void setSelectionRange(int anchorLine, int anchorCol, int endLine, int endCol);   ///< inclusive cells
     void selectWordAt(int absoluteLine, int col);
@@ -263,7 +274,19 @@ private:
     QString m_lastFind;
 
     // ---- Implementation state (private; added by the term-widget package) --------------
+    /// Glyph indexes of the printable ASCII range for one render font, so runs of plain text are
+    /// drawn without shaping (QPainter::drawGlyphRun); 0 = the font has no glyph, use drawText.
+    struct GlyphCache
+    {
+        QRawFont rawFont;
+        quint32 glyphs[0x7F - 0x20] = {};     ///< index = code point - 0x20
+        bool valid = false;
+    };
     QFont m_renderFonts[4];                   ///< regular, bold, italic, bold+italic; letter-spaced to the cell
+    GlyphCache m_glyphCache[4];               ///< same order as m_renderFonts
+    QElapsedTimer m_lastPaintEnd;             ///< since the end of the last paintEvent(); invalid before the first
+    qint64 m_lastPaintMs = 0;                 ///< duration of the last paintEvent()
+    bool m_paintPosted = false;               ///< performRepaint() posted an update no paintEvent() has consumed yet
     int m_underlinePos = 1;                   ///< px below the baseline
     int m_strikePos = 4;                      ///< px above the baseline
     QElapsedTimer m_clickTimer;               ///< multi-click detection (double -> word, triple -> line)

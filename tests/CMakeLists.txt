@@ -47,3 +47,5 @@ su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)
 su_add_gui_test(tst_sessionwidget  tst_sessionwidget.cpp)
 su_add_gui_test(tst_mainwindow     tst_mainwindow.cpp)
 su_add_gui_test(tst_dialogs        tst_dialogs.cpp)
+# RX throughput / responsiveness (prints the measured MB/s; asserts generous floors only).
+su_add_gui_test(tst_terminalperf   tst_terminalperf.cpp)

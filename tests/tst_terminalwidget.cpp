@@ -260,6 +260,7 @@ private slots:
     void hexBytesPerLine();
     void hexTimestampsToggle();
     void hexEmptyChunkIgnored();
+    void hexHiddenViewDefersRendering();
     void hexTrimKeepsScrolledUpContent();
 
 private:
@@ -1944,6 +1945,7 @@ void Tst_terminalwidget::hexRxTxMarkers()
     QCOMPARE(view.maxLines(), 5000);
 
     view.appendReceived("Hello");
+    view.flushPending();   // the view is hidden: chunks are queued until shown / flushed
     QStringList lines = view.toPlainText().split(QLatin1Char('\n'));
     QCOMPARE(lines.size(), qsizetype(2));
     const QRegularExpression rxHeader(QStringLiteral("^\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\] RX 5 bytes$"));
@@ -1953,6 +1955,7 @@ void Tst_terminalwidget::hexRxTxMarkers()
     QVERIFY(lines.at(1).endsWith(QStringLiteral("|Hello|")));
 
     view.appendSent("\r\nOK");
+    view.flushPending();
     lines = view.toPlainText().split(QLatin1Char('\n'));
     QCOMPARE(lines.size(), qsizetype(4));
     const QRegularExpression txHeader(QStringLiteral("^\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\] TX 4 bytes$"));
@@ -1964,6 +1967,7 @@ void Tst_terminalwidget::hexRxTxMarkers()
 
     // Offsets restart at 0 for every chunk and continue within a chunk.
     view.appendReceived(QByteArray(40, 'A'));
+    view.flushPending();
     lines = view.toPlainText().split(QLatin1Char('\n'));
     QCOMPARE(lines.size(), qsizetype(8));
     QVERIFY(lines.at(5).startsWith(QStringLiteral("00000000  41 41")));
@@ -1977,6 +1981,7 @@ void Tst_terminalwidget::hexColoursDifferForRxTx()
     HexDumpView view;
     view.appendReceived("rx");
     view.appendSent("tx");
+    view.flushPending();
     const QTextDocument* doc = view.document();
     QCOMPARE(doc->blockCount(), 4);
     const QColor rxHeader = firstFragmentColor(doc->findBlockByNumber(0));
@@ -1999,6 +2004,7 @@ void Tst_terminalwidget::hexMaxLinesTrimming()
     for (int i = 0; i < 100; ++i) {
         view.appendReceived(QByteArray(16, static_cast<char>(i))); // header + one hex line
     }
+    view.flushPending();
     const int blocks = view.document()->blockCount();
     QVERIFY2(blocks <= 40 + 2, qPrintable(QStringLiteral("%1 blocks").arg(blocks)));
     QVERIFY(blocks >= 38);
@@ -2015,6 +2021,7 @@ void Tst_terminalwidget::hexMaxLinesTrimming()
     // A single chunk larger than the limit is trimmed to its tail.
     view.setMaxLines(3);
     view.appendSent(QByteArray(160, 'Z')); // header + 10 hex lines
+    view.flushPending();
     QVERIFY(view.document()->blockCount() <= 3 + 2);
     QVERIFY(view.document()->lastBlock().text().startsWith(QStringLiteral("00000090")));
 
@@ -2028,6 +2035,7 @@ void Tst_terminalwidget::hexClearAll()
     HexDumpView view;
     view.appendReceived("abc");
     view.appendSent("def");
+    view.flushPending();
     QCOMPARE(view.document()->blockCount(), 4);
     view.clearAll();
     QVERIFY(view.toPlainText().isEmpty());
@@ -2035,6 +2043,7 @@ void Tst_terminalwidget::hexClearAll()
     // No leading empty block after a clear.
     view.setShowTimestamps(false);
     view.appendReceived("xy");
+    view.flushPending();
     QCOMPARE(view.document()->blockCount(), 2);
     QCOMPARE(view.document()->firstBlock().text(), QStringLiteral("RX 2 bytes"));
 }
@@ -2048,6 +2057,7 @@ void Tst_terminalwidget::hexBytesPerLine()
     view.setBytesPerLine(8);
     QCOMPARE(view.bytesPerLine(), 8);
     view.appendReceived(data);
+    view.flushPending();
     QStringList lines = view.toPlainText().split(QLatin1Char('\n'));
     QCOMPARE(lines.size(), qsizetype(3));
     QCOMPARE(lines.mid(1).join(QLatin1Char('\n')), HexUtils::hexDump(data, 0, 8));
@@ -2057,6 +2067,7 @@ void Tst_terminalwidget::hexBytesPerLine()
     view.setBytesPerLine(32);
     QCOMPARE(view.bytesPerLine(), 32);
     view.appendReceived(data + data);
+    view.flushPending();
     lines = view.toPlainText().split(QLatin1Char('\n'));
     QCOMPARE(lines.size(), qsizetype(2));
     QCOMPARE(lines.at(1), HexUtils::hexDump(data + data, 0, 32));
@@ -2078,9 +2089,11 @@ void Tst_terminalwidget::hexTimestampsToggle()
     view.setShowTimestamps(false);
     QVERIFY(!view.showTimestamps());
     view.appendReceived("AB");
+    view.flushPending();
     QCOMPARE(view.document()->firstBlock().text(), QStringLiteral("RX 2 bytes"));
     view.setShowTimestamps(true);
     view.appendSent("CD");
+    view.flushPending();
     const QString header = view.document()->findBlockByNumber(2).text();
     QVERIFY2(header.startsWith(QLatin1Char('[')), qPrintable(header));
     QVERIFY(header.endsWith(QStringLiteral("] TX 2 bytes")));
@@ -2091,6 +2104,63 @@ void Tst_terminalwidget::hexEmptyChunkIgnored()
     HexDumpView view;
     view.appendReceived(QByteArray());
     view.appendSent(QByteArray());
+    view.flushPending();
+    QVERIFY(view.toPlainText().isEmpty());
+    QCOMPARE(view.document()->blockCount(), 1);
+}
+
+void Tst_terminalwidget::hexHiddenViewDefersRendering()
+{
+    // A hidden view queues chunks instead of touching its document (DESIGN.md 4.7): during a boot
+    // log the terminal page is in front, and a QTextDocument insertion per 4 KB chunk costs more
+    // than the whole terminal pipeline. The queue keeps only what maxLines() can show.
+    HexDumpView view;
+    view.setShowTimestamps(false);
+    view.setMaxLines(6);
+    QVERIFY(!view.isVisible());
+    for (int i = 0; i < 50; ++i) {
+        view.appendReceived(QByteArray(16, static_cast<char>('A' + i % 26)));   // header + one hex line
+    }
+    QCOMPARE(view.document()->blockCount(), 1);   // untouched
+    QVERIFY(view.toPlainText().isEmpty());
+
+    // flushPending() renders exactly what rendering every chunk on arrival would have left:
+    // the last three chunks (i = 47, 48, 49 -> 'V', 'W', 'X').
+    view.flushPending();
+    QCOMPARE(view.document()->blockCount(), 6);
+    QCOMPARE(view.document()->firstBlock().text(), QStringLiteral("RX 16 bytes"));
+    QString text = view.toPlainText();
+    QVERIFY2(text.contains(QStringLiteral("|VVVVVVVVVVVVVVVV|")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("|XXXXXXXXXXXXXXXX|")), qPrintable(text));
+    QVERIFY2(!text.contains(QStringLiteral("|UUUUUUUUUUUUUUUU|")), qPrintable(text));   // i = 46: trimmed
+    view.flushPending();   // nothing queued: no-op
+    QCOMPARE(view.document()->blockCount(), 6);
+
+    // Formatting is captured on arrival: a chunk queued without timestamps stays that way even
+    // when the option changes before it is rendered.
+    view.appendSent("late");
+    view.setShowTimestamps(true);
+    view.appendSent("later");
+    QCOMPARE(view.document()->blockCount(), 6);
+    // Showing the view renders the queue before the first paint (4 blocks in, trimmed back to 6).
+    view.resize(600, 200);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    QCOMPARE(view.document()->blockCount(), 6);
+    text = view.toPlainText();
+    QVERIFY2(text.contains(QStringLiteral("\nTX 4 bytes\n")), qPrintable(text));   // no timestamp
+    QVERIFY2(text.contains(QStringLiteral("] TX 5 bytes\n")), qPrintable(text));   // timestamped
+    QVERIFY(view.verticalScrollBar()->value() == view.verticalScrollBar()->maximum());
+
+    // Shown: rendered on arrival, as before.
+    view.appendReceived("now");
+    QVERIFY(view.toPlainText().contains(QStringLiteral("RX 3 bytes")));
+
+    // clearAll() drops the queue as well as the document.
+    view.hide();
+    view.appendReceived("gone");
+    view.clearAll();
+    view.flushPending();
     QVERIFY(view.toPlainText().isEmpty());
     QCOMPARE(view.document()->blockCount(), 1);
 }

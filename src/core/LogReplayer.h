@@ -28,9 +28,10 @@
  *    detectFormat() recognises this format from the first line.
  *
  * Pacing: bytesPerSecond > 0 streams in chunks every ~20 ms (baud / 10 bytes per second,
- * so "--speed 115200" replays at the real line rate); 0 = as fast as the event loop allows
- * (4 KB chunks from a zero-interval timer, one per event-loop iteration, still asynchronous
- * so the UI stays responsive).
+ * so "--speed 115200" replays at the real line rate); 0 = as fast as the event loop allows:
+ * 4 KB chunks from a zero-interval timer, as many per event-loop iteration as fit into an
+ * ~8 ms slice, then the loop gets its turn (window events, the terminal's coalesced repaint),
+ * so the UI stays responsive without one iteration per chunk.
  *
  * Emits chunkReady() for every chunk (SessionWidget feeds it to the terminal, hex view and
  * logger exactly like received data), progress() after every chunk and finished() exactly

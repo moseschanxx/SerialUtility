@@ -1942,18 +1942,42 @@ void Tst_ansiparser::progressLines()
 
 void Tst_ansiparser::contentChangedBatching()
 {
+    // feed() wraps the chunk in one TerminalScreen batch: contentChanged() fires once per chunk
+    // that changed anything, however many text runs and controls it contains (DESIGN.md 4.7).
     Term t(5, 40);
     QSignalSpy content(&t.screen, &TerminalScreen::contentChanged);
+    QSignalSpy moved(&t.screen, &TerminalScreen::cursorMoved);
     t.feed("hello world");
     QCOMPARE(content.count(), 1); // one putText() for the whole run
+    QCOMPARE(moved.count(), 1);
     t.feed("\033[1;31m");
     QCOMPARE(content.count(), 1); // attribute changes alone do not repaint
     t.feed("\033[2J");
-    QCOMPARE(content.count(), 2);
+    QCOMPARE(content.count(), 2); // ED leaves the cursor where it is (column 11)
+    QCOMPARE(moved.count(), 1);
     t.feed("abc\033[32mdef");
-    QCOMPARE(content.count(), 4); // two runs
-    t.feed(QByteArray(1000, 'x'));
+    QCOMPARE(content.count(), 3); // two runs, one chunk
+    QCOMPARE(moved.count(), 2);
+    QCOMPARE(t.row(0).trimmed(), u"abcdef"_s);
+    QVERIFY(t.screen.line(0).cells[13].attr != t.screen.line(0).cells[14].attr); // 'c' red, 'd' green
+    t.feed(QByteArray(1000, 'x')); // wraps over 25 more rows and scrolls: still one emission each
+    QCOMPARE(content.count(), 4);
+    QCOMPARE(moved.count(), 3);
+    QSignalSpy scrollback(&t.screen, &TerminalScreen::scrollbackChanged);
+    t.feed("\r\n\r\n\r\n");
     QCOMPARE(content.count(), 5);
+    QCOMPARE(moved.count(), 4);
+    QCOMPARE(scrollback.count(), 1); // three pushes, one signal, carrying the final size
+    QCOMPARE(scrollback.last().at(0).toInt(), t.screen.scrollbackSize());
+    // A chunk that moves the cursor away and back reports no cursor move.
+    t.feed("\033[s\033[HX\033[u");
+    QCOMPARE(content.count(), 6);
+    QCOMPARE(moved.count(), 4);
+    QCOMPARE(t.row(0).left(1), u"X"_s);
+    // Without a batch (direct model calls) every operation still emits on its own.
+    t.screen.putText(u"y"_s);
+    QCOMPARE(content.count(), 7);
+    QCOMPARE(moved.count(), 5);
 }
 
 void Tst_ansiparser::highVolumeOutput()

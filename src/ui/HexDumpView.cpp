@@ -3,10 +3,14 @@
 #include <QFont>
 #include <QPalette>
 #include <QScrollBar>
+#include <QShowEvent>
+#include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextOption>
 #include <QTime>
+
+#include <utility>
 
 #include "core/HexUtils.h"
 
@@ -88,57 +92,106 @@ int HexDumpView::maxLines() const
 void HexDumpView::setMaxLines(int lines)
 {
     m_maxLines = qMax(1, lines);
+    dropUnreachablePending();
     trimToMaxLines();
 }
 
 void HexDumpView::appendReceived(const QByteArray& bytes)
 {
-    appendChunk(bytes, false);
+    append(bytes, false);
 }
 
 void HexDumpView::appendSent(const QByteArray& bytes)
 {
-    appendChunk(bytes, true);
+    append(bytes, true);
 }
 
 void HexDumpView::clearAll()
 {
+    m_pending.clear();
+    m_pendingLines = 0;
     clear();
 }
 
-void HexDumpView::appendChunk(const QByteArray& bytes, bool tx)
+void HexDumpView::flushPending()
 {
-    if (bytes.isEmpty()) {
+    if (m_pending.isEmpty()) {
         return;
     }
     QScrollBar* bar = verticalScrollBar();
     const bool wasAtBottom = bar->value() >= bar->maximum();
 
-    QString header;
-    if (m_showTimestamps) {
-        header += QLatin1Char('[');
-        header += QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-        header += QStringLiteral("] ");
-    }
-    header += tx ? QStringLiteral("TX ") : QStringLiteral("RX ");
-    header += tr("%n bytes", nullptr, static_cast<int>(bytes.size()));
-
     QTextCursor cursor(document());
     cursor.movePosition(QTextCursor::End);
     cursor.beginEditBlock();
-    if (!document()->isEmpty()) {
-        cursor.insertBlock();
+    for (const PendingChunk& chunk : std::as_const(m_pending)) {
+        renderChunk(cursor, chunk);
     }
-    cursor.insertText(header, m_headerFormat);
-    cursor.insertBlock();
-    // hexDump() joins its lines with '\n', which insertText turns into blocks.
-    cursor.insertText(HexUtils::hexDump(bytes, 0, m_bytesPerLine), tx ? m_txFormat : m_rxFormat);
     cursor.endEditBlock();
+    m_pending.clear();
+    m_pendingLines = 0;
 
     trimToMaxLines();
 
     if (wasAtBottom) {
         bar->setValue(bar->maximum());
+    }
+}
+
+void HexDumpView::showEvent(QShowEvent* event)
+{
+    // Before the first paint, and before the base class adjusts the scrollbars to the content.
+    flushPending();
+    QPlainTextEdit::showEvent(event);
+}
+
+void HexDumpView::append(const QByteArray& bytes, bool tx)
+{
+    if (bytes.isEmpty()) {
+        return;
+    }
+    // Everything the rendering depends on is captured now, so a chunk rendered later (hidden
+    // view) comes out exactly as it would have on arrival.
+    PendingChunk chunk;
+    if (m_showTimestamps) {
+        chunk.header += QLatin1Char('[');
+        chunk.header += QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+        chunk.header += QStringLiteral("] ");
+    }
+    chunk.header += tx ? QStringLiteral("TX ") : QStringLiteral("RX ");
+    chunk.header += tr("%n bytes", nullptr, static_cast<int>(bytes.size()));
+    chunk.bytes = bytes;
+    chunk.bytesPerLine = m_bytesPerLine;
+    chunk.tx = tx;
+    chunk.lines = 1 + static_cast<int>((bytes.size() + m_bytesPerLine - 1) / m_bytesPerLine);
+
+    m_pendingLines += chunk.lines;
+    m_pending.append(std::move(chunk));
+    dropUnreachablePending();
+    if (isVisible()) {
+        flushPending();   // shown: render on arrival, as always
+    }
+}
+
+void HexDumpView::renderChunk(QTextCursor& cursor, const PendingChunk& chunk)
+{
+    if (!document()->isEmpty()) {
+        cursor.insertBlock();
+    }
+    cursor.insertText(chunk.header, m_headerFormat);
+    cursor.insertBlock();
+    // hexDump() joins its lines with '\n', which insertText turns into blocks.
+    cursor.insertText(HexUtils::hexDump(chunk.bytes, 0, chunk.bytesPerLine), chunk.tx ? m_txFormat : m_rxFormat);
+}
+
+void HexDumpView::dropUnreachablePending()
+{
+    // The oldest queued chunk can go while the rest still fills maxLines() blocks on its own:
+    // trimToMaxLines() would remove every block it rendered anyway. The newest chunk always stays,
+    // however large (its tail survives the trim, like an oversized chunk rendered on arrival).
+    while (m_pending.size() > 1 && m_pendingLines - m_pending.constFirst().lines >= m_maxLines) {
+        m_pendingLines -= m_pending.constFirst().lines;
+        m_pending.removeFirst();
     }
 }
 
@@ -150,9 +203,12 @@ void HexDumpView::trimToMaxLines()
     }
     QScrollBar* bar = verticalScrollBar();
     const int oldValue = bar->value();
+    // Select everything before the first block that stays. findBlockByNumber() is a tree lookup;
+    // stepping NextBlock `excess` times would lay out (shape) every block on the way.
+    const QTextBlock keep = document()->findBlockByNumber(excess);
     QTextCursor cursor(document());
     cursor.movePosition(QTextCursor::Start);
-    cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor, excess);
+    cursor.setPosition(keep.position(), QTextCursor::KeepAnchor);
     cursor.removeSelectedText();
     // QPlainTextEdit remembers the first visible line as a block *number* (see
     // QPlainTextEditPrivate::append(), which does topBlock-- for the same reason). Removing blocks

@@ -455,6 +455,15 @@ void TerminalScreen::notifyChanged(const Cursor& before)
         markDirty(m_cursor.row);
     }
     m_dirty = true;
+    if (m_batchDepth > 0) {
+        m_batchChanged = true;   // endBatch() emits once for the whole batch
+        return;
+    }
+    emitChanged(moved);
+}
+
+void TerminalScreen::emitChanged(bool moved)
+{
     if (m_scrollbackDirty) {
         m_scrollbackDirty = false;
         emit scrollbackChanged(scrollbackSize());
@@ -463,6 +472,26 @@ void TerminalScreen::notifyChanged(const Cursor& before)
     if (moved) {
         emit cursorMoved(m_cursor.row, m_cursor.col);
     }
+}
+
+void TerminalScreen::beginBatch()
+{
+    if (m_batchDepth++ == 0) {
+        m_batchCursor = m_cursor;
+        m_batchChanged = false;
+    }
+}
+
+void TerminalScreen::endBatch()
+{
+    if (m_batchDepth <= 0) {
+        return;
+    }
+    if (--m_batchDepth > 0 || !m_batchChanged) {
+        return;
+    }
+    m_batchChanged = false;
+    emitChanged(m_batchCursor.row != m_cursor.row || m_batchCursor.col != m_cursor.col);
 }
 
 // ---- Attribute / character output ---------------------------------------------------------

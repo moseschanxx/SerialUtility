@@ -92,6 +92,16 @@ public:
     QBitArray dirtyRows() const;       ///< size rows(); meaningful when !allDirty()
     void clearDirty();
 
+    // ---- Batching (added at integration for the high-rate RX path, DESIGN.md 4.7) -------
+    /// Group many mutating calls: AnsiParser::feed() wraps every chunk in one batch. The
+    /// operations still update the grid, the cursor and the dirty rows immediately, but
+    /// contentChanged(), scrollbackChanged() and cursorMoved() are held back and emitted once
+    /// from the outermost endBatch() (cursorMoved only when the cursor ended up somewhere else
+    /// than it was at beginBatch()). bellRequested(), titleChanged() and sizeChanged() are not
+    /// deferred. Nestable; outside a batch every public call emits as documented above.
+    void beginBatch();
+    void endBatch();
+
     // ---- Attribute / character output ----------------------------------------------
     void setCurrentAttributes(const Terminal::Attributes& attr);
     void resetAttributes();            ///< SGR 0
@@ -197,7 +207,8 @@ private:
     int clampRelativeRow(int dRow) const;
 
     // Internal (non-emitting) helpers so that every public call emits contentChanged() once.
-    void notifyChanged(const Terminal::Cursor& before);    ///< emits contentChanged/cursorMoved/scrollbackChanged
+    void notifyChanged(const Terminal::Cursor& before);    ///< emits contentChanged/cursorMoved/scrollbackChanged (or defers them to endBatch())
+    void emitChanged(bool moved);                          ///< the emissions of notifyChanged()
     void doLineFeed();                                     ///< lineFeed() without signals
     void doPutChar(char32_t codePoint);                    ///< putChar() without signals
     void eraseCells(int row, int from, int to);            ///< [from, to) -> blankCell(); repairs split wide chars
@@ -231,4 +242,7 @@ private:
     QBitArray m_dirtyRows;
     bool m_scrollbackDirty = false;   ///< scrollbackChanged() pending for the current public call
     qint64 m_scrollbackDropped = 0;   ///< see scrollbackDropped()
+    int m_batchDepth = 0;             ///< beginBatch() nesting
+    Terminal::Cursor m_batchCursor;   ///< cursor at the outermost beginBatch()
+    bool m_batchChanged = false;      ///< a mutating call happened inside the batch
 };

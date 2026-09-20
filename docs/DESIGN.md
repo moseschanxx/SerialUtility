@@ -78,8 +78,8 @@ minus `TerminalWidget`; links Core/Gui/SerialPort; used by the unit tests), **`s
 
 ```
 device ─RX─► QSerialPort.readyRead ─► SerialConnection::dataReceived(QByteArray)
-   ├─► TerminalWidget::feedData ─► AnsiParser::feed ─► TerminalScreen ops ─► dirty rows ─► 16 ms repaint
-   ├─► HexDumpView::appendReceived
+   ├─► TerminalWidget::feedData ─► AnsiParser::feed (one screen batch) ─► TerminalScreen ops ─► dirty rows ─► coalesced repaint
+   ├─► HexDumpView::appendReceived (queued while the hex page is hidden)
    └─► SessionLogger::logReceived
 
 keyboard/IME ─► TerminalWidget::keyToBytes ─► sendData ─┐
@@ -103,7 +103,7 @@ may add private members, private slots and helper functions freely, and may add
 | `TerminalScreen` | grid + scrollback + cursor + attributes + modes; every editing op the parser needs | pure model, unit-tested |
 | `AnsiParser` | bytes → decoded text → VT500 state machine → `TerminalScreen` ops; DSR/DA replies | never desyncs on garbage |
 | `TerminalWidget` | paint `TerminalScreen`, selection, scrollbar, keys → bytes, IME, paste, drag&drop, zoom | `QAbstractScrollArea` |
-| `HexDumpView` | read-only RX/TX hex dump with timestamps | bounded |
+| `HexDumpView` | read-only RX/TX hex dump with timestamps | bounded; queues while hidden, renders on show (`flushPending()` added at integration) |
 | `SessionWidget` | glue for one port session; single TX path `sendBytes()`; system lines; auto-log | see header for exact wiring |
 | `ConnectionBar` | port/baud/8N1/flow/DTR/RTS/Break/Connect controls | keeps selection across hot-plug |
 | `CommandInput` | line-mode input with history, hex, escapes, line ending | validation feedback |
@@ -169,8 +169,37 @@ the selected baud rate. See the header for the exact command set. Unit tests:
 - Every user action that cannot proceed says why in the status bar ("Not connected",
   "Port COM8 busy or access denied").
 - Closing anything that loses data (connected tab, active log) asks once, unless disabled.
-- High-rate output (1.5 Mbaud boot log ≈ 150 KB/s) must keep the UI responsive: parser
-  work is O(bytes), repaints coalesced, hex view bounded, logger flushes but never fsyncs.
+- High-rate output (1.5 Mbaud boot log ≈ 150 KB/s) must keep the UI responsive, and the RX
+  pipeline is sized with headroom for it. Measured on the 4-core reference machine (Release,
+  `tests/tst_terminalperf.cpp`: coloured 120-byte lines with six SGR sequences each, 4 KB
+  chunks, 1000×700 window): AnsiParser + TerminalScreen alone ≈ 16 MB/s; TerminalWidget shown
+  ≈ 9 MB/s (real window) / 11 MB/s (offscreen); the full SessionWidget RX path with the terminal
+  in front ≈ 9.8 MB/s real window / 10.5 MB/s offscreen (before this work: 0.14 / 0.31 MB/s, i.e.
+  ~1200 lines/s); LogReplayer "Unlimited" through a session ≈ 11.6 MB/s real window (was 0.13);
+  hex view in front ≈ 0.4 MB/s (was 0.13). Throughout, a 50 ms QTimer in the same event loop
+  keeps firing ≈ 19×/s with a longest gap of ≈ 60 ms. The mechanisms, in order of impact:
+  1. `HexDumpView` renders nothing while it is hidden (the normal case during a boot log):
+     chunks are queued with their formatting captured on arrival, the queue is bounded to what
+     `maxLines()` can show, and `showEvent()` / `flushPending()` render it in one batch, giving
+     the same document as per-chunk rendering. Shown, it still renders per chunk, but
+     `trimToMaxLines()` finds the cut with `findBlockByNumber()` instead of stepping `NextBlock`
+     over every block (each step laid the block out). One QTextDocument insertion + trim per
+     4 KB chunk cost ≈ 12 ms - more than the whole terminal pipeline.
+  2. `TerminalWidget` draws ASCII runs as pre-shaped glyph runs (`QRawFont` glyph-index cache
+     per render font, `QPainter::drawGlyphRun`), so a full 40×120 frame costs ≈ 2.6 ms instead
+     of ≈ 7 ms in a real window. The repaint coalescer measures its window from the end of the
+     previous paint and never makes it shorter than that paint took, so painting is capped at
+     half of the wall time even when a frame outlasts 16 ms (previously every chunk became a
+     frame once painting was slower than the timer); the first change after an idle period is
+     painted at once.
+  3. `TerminalScreen::beginBatch()/endBatch()` wrap every `AnsiParser::feed()`: contentChanged /
+     scrollbackChanged / cursorMoved - and with them the scrollbar range update - fire once per
+     chunk instead of once per text run and control character.
+  4. `LogReplayer` at unlimited speed feeds 4 KB chunks for an ≈ 8 ms slice per event-loop
+     iteration instead of one chunk per iteration.
+  Parser work stays O(bytes); scrollback pushes move lines (QList front removal is O(1) in
+  Qt 6); the logger flushes but never fsyncs. `tst_terminalperf` asserts only generous floors
+  (≥ 0.3 MB/s offscreen, ≥ 1 UI-timer turn per 100 ms, no stall > 500 ms) and prints the rates.
 - Keyboard-first: every action has a shortcut (listed in `MainWindow.h`); Tab is sent to
   the device when the terminal has focus (never moves focus). Bare `Ctrl+<letter>` belongs
   to the device while connected, so MainWindow actions never use one: Hex View, Find, Send
@@ -192,8 +221,8 @@ Qt Creator: *File > Open File or Project* → `CMakeLists.txt`; choose the `Rele
 `Debug` preset (kit "Desktop Qt 6.8.3 MSVC2022 64bit").
 
 Tests are Qt Test executables in `tests/`: unit suites linked against `su_core` and GUI suites
-(`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`) linked against
-`su_app`, driving the real widgets against the `SIM:` pseudo-ports. ctest runs every suite with
+(`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`, `tst_terminalperf`)
+linked against `su_app`, driving the real widgets against the `SIM:` pseudo-ports. ctest runs every suite with
 `QT_QPA_PLATFORM=offscreen`, so they pass headless; run with
 `ctest --test-dir build/Release -C Release --output-on-failure`.
 

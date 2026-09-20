@@ -212,6 +212,9 @@ void AnsiParser::feed(const QByteArray& data)
         text.prepend(m_pendingHighSurrogate);
         m_pendingHighSurrogate.clear();
     }
+    // One batch per chunk: the screen emits contentChanged/scrollbackChanged/cursorMoved once at
+    // the end instead of after every text run and control (TerminalScreen::beginBatch()).
+    m_screen->beginBatch();
     const qsizetype n = text.size();
     for (qsizetype i = 0; i < n; ++i) {
         const char16_t unit = text[i].unicode();
@@ -234,6 +237,7 @@ void AnsiParser::feed(const QByteArray& data)
         processCodePoint(cp);
     }
     flushText();
+    m_screen->endBatch();
 }
 
 void AnsiParser::reset()

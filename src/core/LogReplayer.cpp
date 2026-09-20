@@ -1,8 +1,9 @@
 #include "core/LogReplayer.h"
 
+#include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
-#include <QDir>
 
 #include "app/Logging.h"
 
@@ -11,6 +12,7 @@ namespace {
 constexpr int kTickMs = 20;
 constexpr int kTicksPerSecond = 1000 / kTickMs;
 constexpr qint64 kUnlimitedChunkBytes = 4096;
+constexpr qint64 kUnlimitedSliceMs = 8;   ///< unlimited speed: feed chunks for this long per event-loop iteration
 constexpr qint64 kMaxFileBytes = 64LL * 1024 * 1024;
 constexpr qint64 kDetectHeadBytes = 4096;
 constexpr int kTimestampPrefixLength = 26;   ///< "[yyyy-MM-dd HH:mm:ss.zzz] "
@@ -263,28 +265,36 @@ QList<QPair<QString, qint64>> LogReplayer::standardSpeeds()
 
 void LogReplayer::onTimer()
 {
-    if (!m_running || m_paused) {
-        return;
-    }
-    if (m_pos >= m_data.size()) {
-        if (m_options.loop && !m_data.isEmpty()) {
-            m_pos = 0;
-        } else {
+    // Paced: one chunk per tick. Unlimited: 4 KB chunks until the slice is used up (or a
+    // receiver stopped/paused us or switched to a paced speed), then yield to the event loop;
+    // the zero-interval timer fires again on the next iteration.
+    QElapsedTimer slice;
+    slice.start();
+    do {
+        if (!m_running || m_paused) {
+            return;
+        }
+        if (m_pos >= m_data.size()) {
+            if (m_options.loop && !m_data.isEmpty()) {
+                m_pos = 0;
+            } else {
+                finish(true);
+                return;
+            }
+        }
+        const qint64 bytesPerSecond = m_options.bytesPerSecond;
+        const qint64 chunkSize =
+            bytesPerSecond <= 0 ? kUnlimitedChunkBytes : qMax<qint64>(1, bytesPerSecond / kTicksPerSecond);
+        const qint64 count = qMin<qint64>(chunkSize, m_data.size() - m_pos);
+        const QByteArray chunk = m_data.mid(m_pos, count);
+        m_pos += count;
+        emit chunkReady(chunk);
+        emit progress(m_pos, m_data.size());
+        if (m_pos >= m_data.size() && !m_options.loop) {
             finish(true);
             return;
         }
-    }
-    const qint64 bytesPerSecond = m_options.bytesPerSecond;
-    const qint64 chunkSize =
-        bytesPerSecond <= 0 ? kUnlimitedChunkBytes : qMax<qint64>(1, bytesPerSecond / kTicksPerSecond);
-    const qint64 count = qMin<qint64>(chunkSize, m_data.size() - m_pos);
-    const QByteArray chunk = m_data.mid(m_pos, count);
-    m_pos += count;
-    emit chunkReady(chunk);
-    emit progress(m_pos, m_data.size());
-    if (m_pos >= m_data.size() && !m_options.loop) {
-        finish(true);
-    }
+    } while (m_options.bytesPerSecond <= 0 && slice.elapsed() < kUnlimitedSliceMs);
 }
 
 void LogReplayer::finish(bool completed)

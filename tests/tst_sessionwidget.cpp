@@ -459,6 +459,7 @@ void Tst_sessionwidget::loopbackHexModeRoundTrip()
     QCOMPARE(sent, QByteArrayLiteral("AB\r"));
     QTRY_COMPARE_WITH_TIMEOUT(received, QByteArrayLiteral("AB\r"), kSimTimeoutMs);
 
+    session->hexView()->flushPending();   // the hex page is hidden: it queues until shown or flushed
     const QString hex = session->hexView()->toPlainText();
     QVERIFY2(hex.contains(QStringLiteral("TX 3 bytes")), qPrintable(hex));
     QVERIFY2(hex.contains(QStringLiteral("RX 3 bytes")), qPrintable(hex));
@@ -1176,6 +1177,7 @@ void Tst_sessionwidget::loopbackClearTerminal()
 
     session->sendBytes(QByteArrayLiteral("keep me\r\n"));
     QTRY_VERIFY_WITH_TIMEOUT(visibleText(terminal).contains(QStringLiteral("keep me")), kSimTimeoutMs);
+    session->hexView()->flushPending();   // hidden page: render its queue before looking
     QVERIFY(!session->hexView()->toPlainText().isEmpty());
 
     session->clearTerminal();
@@ -1327,6 +1329,7 @@ void Tst_sessionwidget::replayRawFile()
     QVERIFY(text.contains(QStringLiteral("--- replaying")));
     QVERIFY(text.contains(QStringLiteral("replay of capture.log finished")));
     // Replayed bytes take the RX path into the hex view as well; the session stays disconnected.
+    session->hexView()->flushPending();   // hidden page: render its queue before looking
     QVERIFY(session->hexView()->toPlainText().contains(QStringLiteral("RX")));
     QVERIFY(!session->isConnected());
     QVERIFY(!terminal->inputEnabled());

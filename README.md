@@ -21,8 +21,10 @@ speaks bytes.
   scroll regions, 16 / 256 / true colours, alternate screen (`top`, `vi`, `menuconfig`),
   bracketed paste, DSR / DA replies, window title. Chinese and other CJK text occupies two
   cells. Unknown sequences are swallowed, never desynchronise the output.
-- **Built for boot logs** - handles 1.5 Mbaud output (about 150 KB/s) without freezing the UI;
-  repaints are coalesced, scrollback is bounded (default 10 000 lines).
+- **Built for boot logs** - handles 1.5 Mbaud output (about 150 KB/s) without freezing the UI,
+  with plenty of headroom: the RX pipeline renders a coloured boot log at around 10 MB/s on a
+  4-core desktop while the window stays responsive. Repaints are coalesced and drawn from a glyph
+  cache, the hidden hex view queues instead of rendering, scrollback is bounded (default 10 000 lines).
 - **Auto-reconnect** - when the board reboots or the USB adapter is re-plugged the port vanishes;
   the session shows a dim system line and re-opens the port as soon as it comes back.
 - **Built-in device simulator** - four `SIM:` pseudo-ports (`SIM:loopback`, `SIM:linux`,
