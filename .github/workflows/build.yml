@@ -83,7 +83,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build \
+          sudo apt-get install -y build-essential cmake ninja-build xvfb \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0 fonts-dejavu-core
 
       - name: Configure
@@ -108,10 +108,17 @@ jobs:
           test -f dist/lib/libQt6SerialPort.so.6
           test -f dist/lib/libQt6Widgets.so.6
           test -f dist/plugins/platforms/libqxcb.so
-          # every Qt lib must resolve from dist/lib via the $ORIGIN/../lib RPATH, nothing may be unresolved
-          ldd dist/bin/BuildAI-SerialUtility
-          ! ldd dist/bin/BuildAI-SerialUtility | grep -q 'not found'
-          ldd dist/bin/BuildAI-SerialUtility | grep libQt6Core | grep -q "$PWD/dist/lib/"
+          # The deploy tool sets RUNPATH=$ORIGIN/../lib on the installed binary. install-qt-action
+          # exports LD_LIBRARY_PATH (which outranks RUNPATH), so check with it unset: every Qt lib
+          # must resolve from dist/lib and nothing may be unresolved.
+          readelf -d dist/bin/BuildAI-SerialUtility | grep -E 'RPATH|RUNPATH' | grep -q '\$ORIGIN/../lib'
+          env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility
+          ! env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility | grep -q 'not found'
+          # (RUNPATH resolution prints the path as dist/bin/../lib/, hence the optional "bin/../")
+          env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility | grep libQt6Core | grep -qE "$PWD/dist/(bin/\.\./)?lib/"
+          # and the package really starts on its own with the deployed xcb plugin (what end users
+          # get): --version constructs QApplication, then prints the version and exits
+          xvfb-run -a env -u LD_LIBRARY_PATH dist/bin/BuildAI-SerialUtility --version
           file dist/bin/BuildAI-SerialUtility
           find dist -type f | sort
 
