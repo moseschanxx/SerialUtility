@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build, Test and Release
 
 on:
   push:
@@ -11,12 +11,55 @@ on:
       - '**'
   workflow_dispatch:
 
+# A newer push to the same branch cancels the run in progress; tag builds are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   QT_VERSION: '6.8.3'
 
 jobs:
+  # -------------------------------------------------------------------------------------
+  # Version: single source of truth is project(... VERSION x.y.z) in CMakeLists.txt.
+  # A release tag must be exactly "v<that version>" so binaries, installer and tag agree.
+  # -------------------------------------------------------------------------------------
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      is_release: ${{ steps.read.outputs.is_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read project version and validate the tag
+        id: read
+        shell: bash
+        run: |
+          version=$(sed -nE 's/^[[:space:]]*VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
+          test -n "$version" || { echo "::error::project VERSION not found in CMakeLists.txt"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ "$tag" != "v$version" ]]; then
+              echo "::error::tag $tag does not match CMakeLists.txt VERSION $version - bump the version (and VERSION.txt) before tagging"
+              exit 1
+            fi
+            grep -q "^V${version}" VERSION.txt || { echo "::error::VERSION.txt has no entry V${version}"; exit 1; }
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version $version, release=${is_release:-false}"
+
+  # -------------------------------------------------------------------------------------
   build-ubuntu:
     name: Ubuntu (GCC, Ninja)
+    needs: version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -41,7 +84,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build \
-            libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0
+            libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0 fonts-dejavu-core
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSU_BUILD_TESTS=ON -DSU_WARNINGS_AS_ERRORS=ON
@@ -56,7 +99,7 @@ jobs:
 
       - name: Install and deploy (Qt deploy script)
         run: |
-          cmake --install build --prefix dist --config Release
+          cmake --install build --prefix "$GITHUB_WORKSPACE/dist" --config Release
           test -x dist/bin/BuildAI-SerialUtility
           test -f dist/bin/qt.conf
           # NO_UNSUPPORTED_PLATFORM_ERROR in CMakeLists.txt would let a no-op deploy pass silently,
@@ -72,16 +115,24 @@ jobs:
           file dist/bin/BuildAI-SerialUtility
           find dist -type f | sort
 
+      - name: Package tarball
+        run: |
+          mkdir -p out
+          tar -czf "out/BuildAI-SerialUtility-${{ needs.version.outputs.version }}-linux-x64.tar.gz" -C dist .
+          ls -la out
+
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: BuildAI-SerialUtility-linux-x64
-          path: dist
+          path: out/*.tar.gz
           if-no-files-found: error
           retention-days: 14
 
+  # -------------------------------------------------------------------------------------
   build-windows:
     name: Windows (MSVC 2022, Ninja)
+    needs: version
     runs-on: windows-latest
     permissions:
       contents: read
@@ -124,55 +175,106 @@ jobs:
       - name: Install and deploy (windeployqt)
         shell: pwsh
         run: |
-          cmake --install build --prefix dist --config Release
-          if (-not (Test-Path "dist\bin\BuildAI-SerialUtility.exe")) {
-            Write-Error "dist\bin\BuildAI-SerialUtility.exe not found after install"
-            exit 1
-          }
+          cmake --install build --prefix "$env:GITHUB_WORKSPACE\dist" --config Release
+          $required = @('dist\bin\BuildAI-SerialUtility.exe', 'dist\bin\qt.conf', 'dist\bin\Qt6Core.dll',
+                        'dist\bin\Qt6SerialPort.dll', 'dist\bin\Qt6Widgets.dll', 'dist\bin\platforms\qwindows.dll')
+          foreach ($f in $required) { if (-not (Test-Path $f)) { Write-Error "missing after deploy: $f"; exit 1 } }
           Get-ChildItem -Recurse dist | Select-Object -ExpandProperty FullName
 
-      - name: Upload Windows package
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item README.md, VERSION.txt dist\bin\
+          Compress-Archive -Path dist\bin\* -DestinationPath "out\BuildAI-SerialUtility-${{ needs.version.outputs.version }}-windows-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem out
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
+          & $iscc "/DAppVersion=${{ needs.version.outputs.version }}" "/DSourceDir=$env:GITHUB_WORKSPACE\dist\bin" "/DOutputDir=$env:GITHUB_WORKSPACE\out" packaging\windows\BuildAI-SerialUtility.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem out
+
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
           name: BuildAI-SerialUtility-windows-x64
-          path: dist
+          path: |
+            out/*.zip
+            out/*-setup.exe
           if-no-files-found: error
           retention-days: 14
 
+  # -------------------------------------------------------------------------------------
+  # Release: only for tags v<version>. Publishes the Linux tarball, the Windows portable zip
+  # and the Windows installer with SHA-256 checksums and notes taken from VERSION.txt.
+  # -------------------------------------------------------------------------------------
   release:
     name: GitHub Release
+    needs: [version, build-ubuntu, build-windows]
+    if: needs.version.outputs.is_release == 'true'
     runs-on: ubuntu-latest
-    needs: [build-ubuntu, build-windows]
-    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
 
     steps:
-      - name: Download Linux artifact
+      - name: Checkout (for VERSION.txt)
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: BuildAI-SerialUtility-linux-x64
-          path: artifacts/linux
+          path: artifacts
+          merge-multiple: true
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: BuildAI-SerialUtility-windows-x64
-          path: artifacts/windows
-
-      - name: Create release archives
+      - name: Release notes and checksums
+        shell: bash
         run: |
+          version="${{ needs.version.outputs.version }}"
           mkdir -p release
-          # upload-artifact does not preserve the execute bit; fail loudly if the package layout regressed
-          chmod +x artifacts/linux/bin/BuildAI-SerialUtility
-          tar -czf "release/BuildAI-SerialUtility-${{ github.ref_name }}-linux-x64.tar.gz" -C artifacts/linux .
-          (cd artifacts/windows && zip -r "../../release/BuildAI-SerialUtility-${{ github.ref_name }}-windows-x64.zip" .)
+          mv artifacts/*.tar.gz artifacts/*.zip artifacts/*-setup.exe release/
+          (cd release && sha256sum -- * > SHA256SUMS.txt)
+          {
+            echo "## BuildAI Serial Utility ${version}"
+            echo
+            # the block of VERSION.txt that belongs to this version (from "V<version>" up to the next "V" heading)
+            awk -v v="V${version}" '
+              $0 ~ "^"v { on=1; next }
+              /^V[0-9]/ { if (on) exit }
+              on { sub(/^\t/, "- "); print }
+            ' VERSION.txt
+            echo
+            echo "### Downloads"
+            echo
+            echo "| File | Contents |"
+            echo "|---|---|"
+            echo "| \`BuildAI-SerialUtility-${version}-windows-x64-setup.exe\` | Windows installer (x64) |"
+            echo "| \`BuildAI-SerialUtility-${version}-windows-x64.zip\` | Windows portable build (unzip and run) |"
+            echo "| \`BuildAI-SerialUtility-${version}-linux-x64.tar.gz\` | Linux x86-64 build with Qt libraries (run \`bin/BuildAI-SerialUtility\`) |"
+            echo "| \`SHA256SUMS.txt\` | checksums |"
+            echo
+            echo "Built with Qt ${QT_VERSION}. Windows: MSVC 2022, requires the Visual C++ 2022 runtime (\`vc_redist.x64.exe\` is included)."
+          } > release/RELEASE_NOTES.md
+          cat release/RELEASE_NOTES.md
           ls -la release
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          name: BuildAI Serial Utility ${{ needs.version.outputs.version }}
+          body_path: release/RELEASE_NOTES.md
           files: |
-            release/BuildAI-SerialUtility-${{ github.ref_name }}-linux-x64.tar.gz
-            release/BuildAI-SerialUtility-${{ github.ref_name }}-windows-x64.zip
+            release/*.tar.gz
+            release/*.zip
+            release/*-setup.exe
+            release/SHA256SUMS.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

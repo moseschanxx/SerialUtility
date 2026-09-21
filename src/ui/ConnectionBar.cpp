@@ -333,6 +333,7 @@ void ConnectionBar::setSettings(const SerialSettings& settings)
     m_rtsButton->setChecked(settings.rts);
 
     m_updating = wasUpdating;
+    m_hasEmitted = false;   // programmatic change: report the next user change even if it repeats the last emitted value
 }
 
 QString ConnectionBar::selectedPortName() const
@@ -369,6 +370,7 @@ void ConnectionBar::selectPort(const QString& portName)
     }
 
     m_updating = wasUpdating;
+    m_hasEmitted = false;   // programmatic change: report the next user change even if it repeats the last emitted value
     setConnectionState(m_state); // the connect button's dot depends on whether a port is selected
 }
 
@@ -398,6 +400,7 @@ void ConnectionBar::setPorts(const QList<SerialPortEntry>& ports)
         }
     }
     m_updating = wasUpdating;
+    m_hasEmitted = false;   // programmatic change: report the next user change even if it repeats the last emitted value
     setConnectionState(m_state);
 
     qCDebug(lcUi) << "port list updated:" << ports.size() << "port(s), selected" << selected;
@@ -439,6 +442,7 @@ void ConnectionBar::setPinStates(bool dtr, bool rts)
     m_dtrButton->setChecked(dtr);
     m_rtsButton->setChecked(rts);
     m_updating = wasUpdating;
+    m_hasEmitted = false;   // programmatic change: report the next user change even if it repeats the last emitted value
 }
 
 void ConnectionBar::setFocusToPort()
@@ -456,5 +460,14 @@ void ConnectionBar::emitSettingsChanged()
         m_connectButton->setIcon(
             dotIcon(selectedPortName().isEmpty() ? kDotUnavailable : kDotConnected, devicePixelRatioF()));
     }
-    emit settingsChanged(settings());
+    // The editable baud combo reports both currentIndexChanged and (on focus loss, including
+    // the focus loss of a closing window) editingFinished: emit only when something differs
+    // from what listeners already know.
+    const SerialSettings current = settings();
+    if (m_hasEmitted && current == m_lastEmitted) {
+        return;
+    }
+    m_lastEmitted = current;
+    m_hasEmitted = true;
+    emit settingsChanged(current);
 }

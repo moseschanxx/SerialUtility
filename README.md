@@ -178,6 +178,41 @@ The Linux tarball published by CI is built the same way (`bin/`, `lib/`, `plugin
 and is self-contained except for the system X11/xcb libraries, which users install via apt:
 `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libgl1`.
 
+### Packaging (Windows zip + installer)
+
+```powershell
+.\scripts\package.ps1            # build + test + deploy, then zip and Inno Setup installer
+.\scripts\package.ps1 -SkipBuild # package an existing dist\Release\bin
+```
+
+Produces `dist\BuildAI-SerialUtility-<version>-windows-x64.zip`,
+`dist\installer\BuildAI-SerialUtility-<version>-windows-x64-setup.exe` (needs
+[Inno Setup 6](https://jrsoftware.org/isdl.php): `winget install JRSoftware.InnoSetup`) and
+`dist\SHA256SUMS.txt`. The installer script lives in `packaging/windows/`.
+
+### Releasing (CI/CD)
+
+Every push and pull request runs `.github/workflows/build.yml`: Ubuntu (GCC) and Windows
+(MSVC 2022) builds with `-DSU_WARNINGS_AS_ERRORS=ON`, all Qt Test suites offscreen, a deploy
+check, and the packaged artefacts (Linux tarball, Windows zip and installer) attached to the
+run for 14 days.
+
+A release is cut by tagging. The tag must match `project(... VERSION x.y.z)` in
+`CMakeLists.txt`, and `VERSION.txt` must have a `Vx.y.z` entry (its bullet list becomes the
+release notes):
+
+```powershell
+# 1. bump the version in CMakeLists.txt and add the Vx.y.z block to VERSION.txt, commit
+# 2. tag and push
+git tag -a v0.1.0 -m "BuildAI Serial Utility 0.1.0"
+git push origin v0.1.0
+```
+
+The `release` job then publishes a GitHub Release named "BuildAI Serial Utility x.y.z" with
+`BuildAI-SerialUtility-x.y.z-windows-x64-setup.exe`, `...-windows-x64.zip`,
+`...-linux-x64.tar.gz` and `SHA256SUMS.txt`. A tag containing a hyphen (`v0.2.0-rc1`) is
+published as a pre-release.
+
 ## Usage guide
 
 ### Trying it without hardware (SIM: ports)

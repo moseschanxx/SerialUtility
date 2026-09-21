@@ -122,6 +122,16 @@ SessionWidget::~SessionWidget()
     // The widget is going away: stop forwarding state/log signals to a half-destroyed owner.
     disconnect(m_connection, nullptr, this, nullptr);
     disconnect(m_logger, nullptr, this, nullptr);
+    // Children are destroyed in creation order (connection and logger first). Closing the
+    // window makes the connection bar's baud line edit lose focus, which emits
+    // editingFinished -> settingsChanged, and the input strips can emit on focus loss as
+    // well; none of that may reach slots that touch the already destroyed connection.
+    for (QObject* strip : {static_cast<QObject*>(m_bar), static_cast<QObject*>(m_input),
+                           static_cast<QObject*>(m_quickBar), static_cast<QObject*>(m_terminal)}) {
+        if (strip) {
+            disconnect(strip, nullptr, this, nullptr);
+        }
+    }
     if (m_replayer) {
         disconnect(m_replayer, nullptr, this, nullptr);
     }

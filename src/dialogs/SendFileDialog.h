@@ -20,7 +20,7 @@ QT_END_NAMESPACE
  * SessionWidget connects to sendBytes(). While sending, the Start button becomes disabled,
  * Pause toggles Pause/Resume, Cancel aborts. Progress shows "12.3 KB / 45.6 KB (27%) -
  * line 120/430". On finish the status label shows the FileSender message. The last used
- * options are remembered in QSettings ("sendFile/*"). Modeless (setModal(false)) so the
+ * options are remembered in QSettings (group "sendFile"). Modeless (setModal(false)) so the
  * user can watch the terminal while it sends.
  *
  * Backpressure: SessionWidget feeds SerialConnection::pendingTxBytes() into updatePendingTx()

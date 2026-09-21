@@ -9,3 +9,4 @@ V0.1.0
 	Session logging (raw / timestamped text / hex dump) and hex-dump view.
 	System log dock, About / Version dialogs, English + Simplified Chinese UI.
 	Automated GUI test suites (Qt Test, offscreen) for the terminal widget, session widget, main window and dialogs, next to the core unit tests.
+	CI/CD: GitHub Actions builds Ubuntu (GCC) and Windows (MSVC) with warnings as errors, runs all suites, and publishes the Windows installer (Inno Setup), portable zip and Linux tarball with checksums on v* tags.

@@ -80,4 +80,6 @@ private:
     QLabel* m_flowLabel = nullptr;
     SerialConnection::State m_state = SerialConnection::State::Disconnected;
     bool m_updating = false;   ///< suppress settingsChanged() during programmatic updates
+    SerialSettings m_lastEmitted;  ///< value of the last settingsChanged(); duplicates (e.g. editingFinished after
+    bool m_hasEmitted = false;     ///< currentIndexChanged) are not re-emitted; reset by programmatic updates
 };

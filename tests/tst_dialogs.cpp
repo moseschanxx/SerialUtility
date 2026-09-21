@@ -962,9 +962,9 @@ void Tst_dialogs::modelDataEveryColumn()
     QVERIFY(!model.index(0, C::Shortcut).data(Qt::ForegroundRole).isValid());   // Ctrl+1 is terminal-safe
     QVERIFY(!model.index(1, C::Shortcut).data(Qt::ForegroundRole).isValid());   // empty: nothing to flag
     // Shortcuts the connected, focused terminal would swallow before the shortcut map.
-    const auto safe = [](const char* text) {
+    const auto safe = [](const char* sequenceText) {
         return QuickCommandModel::isTerminalSafeShortcut(
-            QKeySequence(QLatin1String(text), QKeySequence::PortableText));
+            QKeySequence(QLatin1String(sequenceText), QKeySequence::PortableText));
     };
     QVERIFY(safe("Ctrl+1"));
     QVERIFY(safe("Ctrl+Shift+2"));

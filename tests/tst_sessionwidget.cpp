@@ -1771,9 +1771,11 @@ void Tst_sessionwidget::barBreakButton()
 
 void Tst_sessionwidget::barSettingsChangedOnlyByUser()
 {
+    // Declared before the widget: the lambda below captures it by reference and the widget's
+    // teardown (window close -> baud line edit loses focus -> editingFinished) can still emit.
+    QList<SerialSettings> changes;
     ConnectionBar bar;
     QVERIFY(expose(&bar));
-    QList<SerialSettings> changes;
     connect(&bar, &ConnectionBar::settingsChanged, this,
             [&changes](const SerialSettings& settings) { changes.append(settings); });
 
@@ -2104,6 +2106,7 @@ void Tst_sessionwidget::inputEnterDisconnectedNoEmit()
 
 void Tst_sessionwidget::inputLineEndingChanged()
 {
+    QList<int> modes;   // outlives the widget (captured by reference below)
     CommandInput input;
     QVERIFY(expose(&input));
     input.setEnabledForConnection(true);
@@ -2112,7 +2115,6 @@ void Tst_sessionwidget::inputLineEndingChanged()
     QCOMPARE(combo->count(), LineEnding::allModes().size());
     QVERIFY(input.lineEnding() == LineEnding::Mode::CR);
 
-    QList<int> modes;
     connect(&input, &CommandInput::lineEndingChanged, this,
             [&modes](LineEnding::Mode mode) { modes.append(static_cast<int>(mode)); });
     QSignalSpy spy(&input, &CommandInput::sendRequested);
@@ -2226,10 +2228,10 @@ void Tst_sessionwidget::quickBarButtonsMatchGroup()
 
 void Tst_sessionwidget::quickBarClickEmits()
 {
+    QList<QuickCommand> triggered;   // outlives the widget (captured by reference below)
     QuickCommandBar bar(m_store);
     QVERIFY(expose(&bar));
     bar.setEnabledForConnection(true);
-    QList<QuickCommand> triggered;
     connect(&bar, &QuickCommandBar::commandTriggered, this,
             [&triggered](const QuickCommand& command) { triggered.append(command); });
     QSignalSpy editSpy(&bar, &QuickCommandBar::editRequested);
@@ -2351,11 +2353,11 @@ void Tst_sessionwidget::quickBarGroupTranslated()
 
 void Tst_sessionwidget::quickBarGearEmitsEdit()
 {
+    QList<QuickCommand> triggered;   // outlives the widget (captured by reference below)
     QuickCommandBar bar(m_store);
     QVERIFY(expose(&bar));
     bar.setEnabledForConnection(true);
     QSignalSpy editSpy(&bar, &QuickCommandBar::editRequested);
-    QList<QuickCommand> triggered;
     connect(&bar, &QuickCommandBar::commandTriggered, this,
             [&triggered](const QuickCommand& command) { triggered.append(command); });
 
@@ -2426,12 +2428,12 @@ void Tst_sessionwidget::quickBarRebuildOnStoreChanged()
 
 void Tst_sessionwidget::quickBarEnabledForConnection()
 {
+    QList<QuickCommand> triggered;   // outlives the widget (captured by reference below)
     QuickCommandBar bar(m_store);
     QVERIFY(expose(&bar));
     auto* combo = child<QComboBox>(&bar, "groupCombo");
     auto* gear = child<QToolButton>(&bar, "editButton");
     QVERIFY(combo && gear);
-    QList<QuickCommand> triggered;
     connect(&bar, &QuickCommandBar::commandTriggered, this,
             [&triggered](const QuickCommand& command) { triggered.append(command); });
 

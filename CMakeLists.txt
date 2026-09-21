@@ -278,6 +278,16 @@ qt_generate_deploy_app_script(
     OUTPUT_SCRIPT su_deploy_script
     NO_UNSUPPORTED_PLATFORM_ERROR
     NO_TRANSLATIONS)
+# `cmake --install <build> --prefix dist` with a RELATIVE prefix (as CI does) keeps
+# CMAKE_INSTALL_PREFIX relative inside the install script; CMake's own file(INSTALL)
+# copes, but Qt's deploy support insists on an absolute prefix ("Given qt.conf path is
+# not an absolute path"). Resolve it against the working directory of the install step.
+install(CODE [[
+    if(NOT IS_ABSOLUTE "${CMAKE_INSTALL_PREFIX}")
+        file(REAL_PATH "${CMAKE_INSTALL_PREFIX}" CMAKE_INSTALL_PREFIX)
+        message(STATUS "Install prefix resolved to ${CMAKE_INSTALL_PREFIX}")
+    endif()
+]])
 if(WIN32)
     # Classic windeployqt layout: Qt plugins next to the executable
     # (bin/platforms/qwindows.dll, bin/styles/..., bin/imageformats/...) instead of

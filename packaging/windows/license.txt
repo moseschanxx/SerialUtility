@@ -1,0 +1,9 @@
+BuildAI Serial Utility
+Copyright (c) 2026 BuildAI. All rights reserved.
+
+This software is provided to BuildAI staff and partners for developing, testing and
+servicing BuildAI hardware. It may not be redistributed without permission.
+
+The application is built with the Qt framework (https://www.qt.io), used under the
+terms of the GNU Lesser General Public License version 3. The Qt libraries are shipped
+as separate dynamic-link libraries so they can be replaced by the user.
