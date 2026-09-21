@@ -118,8 +118,13 @@ fixed by file group, followed by a full rebuild with all suites on Release and D
   "opens and can be dismissed" (Qt Test cannot drive native modal dialogs).
 - Real USB unplug of a live adapter (driver-specific error codes) was not reproducible without
   hardware; the code paths are covered by the simulated `reboot`/`poweroff` tests.
-- GitHub Actions workflow (Ubuntu + Windows, warnings as errors, self-contained Linux tarball)
-  has not run yet: the repository has no remote.
+- GitHub Actions (2026-09-21, `moseschanxx/SerialUtility`): the first runs after pushing failed on
+  GCC-only warnings (`-Werror=comment`, `-Werror=shadow`), on Qt's deploy script rejecting a
+  relative install prefix, on a test-order hazard in `tst_sessionwidget` that GCC turned into a
+  `std::bad_alloc`, and on an `ldd` check that measured the runner's `LD_LIBRARY_PATH` instead of
+  the package. All fixed (commits `f478bc8`, `b6a3157`); run 35557400491 is green on Ubuntu (GCC 11,
+  warnings as errors, 16/16 suites, self-contained tarball started under xvfb) and Windows (MSVC 2022,
+  16/16 suites, windeployqt, portable zip and Inno Setup installer). The `release` job runs on `v*` tags.
 - `tst_devicesimulator` takes ~30 s (real-time pacing scenarios).
 
 ## 9. How to re-run everything
