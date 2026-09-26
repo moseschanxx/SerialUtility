@@ -193,6 +193,11 @@ Final full runs on Windows (MSVC 2022, Release, fresh configure) and on Linux, o
 | Windows MSVC 2022 Release, fresh configure (`build\wf-final`) | 22 | 100 % passed in two consecutive full runs (158 s each; `tst_sshconnection` 47 s, `tst_sessionwidget` 27 s, `tst_sshsession` 10 s); 0 compiler warnings in project files at `/W4` |
 | Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (aqtinstall), fresh configure | 22 | 100 % passed (0 warnings, 0 errors; `tst_sshconnection` 38.7 s, `tst_sshsession` 15.1 s); `cmake --install` bundle self-contained (`libssh.so.4`, `libcrypto.so.3` resolved from `lib/`, `--version` starts under xvfb) |
 
+CI: run 36274255360 (main, a3c6f0f) and the tag run 36274619537 (v0.3.0) green on Ubuntu (GCC `-Werror`)
+and Windows (MSVC `/WX`); the release workflow published `BuildAI-SerialUtility-0.3.0-windows-x64-setup.exe`,
+`-windows-x64.zip`, `-linux-x64.tar.gz` and `SHA256SUMS.txt` at
+<https://github.com/moseschanxx/SerialUtility/releases/tag/v0.3.0>.
+
 Known limitations (documented in README / DESIGN): no ssh-agent on Windows (libssh), keep-alive
 detects a dead link only when the TCP write fails (`SSH_MSG_IGNORE` has no reply), a blocking libssh
 phase (connect / key exchange / auth) ends only with the profile's timeout, a refused connect costs the
