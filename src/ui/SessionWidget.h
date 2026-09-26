@@ -93,10 +93,12 @@ class LogReplayer;
  *                                the profile was deleted) is pushed to the connection again, so
  *                                title() and restoreKey() follow the store
  *  - connectPort() takes the bar's current profile: a stored profile is touched in the store, an
- *    ad-hoc target goes to the store's recent list, AppSettings::setLastSshTarget(restoreKey()),
- *    then SshConnection::open() (asynchronous: Connecting -> Connected / Disconnected). The
+ *    ad-hoc target goes to the store's recent list (both emit the store's changed(), whose
+ *    handler above re-applies the bar's profile while still disconnected), only then the
  *    AppSettings SSH defaults (known_hosts file, and for ad-hoc targets the identity file,
- *    terminal type and keep-alive) fill the profile fields that are empty.
+ *    terminal type and keep-alive) fill the profile fields that are empty and the result is
+ *    pushed to the connection, AppSettings::setLastSshTarget(restoreKey()), then
+ *    SshConnection::open() (asynchronous: Connecting -> Connected / Disconnected).
  *  - sendBreak() reports "Not available for SSH sessions"; syncTerminalSize() sends nothing
  *    through the shell but a window-change request; uploadFile()/downloadFile() open the
  *    session's RemoteFileDialog (modeless, one per session, refused while disconnected).

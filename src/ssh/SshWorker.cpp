@@ -979,8 +979,15 @@ SshWorker::Step SshWorker::verifyHostKey(bool reconnect, QString* error)
         m_shared->hostKeyType = info.keyType;
         m_shared->hostKeyFingerprint = info.fingerprintSha256;
     }
-    qCInfo(lcSsh) << "host key of" << target() << info.keyType << info.fingerprintSha256 << "status"
-                  << static_cast<int>(info.status);
+    {
+        // The file libssh really consulted (after its own expansion), next to the one we asked for.
+        char* used = nullptr;
+        const QString usedFile = (ssh_options_get(session, SSH_OPTIONS_KNOWNHOSTS, &used) == SSH_OK && used)
+            ? fromLibssh(used) : QString();
+        ssh_string_free_char(used);
+        qCInfo(lcSsh) << "host key of" << target() << info.keyType << info.fingerprintSha256 << "status"
+                      << static_cast<int>(info.status) << "known_hosts" << usedFile;
+    }
     if (info.status == SshConnection::HostKeyStatus::Known) {
         return Step::Ok;
     }

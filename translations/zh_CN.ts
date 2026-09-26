@@ -2647,12 +2647,12 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+1211"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+1216"/>
         <source>Output paused while selecting - Enter copies, Esc cancels</source>
         <translation>选择文本时已暂停输出 - 按 Enter 复制，Esc 取消</translation>
     </message>
     <message>
-        <location line="-1063"/>
+        <location line="-1068"/>
         <source>Output resumed: %1 arrived while the display was paused</source>
         <translation>输出已恢复：暂停期间收到了 %1 数据</translation>
     </message>
@@ -2697,7 +2697,7 @@ Nothing is saved until you press OK.</source>
         <translation>请输入目标，例如 user@host</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+45"/>
         <source>Cannot connect to %1</source>
         <translation>无法连接到 %1</translation>
     </message>
@@ -2909,7 +2909,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+416"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+421"/>
         <source>No SSH host given</source>
         <translation>未指定 SSH 主机</translation>
     </message>
@@ -2947,7 +2947,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SshConnectionBar</name>
     <message>
-        <location filename="../src/ui/SshConnectionBar.cpp" line="+214"/>
+        <location filename="../src/ui/SshConnectionBar.cpp" line="+184"/>
         <source>Target:</source>
         <translation>目标：</translation>
     </message>
@@ -2967,7 +2967,7 @@ Nothing is saved until you press OK.</source>
         <translation>主机密钥类型和身份验证方式</translation>
     </message>
     <message>
-        <location line="+216"/>
+        <location line="+246"/>
         <source>Enter user@host[:port]</source>
         <translation>请输入 user@host[:port]</translation>
     </message>
@@ -3503,12 +3503,12 @@ You will be asked for it when connecting.</source>
     </message>
     <message>
         <location line="+7"/>
-        <location line="+1355"/>
+        <location line="+1362"/>
         <source>Cannot read %1: %2</source>
         <translation>无法读取 %1：%2</translation>
     </message>
     <message>
-        <location line="-1350"/>
+        <location line="-1357"/>
         <source>Cannot create remote file %1: %2</source>
         <translation>无法创建远程文件 %1：%2</translation>
     </message>
@@ -3529,19 +3529,19 @@ You will be asked for it when connecting.</source>
     </message>
     <message>
         <location line="+9"/>
-        <location line="+1347"/>
+        <location line="+1354"/>
         <location line="+31"/>
         <source>Cannot write %1: %2</source>
         <translation>无法写入 %1：%2</translation>
     </message>
     <message>
-        <location line="-1357"/>
-        <location line="+1286"/>
+        <location line="-1364"/>
+        <location line="+1293"/>
         <source>Transfer cancelled</source>
         <translation>传输已取消</translation>
     </message>
     <message>
-        <location line="-1266"/>
+        <location line="-1273"/>
         <source>Cannot resolve the remote home directory: %1</source>
         <translation>无法解析远程主目录：%1</translation>
     </message>
@@ -3566,7 +3566,7 @@ You will be asked for it when connecting.</source>
         <translation>无法读取 %1 的主机密钥：%2</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+66"/>
         <source>The host key of %1 is not known (%2) - reconnect cancelled</source>
         <translation>%1 的主机密钥未知（%2）- 重连已取消</translation>
     </message>

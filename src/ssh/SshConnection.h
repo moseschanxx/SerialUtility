@@ -22,6 +22,10 @@ class SshWorker;
  * worker cannot answer on its own (unknown host key, password / passphrase / keyboard-
  * interactive prompts) are raised as signals; the worker waits (up to 5 minutes) until the
  * matching answer slot is called, so the session stays cancellable at all times (close()).
+ * Destruction is silent: the destructor blocks its own signals, closes the session and joins
+ * the worker thread, so nothing but destroyed() is emitted from it (no stateChanged() /
+ * errorOccurred() into receivers whose storage may already be gone); a caller that needs the
+ * final Disconnected calls close() first.
  *
  * Connect sequence (open()):
  *  1. Validate profile() (host, port, user defaulting to localUserName()). State -> Connecting.

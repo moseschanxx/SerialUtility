@@ -580,6 +580,19 @@ bool SessionWidget::connectSsh()
         stopReplay();
     }
 
+    // The store first: touch() / addRecentTarget() emit SshProfileStore::changed, and this
+    // session's own handler of that signal re-applies the bar's profile to the connection while
+    // it is still Disconnected. Filling the defaults below *after* that keeps them - done the
+    // other way round the bare profile would replace the filled one and the connect would run
+    // without the Preferences > SSH known_hosts file (i.e. against ~/.ssh/known_hosts).
+    if (m_profiles) {
+        if (!profile.id.isEmpty()) {
+            m_profiles->touch(profile.id);
+        } else {
+            m_profiles->addRecentTarget(profile.displayTarget());
+        }
+    }
+
     // Preferences > SSH fills what the profile leaves open: the known_hosts file for every
     // profile, and for an ad-hoc target (no stored fields at all) the identity file, terminal
     // type and keep-alive as well.
@@ -595,14 +608,6 @@ bool SessionWidget::connectSsh()
         profile.keepAliveSeconds = s.sshDefaultKeepAliveSeconds();
     }
     m_ssh->setProfile(profile);
-
-    if (m_profiles) {
-        if (!profile.id.isEmpty()) {
-            m_profiles->touch(profile.id);
-        } else {
-            m_profiles->addRecentTarget(profile.displayTarget());
-        }
-    }
     AppSettings::instance().setLastSshTarget(restoreKey());
 
     qCInfo(lcSsh) << "connecting to" << profile.displayTarget();

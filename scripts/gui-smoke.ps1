@@ -41,6 +41,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot   # $PSScriptRoot is not usable inside param() defaults on PowerShell 5.1
 if (-not $Exe) { $Exe = Join-Path $repoRoot 'dist\Release\bin\BuildAI-SerialUtility.exe' }
 if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'build\gui-run' }
+elseif (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path (Get-Location).Path $OutDir }   # the ssh scenario hands paths to the app, which runs in another directory
 if (-not (Test-Path $Exe)) { throw "Executable not found: $Exe (run scripts\build.ps1 -Config Release -Deploy first)" }
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBasic
 Add-Type @"

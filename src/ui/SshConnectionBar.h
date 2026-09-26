@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QElapsedTimer>
 
 #include "core/Transport.h"
 #include "ssh/SshProfile.h"
@@ -57,6 +58,11 @@ signals:
 
 protected:
     void changeEvent(QEvent* event) override;
+    /// Installed on the target combo: Return/Enter connects (see handleReturnKey()) whether the
+    /// key reaches the combo directly (focus on the combo, e.g. right after setFocusToTarget()
+    /// on a fresh tab) or propagates up from the line edit, and never travels on to a default
+    /// button.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void setupUi();
@@ -64,6 +70,11 @@ private:
     void rebuild();
     void updateTargetValidity();          ///< red text / tooltip / connect dot for the current text
     void emitProfileChangedIfValid();     ///< user change: emit profileChanged() unless it repeats the last one
+    /// Enter in the target field: profileChanged() when valid, then connectRequested() while
+    /// Disconnected. Reached from the line edit's returnPressed() (also via the completer popup,
+    /// which hands the key to the line edit directly) and from eventFilter(); a 150 ms guard
+    /// collapses the two deliveries of one key press into one connect.
+    void handleReturnKey();
     QString selectedStoredId() const;     ///< id of the stored profile item whose text is currently shown, else ""
 
     SshProfileStore* m_store = nullptr;
@@ -74,6 +85,7 @@ private:
     QPushButton* m_connectButton = nullptr;
     Transport::State m_state = Transport::State::Disconnected;
     bool m_updating = false;
+    QElapsedTimer m_returnGuard;          ///< last handled Return key press (see handleReturnKey())
     QString m_summary;                    ///< last setSummary() text (shown while not Disconnected)
     QString m_lastEmittedKey;             ///< "id:<id>" or "target:<user@host:port>" of the last profileChanged()
     bool m_hasEmitted = false;            ///< reset by programmatic updates so the next user change is reported

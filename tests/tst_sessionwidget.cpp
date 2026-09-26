@@ -273,6 +273,7 @@ private slots:
     void sshStateTextTranslationContext();
     void sshProfileStoreChangesFollow();
     void sshConnectPrefetchesHomeAndAutoLogs();
+    void sshConnectAppliesSshPreferences();
     void serialTransportFacade();
 
     // ---- ConnectionBar --------------------------------------------------------------
@@ -2401,6 +2402,103 @@ void Tst_sessionwidget::sshConnectPrefetchesHomeAndAutoLogs()
     QCOMPARE(loggingSpy.count(), 2);   // started and stopped above, nothing since
     QCOMPARE(logDir.entryList(logPattern, QDir::Files).size(), 1);
     QVERIFY(SecretStore::remove(secretKey));
+}
+
+void Tst_sessionwidget::sshConnectAppliesSshPreferences()
+{
+    // An ad-hoc target has no stored fields: Preferences > SSH supply the known_hosts file, the
+    // identity file, the terminal type and the keep-alive, and the connect must run with them.
+    // Regression: connectPort() adds the target to the store's recent list, whose changed()
+    // re-applies the bar's bare profile to the connection while it is still Disconnected; done
+    // before the defaults were filled in, that bare profile replaced the filled one and every
+    // ad-hoc connect ran against ~/.ssh/known_hosts with the default identity discovery.
+    // Verified end to end without a single dialog: the seeded temporary known_hosts answers the
+    // host key, the preference key (the only credential the server accepts) authenticates, the
+    // server records the preference terminal type.
+    const QString keyPath = tempPath(QStringLiteral("ssh-prefs/id_prefs"));
+    QVERIFY(QDir().mkpath(QFileInfo(keyPath).absolutePath()));
+    QString publicKeyLine;
+    QVERIFY(TestSshServer::generateClientKeyPair(keyPath, &publicKeyLine));
+    TestSshServer::Options options;
+    options.rootDir = tempPath(QStringLiteral("ssh-prefs/root"));
+    QVERIFY(QDir().mkpath(options.rootDir));
+    options.authorizedPublicKey = publicKeyLine;
+    options.allowPassword = false;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+
+    AppSettings& app = AppSettings::instance();
+    const QString knownHosts = tempPath(QStringLiteral("ssh-prefs/known_hosts"));
+    QVERIFY(writeFile(knownHosts, (server.knownHostsLine() + QLatin1Char('\n')).toUtf8()));
+    app.setSshKnownHostsFile(knownHosts);
+    app.setSshDefaultIdentityFile(keyPath);
+    app.setSshDefaultTerminalType(QStringLiteral("vt220"));
+    app.setSshDefaultKeepAliveSeconds(7);
+
+    SshProfileStore profiles;
+    QVERIFY(profiles.load(tempPath(QStringLiteral("ssh_profiles_prefs.json"))));
+    auto session = newSshSession(&profiles);
+    QVERIFY(session);
+    const QString target = QStringLiteral("test@127.0.0.1:%1").arg(server.port());
+    session->setSshTarget(target);
+    QSignalSpy hostKeys(session->sshConnection(), &SshConnection::hostKeyVerificationRequired);
+    QSignalSpy prompts(session->sshConnection(), &SshConnection::authPromptRequired);
+    int storeChanges = 0;
+    connect(&profiles, &SshProfileStore::changed, this, [&storeChanges]() { ++storeChanges; });
+
+    QVERIFY(session->connectPort());
+    QCOMPARE(session->transport()->state(), Transport::State::Connecting);
+    QCOMPARE(storeChanges, 1);   // the recent-targets update did happen...
+    QCOMPARE(profiles.recentTargets(), QStringList{target});
+    const SshProfile used = session->sshConnection()->profile();   // ...and the filled profile survived it
+    QVERIFY(used.id.isEmpty());
+    QCOMPARE(used.knownHostsFile, knownHosts);
+    QCOMPARE(used.identityFile, keyPath);
+    QCOMPARE(used.terminalType, QStringLiteral("vt220"));
+    QCOMPARE(used.keepAliveSeconds, 7);
+    QCOMPARE(app.lastSshTarget(), QStringLiteral("ssh:target:") + target);
+
+    QTRY_COMPARE_WITH_TIMEOUT(session->transport()->state(), Transport::State::Connected, kSshTimeoutMs);
+    QCOMPARE(hostKeys.count(), 0);   // the seeded temporary file answered
+    QCOMPARE(prompts.count(), 0);    // the preference key answered
+    QCOMPARE(session->sshConnection()->authMethod(), QStringLiteral("publickey"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.lastTerm(), QStringLiteral("vt220"), kSshTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(session->terminal()).contains(QStringLiteral("welcome")), kSshTimeoutMs);
+    session->disconnectPort();
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kSshTimeoutMs);
+    QCOMPARE(QString::fromUtf8(readFile(knownHosts)).trimmed(), server.knownHostsLine());   // nothing was added
+
+    // A stored profile keeps its own fields; only an empty known_hosts field takes the default.
+    SshProfile p;
+    p.name = QStringLiteral("Prefs box");
+    p.host = QStringLiteral("127.0.0.1");
+    p.port = server.port();
+    p.user = QStringLiteral("test");
+    p.auth = SshProfile::Auth::PublicKey;
+    p.identityFile = keyPath;
+    p.terminalType = QStringLiteral("xterm");
+    p.keepAliveSeconds = 0;
+    p.connectTimeoutSeconds = 5;
+    const SshProfile stored = profiles.upsert(p);
+    session->setSshTarget(QStringLiteral("ssh:profile:") + stored.id);
+    QVERIFY(session->connectPort());
+    const SshProfile usedStored = session->sshConnection()->profile();
+    QCOMPARE(usedStored.id, stored.id);
+    QCOMPARE(usedStored.knownHostsFile, knownHosts);
+    QCOMPARE(usedStored.terminalType, QStringLiteral("xterm"));
+    QCOMPARE(usedStored.keepAliveSeconds, 0);
+    QVERIFY(profiles.profile(stored.id)->lastUsed.isValid());   // touched on connect
+    QTRY_COMPARE_WITH_TIMEOUT(session->transport()->state(), Transport::State::Connected, kSshTimeoutMs);
+    QCOMPARE(hostKeys.count(), 0);
+    QCOMPARE(prompts.count(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(server.lastTerm(), QStringLiteral("xterm"), kSshTimeoutMs);
+    session->disconnectPort();
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kSshTimeoutMs);
+
+    app.setSshKnownHostsFile(QString());
+    app.setSshDefaultIdentityFile(QString());
+    app.setSshDefaultTerminalType(QStringLiteral("xterm-256color"));
+    app.setSshDefaultKeepAliveSeconds(30);
 }
 
 void Tst_sessionwidget::serialTransportFacade()

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "BuildAI Serial Utility - a serial-port terminal for Rockchip Linux boards and MCU shells"
     HOMEPAGE_URL "https://build.ai"
     LANGUAGES CXX)
@@ -335,7 +335,7 @@ if(SU_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
     # GUI tests that exercise the language menu / translated group names need the embedded .qm files too.
-    list(APPEND SU_TRANSLATION_TARGETS tst_mainwindow tst_dialogs tst_sessionwidget)
+    list(APPEND SU_TRANSLATION_TARGETS tst_mainwindow tst_dialogs tst_sessionwidget tst_sshsession)
 endif()
 
 # ---------------------------------------------------------------------------

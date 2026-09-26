@@ -2657,12 +2657,12 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+1211"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+1216"/>
         <source>Output paused while selecting - Enter copies, Esc cancels</source>
         <translation>Output paused while selecting - Enter copies, Esc cancels</translation>
     </message>
     <message>
-        <location line="-1063"/>
+        <location line="-1068"/>
         <source>Output resumed: %1 arrived while the display was paused</source>
         <translation>Output resumed: %1 arrived while the display was paused</translation>
     </message>
@@ -2707,7 +2707,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Enter a target such as user@host</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+45"/>
         <source>Cannot connect to %1</source>
         <translation>Cannot connect to %1</translation>
     </message>
@@ -2919,7 +2919,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+416"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+421"/>
         <source>No SSH host given</source>
         <translation>No SSH host given</translation>
     </message>
@@ -2957,7 +2957,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SshConnectionBar</name>
     <message>
-        <location filename="../src/ui/SshConnectionBar.cpp" line="+214"/>
+        <location filename="../src/ui/SshConnectionBar.cpp" line="+184"/>
         <source>Target:</source>
         <translation>Target:</translation>
     </message>
@@ -2977,7 +2977,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Host key type and authentication method</translation>
     </message>
     <message>
-        <location line="+216"/>
+        <location line="+246"/>
         <source>Enter user@host[:port]</source>
         <translation>Enter user@host[:port]</translation>
     </message>
@@ -3513,12 +3513,12 @@ You will be asked for it when connecting.</translation>
     </message>
     <message>
         <location line="+7"/>
-        <location line="+1355"/>
+        <location line="+1362"/>
         <source>Cannot read %1: %2</source>
         <translation>Cannot read %1: %2</translation>
     </message>
     <message>
-        <location line="-1350"/>
+        <location line="-1357"/>
         <source>Cannot create remote file %1: %2</source>
         <translation>Cannot create remote file %1: %2</translation>
     </message>
@@ -3539,19 +3539,19 @@ You will be asked for it when connecting.</translation>
     </message>
     <message>
         <location line="+9"/>
-        <location line="+1347"/>
+        <location line="+1354"/>
         <location line="+31"/>
         <source>Cannot write %1: %2</source>
         <translation>Cannot write %1: %2</translation>
     </message>
     <message>
-        <location line="-1357"/>
-        <location line="+1286"/>
+        <location line="-1364"/>
+        <location line="+1293"/>
         <source>Transfer cancelled</source>
         <translation>Transfer cancelled</translation>
     </message>
     <message>
-        <location line="-1266"/>
+        <location line="-1273"/>
         <source>Cannot resolve the remote home directory: %1</source>
         <translation>Cannot resolve the remote home directory: %1</translation>
     </message>
@@ -3576,7 +3576,7 @@ You will be asked for it when connecting.</translation>
         <translation>Cannot read the host key of %1: %2</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+66"/>
         <source>The host key of %1 is not known (%2) - reconnect cancelled</source>
         <translation>The host key of %1 is not known (%2) - reconnect cancelled</translation>
     </message>

@@ -330,7 +330,16 @@ shell - `echo`, `env`, `size`, `big n`, `sleep`, `hang`, `exit n` - exec, a buil
 server (`tests/support/TestSftpHandler`; libssh's own SFTP server is compiled out on Windows),
 direct-tcpip, abrupt client drops), so `tst_sshconnection` and the whole-application
 `tst_sshsession` suite run on every developer machine and on both CI platforms with no external
-sshd. `tst_sshconnection` additionally contains a live probe against a real OpenSSH server that
+sshd. `tst_sshsession` drives the real `MainWindow`, bar and dialogs (a timer answers the modal
+questions from inside their `exec()` loops): the ad-hoc flow with Enter in the line edit, Enter on
+the combo itself and the Connect button, host key remember / connect once, the password prompt,
+shell typing, status bar / tab dot / title, SFTP upload and download through `RemoteFileDialog`,
+a profile created in `SshProfilesDialog` with a saved password (no prompt on later connects, no
+secret in the JSON), session restore through `closeEvent`, link drop → reconnect (and none with
+auto-reconnect off), a `SIM:loopback` tab working next to the SSH tab with the actions flipping per
+tab, the Chinese UI switch with a connected tab, and the quit confirmation with a clean worker
+shutdown. A user-initiated Disconnect produces only the status-bar message, like a serial tab; a
+remote `exit` writes the "connection closed (exit status N)" system line. `tst_sshconnection` additionally contains a live probe against a real OpenSSH server that
 runs only when `SU_SSH_PROBE_TARGET=user@host[:port]` (and optionally `SU_SSH_PROBE_PASSWORD`)
 is set; it was run against the WSL Ubuntu sshd during development.
 

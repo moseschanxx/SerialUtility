@@ -229,6 +229,11 @@ SshConnection::SshConnection(QObject* parent)
 
 SshConnection::~SshConnection()
 {
+    // An object under destruction emits nothing but destroyed(): the close() below would
+    // otherwise report stateChanged(Disconnected) into receivers whose storage may already be
+    // gone (a recorder declared after the connection, a lambda's captured list). close() ends
+    // the worker's activity explicitly (abortWorker), so no internal slot depends on the signal.
+    blockSignals(true);
     close();
     // Everything queued for the worker (the close above included) runs before this quit; the
     // worker thread is then joined and its object deleted from here.

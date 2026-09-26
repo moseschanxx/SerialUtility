@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QThread>
 
 #include <memory>
 #include <utility>
@@ -112,7 +113,8 @@ struct ProbeSession
         conn.setProfile(profile);
     }
 
-    SshConnection conn;
+    // The recorders come first so they outlive `conn` (members are destroyed in reverse order):
+    // a signal delivered while the connection is torn down must never append to freed storage.
     SshProfile profile;
     QString password;
     QByteArray received;
@@ -127,6 +129,7 @@ struct ProbeSession
     bool rememberKey = true;
     QStringList responses;
     int cancelAt = 0;
+    SshConnection conn;   ///< last: destroyed first
 };
 
 QString knownHostsToken(const SshProfile& profile)
@@ -253,7 +256,11 @@ struct TestClient
         conn.setProfile(profile);
     }
 
-    SshConnection conn;
+    // The recorders come first so they outlive `conn` (members are destroyed in reverse order):
+    // the lambdas above write into them, and a connection destroyed while Connected or
+    // Reconnecting tears its worker down from the destructor (e2eDestroyWhileConnected). The
+    // destructor itself emits nothing since it blocks its signals, but nothing here may rely on
+    // that ordering either.
     SshProfile profile;
     QString password = kServerPassword;
     QByteArray received;
@@ -273,6 +280,7 @@ struct TestClient
     QStringList responses;
     bool rememberResponse = false;
     int cancelAt = 0;
+    SshConnection conn;   ///< last: destroyed first, while every recorder above is still alive
 };
 
 /// Non-empty lines of a known_hosts file, trimmed.
@@ -1938,13 +1946,22 @@ void Tst_sshconnection::e2eDestroyWhileConnected()
     TestSshServer server(serverOptions(QStringLiteral("destroy")));
     QVERIFY(server.start());
     ServerSpy spy(&server);
+    // Declared before the clients so they outlive them: a destructor that still emitted would
+    // write here, not into freed memory (which glibc reports as bad_alloc / abort).
+    int lateSignals = 0;
     auto c = std::make_unique<TestClient>(serverProfile(server, QStringLiteral("destroy")));
     E2E_CONNECT(*c);
     c->conn.write(QByteArrayLiteral("echo BEFORE\r"));
     QTRY_VERIFY_WITH_TIMEOUT(c->received.contains("BEFORE\r\n$ "), kE2eTimeoutMs);
+    QPointer<QThread> workerThread = c->conn.findChild<QThread*>(QStringLiteral("ssh-worker"));
+    QVERIFY(workerThread);
+    QVERIFY(workerThread->isRunning());
+    connect(&c->conn, &Transport::stateChanged, this, [&lateSignals](Transport::State) { ++lateSignals; });
+    connect(&c->conn, &Transport::errorOccurred, this, [&lateSignals](const QString&) { ++lateSignals; });
 
     // Delete while connected (with a transfer in flight): the worker thread is joined
-    // promptly, the server sees a disconnect, nothing crashes.
+    // promptly, the server sees a disconnect, nothing crashes and the destructor emits nothing
+    // (the connection's own recorders are members declared before it, so they are alive).
     const QString upPath = m_dir.filePath(QStringLiteral("destroy/up.bin"));
     QVERIFY(writeFile(upPath, randomBytes(512 * 1024)));
     SshConnection::TransferRequest upload;
@@ -1956,19 +1973,27 @@ void Tst_sshconnection::e2eDestroyWhileConnected()
     timer.start();
     c.reset();
     QVERIFY2(timer.elapsed() < 5000, qPrintable(QString::number(timer.elapsed())));
+    QVERIFY(workerThread.isNull());   // joined and deleted by the destructor
+    QCOMPARE(lateSignals, 0);
     QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kE2eTimeoutMs);
     QTRY_COMPARE_WITH_TIMEOUT(spy.disconnected, 1, kE2eTimeoutMs);
     QCOMPARE(server.connectionCount(), 1);
 
-    // Destroyed while Reconnecting (the server refuses): the pending reconnect is dropped.
+    // Destroyed while Reconnecting (the server refuses): the pending reconnect is dropped,
+    // again without a final stateChanged() from the destructor.
     auto d = std::make_unique<TestClient>(serverProfile(server, QStringLiteral("destroy")));
     E2E_CONNECT(*d);
     server.setAcceptConnections(false);
     server.dropAllClients();
     QTRY_COMPARE_WITH_TIMEOUT(d->conn.state(), State::Reconnecting, 5000);
+    workerThread = d->conn.findChild<QThread*>(QStringLiteral("ssh-worker"));
+    QVERIFY(workerThread);
+    connect(&d->conn, &Transport::stateChanged, this, [&lateSignals](Transport::State) { ++lateSignals; });
     timer.restart();
     d.reset();
     QVERIFY2(timer.elapsed() < 5000, qPrintable(QString::number(timer.elapsed())));
+    QVERIFY(workerThread.isNull());
+    QCOMPARE(lateSignals, 0);
     server.setAcceptConnections(true);
     QTest::qWait(2500);
     QCOMPARE(server.connectionCount(), 2);

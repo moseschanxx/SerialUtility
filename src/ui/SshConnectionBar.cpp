@@ -77,28 +77,6 @@ int findRecentItem(const QComboBox* combo, const QString& text)
     return -1;
 }
 
-/// Enter in the target field means "connect" and is fully handled by the line edit's
-/// returnPressed(). The line edit does not accept the key, so it would travel on to the combo,
-/// which - while the completer popup is open - hands it to the line edit a second time
-/// (QComboBox::keyPressEvent), and further up to whatever default button the window has.
-/// Swallow it at the combo.
-class ReturnKeyFilter : public QObject
-{
-public:
-    using QObject::QObject;
-
-    bool eventFilter(QObject* watched, QEvent* event) override
-    {
-        if (event->type() == QEvent::KeyPress) {
-            const auto* key = static_cast<QKeyEvent*>(event);
-            if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
-                return true;
-            }
-        }
-        return QObject::eventFilter(watched, event);
-    }
-};
-
 } // namespace
 
 SshConnectionBar::SshConnectionBar(QWidget* parent)
@@ -138,7 +116,7 @@ void SshConnectionBar::setupUi()
     completer->setFilterMode(Qt::MatchContains);
     completer->setCompletionMode(QCompleter::PopupCompletion);
     m_targetCombo->setCompleter(completer);
-    m_targetCombo->installEventFilter(new ReturnKeyFilter(m_targetCombo));
+    m_targetCombo->installEventFilter(this);   // Return/Enter = connect, see eventFilter()
 
     m_profilesButton = new QToolButton(this);
     m_profilesButton->setObjectName(QStringLiteral("profilesButton"));
@@ -189,15 +167,7 @@ void SshConnectionBar::setupUi()
         });
         // Enter in the target field = Connect (the combo's own returnPressed handling is a no-op
         // with NoInsert; a typed recent target is matched to its item by editingFinished).
-        connect(edit, &QLineEdit::returnPressed, this, [this]() {
-            if (m_updating) {
-                return;
-            }
-            emitProfileChangedIfValid();
-            if (m_state == Transport::State::Disconnected && hasValidTarget()) {
-                emit connectRequested();
-            }
-        });
+        connect(edit, &QLineEdit::returnPressed, this, &SshConnectionBar::handleReturnKey);
     }
     connect(m_profilesButton, &QToolButton::clicked, this, &SshConnectionBar::profilesEditRequested);
     connect(m_connectButton, &QPushButton::clicked, this, [this]() {
@@ -227,6 +197,36 @@ void SshConnectionBar::changeEvent(QEvent* event)
         retranslate();
     }
     QWidget::changeEvent(event);
+}
+
+bool SshConnectionBar::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_targetCombo && event->type() == QEvent::KeyPress) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+            // Focus can sit on the combo itself (a fresh tab focused through setFocusToTarget())
+            // rather than on its line edit: then the key would never reach returnPressed(). When
+            // the line edit did see it first, handleReturnKey() ignores this second delivery.
+            handleReturnKey();
+            return true;   // never travels on to a default button of the window
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void SshConnectionBar::handleReturnKey()
+{
+    if (m_updating) {
+        return;
+    }
+    if (m_returnGuard.isValid() && m_returnGuard.elapsed() < 150) {
+        return;   // the same key press, delivered a second time (line edit, then the combo)
+    }
+    m_returnGuard.start();
+    emitProfileChangedIfValid();
+    if (m_state == Transport::State::Disconnected && hasValidTarget()) {
+        emit connectRequested();
+    }
 }
 
 // ---------------------------------------------------------------------------
