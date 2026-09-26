@@ -314,6 +314,129 @@
        </item>
       </layout>
      </widget>
+     <widget class="QWidget" name="tabSsh">
+      <attribute name="title">
+       <string>SSH</string>
+      </attribute>
+      <layout class="QFormLayout" name="sshForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="sshKnownHostsLabel">
+         <property name="text">
+          <string>known_hosts file:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <layout class="QHBoxLayout" name="sshKnownHostsLayout">
+         <item>
+          <widget class="QLineEdit" name="sshKnownHostsEdit">
+           <property name="toolTip">
+            <string>OpenSSH known_hosts file used to verify server host keys; shared with the system ssh. Empty = ~/.ssh/known_hosts. A profile can override it.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="sshKnownHostsBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="sshIdentityLabel">
+         <property name="text">
+          <string>Default identity file:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <layout class="QHBoxLayout" name="sshIdentityLayout">
+         <item>
+          <widget class="QLineEdit" name="sshIdentityEdit">
+           <property name="toolTip">
+            <string>Private key tried for targets typed into the SSH bar. Empty = the agent and ~/.ssh/id_ed25519, id_ecdsa, id_rsa.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="sshIdentityBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="sshTerminalTypeLabel">
+         <property name="text">
+          <string>Terminal type:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QLineEdit" name="sshTerminalTypeEdit">
+         <property name="toolTip">
+          <string>TERM requested for the remote PTY (xterm-256color, xterm, vt100, ...).</string>
+         </property>
+         <property name="placeholderText">
+          <string>xterm-256color</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="sshKeepAliveLabel">
+         <property name="text">
+          <string>Keep-alive interval:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QSpinBox" name="sshKeepAliveSpin">
+         <property name="toolTip">
+          <string>Seconds between keep-alive messages that detect a dead link (0 = off).</string>
+         </property>
+         <property name="specialValueText">
+          <string>Off</string>
+         </property>
+         <property name="suffix">
+          <string> s</string>
+         </property>
+         <property name="minimum">
+          <number>0</number>
+         </property>
+         <property name="maximum">
+          <number>600</number>
+         </property>
+         <property name="singleStep">
+          <number>5</number>
+         </property>
+         <property name="value">
+          <number>30</number>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="sshSecretsLabel">
+         <property name="text">
+          <string>Saved passwords:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QLabel" name="sshSecretsNoteLabel">
+         <property name="text">
+          <string notr="true"/>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
      <widget class="QWidget" name="tabLogging">
       <attribute name="title">
        <string>Logging</string>

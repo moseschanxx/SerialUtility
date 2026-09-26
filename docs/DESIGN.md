@@ -22,9 +22,10 @@ It replaces ad-hoc use of PuTTY/minicom/SecureCRT with something that is scripta
 as the team's other tools. It intentionally has **no device-specific protocol logic**;
 it is a general terminal that speaks bytes.
 
-## 2. Non-goals (v0.1)
+## 2. Non-goals
 
-- No TCP/telnet/SSH transports (architecture allows adding them behind `SerialConnection`).
+- No raw TCP/telnet transport yet (v0.3 added SSH behind the `Transport` interface, section 4.8;
+  telnet would be a third implementation).
 - No XMODEM/YMODEM/Kermit file transfer (planned; `FileSender` is the hook).
 - No scripting language; quick commands + file send cover the automation needs for now.
 - No perfect terminfo compliance; the VT100/xterm subset in `TERMINAL_EMULATION.md` is the target.
@@ -33,15 +34,16 @@ it is a general terminal that speaks bytes.
 
 | Item | Choice |
 |---|---|
-| Language | C++20, Qt 6.8 (Core, Gui, Widgets, SerialPort, LinguistTools, Test) |
+| Language | C++20, Qt 6.8 (Core, Gui, Widgets, SerialPort, Network, LinguistTools, Test) |
 | Build | CMake ≥ 3.22 + Ninja (≥ 3.25 for the presets); `CMakePresets.json` (Qt Creator picks it up), `scripts/build.ps1` for the CLI |
+| SSH | libssh 0.11.1 fetched and built from source by CMake (`FetchContent`, SHA-256 pinned, shared `ssh.dll` / `libssh.so.4`), OpenSSL 3 as its crypto backend (`find_package(OpenSSL)`; the `libcrypto` runtime is copied next to the binaries and shipped) |
 | Compiler (Windows) | MSVC 2022 x64 (`D:\Qt\6.8.3\msvc2022_64`), `/W4 /utf-8 /permissive-` |
 | Layout | `src/app` (settings, logging, version), `src/core` (serial + helpers), `src/terminal` (emulator), `src/ui` (widgets), `src/dialogs`, `tests/` |
 | Naming | PascalCase files and classes (`SerialConnection.cpp`), `m_` member prefix, Qt-style camelCase methods, `lc*` logging categories |
 | Includes | Always relative to `src/`: `#include "core/HexUtils.h"`; `ui_Foo.h` for Designer forms |
 | Strings | UI text wrapped in `tr()`; technical text (hex, port names) not translated |
 | Ownership | Qt parent/child for QObjects; `std::unique_ptr` for non-QObject heap data; no raw `delete` outside destructors |
-| Threads | Everything on the GUI thread. QSerialPort is asynchronous; rendering is coalesced. No worker threads in v0.1 |
+| Threads | Everything on the GUI thread, except SSH: every libssh call runs on a private worker thread per `SshConnection` (section 4.8); the GUI only sees queued signals. QSerialPort is asynchronous; rendering is coalesced |
 | Logging | `qCInfo(lcSerial) << ...`; routed to the System Log dock by `SystemLogViewer::installMessageHandler()` |
 | Formatting | `.clang-format` (LLVM base, 4 spaces, 120 cols, braces on new line for functions/classes) |
 
@@ -55,18 +57,21 @@ application `SerialUtility`. Per-user data (quick commands JSON, history) lives 
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ MainWindow (QMainWindow, MainWindow.ui)                                    │
 │  menus / toolbar / status bar / System Log dock / Language menu             │
-│  QTabWidget ──► SessionWidget ×N                                            │
-│                  ├── ConnectionBar        (port + line parameters + connect)│
+│  QTabWidget ──► SessionWidget ×N   (Kind::Serial or Kind::Ssh)              │
+│                  ├── ConnectionBar | SshConnectionBar   (strip above)       │
 │                  ├── QStackedWidget                                         │
 │                  │     ├── TerminalWidget  ──► AnsiParser ──► TerminalScreen│
 │                  │     └── HexDumpView                                      │
 │                  ├── QuickCommandBar      (QuickCommandStore, shared)       │
 │                  ├── CommandInput         (CommandHistory, shared)          │
-│                  ├── SerialConnection     (QSerialPort + reconnect)         │
+│                  ├── Transport: SerialConnection (QSerialPort + reconnect)  │
+│                  │              | SshConnection (libssh worker thread)      │
 │                  └── SessionLogger                                          │
-│  Dialogs: About, Version, Preferences, QuickCommands, SendFile(FileSender)  │
+│  Dialogs: About, Version, Preferences, QuickCommands, SendFile(FileSender), │
+│           HostKey, AuthPrompt, SshProfiles, RemoteFile (SFTP)               │
 └────────────────────────────────────────────────────────────────────────────┘
         ▲ AppSettings (QSettings façade)     ▲ SerialPortEnumerator (1 s poller)
+        ▲ SshProfileStore (ssh_profiles.json) ▲ SecretStore (DPAPI / obfuscated)
 ```
 
 Three CMake targets: **`su_core`** (static lib: `src/app`, `src/core`, `src/terminal`
@@ -77,7 +82,8 @@ minus `TerminalWidget`; links Core/Gui/SerialPort; used by the unit tests), **`s
 ### 4.1 Data flow
 
 ```
-device ─RX─► QSerialPort.readyRead ─► SerialConnection::dataReceived(QByteArray)
+device ─RX─► QSerialPort.readyRead ─► SerialConnection ─┐
+server ─RX─► ssh channel (worker thread, queued) ─► SshConnection ─┴─► Transport::dataReceived(QByteArray)
    ├─► TerminalWidget::feedData ─► AnsiParser::feed (one screen batch) ─► TerminalScreen ops ─► dirty rows ─► coalesced repaint
    ├─► HexDumpView::appendReceived (queued while the hex page is hidden)
    └─► SessionLogger::logReceived
@@ -98,7 +104,13 @@ may add private members, private slots and helper functions freely, and may add
 
 | Module | Responsibility | Notes |
 |---|---|---|
+| `Transport` | abstract byte-stream behind a session tab: state machine (Disconnected / Connecting / Connected / Reconnecting), counters, `dataReceived`/`dataSent`, `connectionLost`/`connectionRestored`, `notifyTerminalSize()` | `SerialConnection` and `SshConnection` implement it; `SessionWidget`, logger and views only use this interface |
 | `SerialConnection` | one QSerialPort; open/close/write; counters; **auto-reconnect** when the device vanishes (`ResourceError`, or Read/Write/UnknownError with the port no longer enumerated, or enumerator `portRemoved`); live parameter changes; DTR/RTS; break | never blocks (`waitForBytesWritten` forbidden); public getter/signal added at integration: `pendingTxBytes()` / `txBytesWritten()` (write-buffer backpressure for `SendFileDialog`), `sendBreak()` returns success |
+| `SshConnection` | SSH shell as a `Transport` (libssh on a worker thread): host-key verification against OpenSSH `known_hosts`, agent / key / password / keyboard-interactive auth with GUI prompts, PTY + window-change, keep-alive, auto-reconnect with backoff, local port forwards, SFTP upload/download | section 4.8; all signals on the GUI thread |
+| `SshProfile` / `SshProfileStore` | saved targets (`ssh_profiles.json` in the data directory) and recent ad-hoc targets; `parseTarget()` for `user@host:port` / `ssh://` / `[v6]:port` | never contains secrets |
+| `SecretStore` | saved passwords / passphrases: Windows DPAPI (current user), elsewhere obfuscated in QSettings | `isSecure()` tells the UI which one |
+| `SshConnectionBar` / `HostKeyDialog` / `AuthPromptDialog` / `SshProfilesDialog` / `RemoteFileDialog` | the SSH strip above the terminal, the two blocking questions of a connect, the profile manager and the SFTP transfer dialog | Designer `.ui` forms except the bar |
+| `TestSshServer` (tests only) | in-process libssh server: password / public-key / keyboard-interactive auth, PTY, a scripted shell, exec, a built-in minimal SFTP v3 server (`tests/support/TestSftpHandler`, because libssh compiles its own SFTP server out on Windows), direct-tcpip, abrupt drops | every SSH suite runs against it on both CI platforms |
 | `SerialPortEnumerator` | singleton 1 s poller of `QSerialPortInfo`; natural sort; add/remove diffs | Windows enumeration is cheap (<5 ms) |
 | `TerminalScreen` | grid + scrollback + cursor + attributes + modes; every editing op the parser needs | pure model, unit-tested |
 | `AnsiParser` | bytes → decoded text → VT500 state machine → `TerminalScreen` ops; DSR/DA replies | never desyncs on garbage |
@@ -255,6 +267,81 @@ the selected baud rate. See the header for the exact command set. Unit tests:
   screen is pushed into the scrollback, like Ctrl+L in a shell - the label says so because it is
   not the toolbar's Clear) and *Clear Scrollback* (`clearScrollback()`).
 
+### 4.8 SSH sessions (v0.3)
+
+**Transport.** `core/Transport.h` is the byte-stream interface a session tab talks to
+(`open/close/write`, `dataReceived/dataSent`, `stateChanged` over Disconnected / Connecting /
+Connected / Reconnecting, `errorOccurred`, counters, `connectionLost/connectionRestored`,
+`notifyTerminalSize`). `SerialConnection` implements it unchanged in behaviour (its serial-only
+API - line parameters, DTR/RTS, BREAK, `portDisappeared/reconnected` - stays on top).
+`SessionWidget` is created with a `Transport::Kind`: the serial strip (`ConnectionBar`) or the SSH
+strip (`SshConnectionBar`) sits above the same terminal, hex view, quick commands, command input
+and logger, so every feature of a serial tab works identically for SSH. Session restore persists
+one key per tab: the port name for serial, `ssh:profile:<id>` / `ssh:target:<user@host:port>`
+for SSH (never auto-connecting on start).
+
+**SshConnection** (`ssh/SshConnection.h`, libssh 0.11.1). All libssh calls run on a private
+worker thread per connection; the class is a GUI-thread facade whose every signal is emitted
+on the GUI thread. The connect sequence is documented in the header and mirrors OpenSSH:
+TCP + key exchange with the profile's timeout → host key check against an OpenSSH
+`known_hosts` file (default `~/.ssh/known_hosts`, shared with the system `ssh`; Unknown / Changed
+/ new key type are answered by the user through `hostKeyVerificationRequired` → `HostKeyDialog`;
+"remember" appends, or for a changed key replaces the stored line(s) for that host) →
+authentication in the profile's order (Auto = agent, identity file, `~/.ssh/id_ed25519|id_ecdsa|id_rsa`,
+password, keyboard-interactive; each only if the server offers it; encrypted keys and passwords
+raise `authPromptRequired` → `AuthPromptDialog`, up to three attempts; a password or passphrase
+can be remembered in `SecretStore` under the profile id) → PTY (`xterm-256color`, the terminal's
+current grid) + `shell` (or `exec` for a remote command) → `shellStarted`. `~/.ssh/config` is
+parsed by libssh so `Host` aliases, `IdentityFile`, `User`, `Port` and `ProxyJump` from the user's
+config apply; explicit profile fields win (the environment variable `SU_SSH_IGNORE_CONFIG=1` skips
+the config; the test suites set it). Terminal resizes become window-change requests. A
+keep-alive (`SSH_MSG_IGNORE`, 30 s default) detects dead links; a dropped link (not a clean
+`exit`) goes to Reconnecting with 2 → 30 s backoff using only non-interactive credentials.
+Local port forwards (`-L`) are `QTcpServer`s in the worker bridged to `direct-tcpip` channels.
+File transfer uses the SFTP subsystem of the same session (`RemoteFileDialog`, drag-and-drop of a
+file onto an SSH terminal = upload) in 64 KiB slices interleaved with the shell traffic.
+Limitation: libssh has no ssh-agent support on Windows, so `Auth::Agent` is only useful on Linux
+and macOS (key files work everywhere).
+
+**Profiles and secrets.** `SshProfile` is a value type (host, port, user, auth method, identity
+file, remote/startup command, terminal type, keep-alive, timeout, proxy jump, local forwards,
+compression, known_hosts file); `SshProfileStore` persists them as JSON in the data directory
+(`ssh_profiles.json`, sorted by name, plus the last ten ad-hoc targets) and never stores secrets.
+`SecretStore` keeps passwords and passphrases: Windows DPAPI (only the same user on the same
+machine can decrypt) or, elsewhere, an obfuscated value in QSettings that the UI honestly labels
+as "not encrypted" (`isSecure()`).
+
+**UI.** *File > New SSH Session...* (Ctrl+Shift+T) opens a tab whose bar has an editable target
+combo (stored profiles, then recent ad-hoc targets; free text `user@host[:port]`, `ssh://…`,
+`[v6]:port`), a gear to the profile manager and the Connect button. *Edit > SSH Profiles...*
+manages profiles (import/export JSON, Connect straight from the dialog). *Session > Upload File
+to Remote... / Download File from Remote...* are enabled on a connected SSH tab; Send BREAK,
+DTR/RTS and Refresh Ports are serial-only. *Preferences > SSH* holds the default known_hosts
+file, identity file, terminal type and keep-alive; they are applied at connect time to the
+fields a profile leaves empty (the known_hosts file for every profile; identity file, terminal
+type and keep-alive for ad-hoc targets only, since a stored profile carries its own). The status
+bar shows `user@host:port · ssh-ed25519 · publickey`. Command line: `--ssh <target>` opens an SSH
+tab with that target filled in (`--ssh <target> --connect` connects at once); a session-restore key
+(`ssh:target:...`, `ssh:profile:<id>`) is accepted as the positional argument too.
+
+**Testing.** `tests/support/TestSshServer` is an in-process libssh *server* (ed25519 host key,
+password / public-key / keyboard-interactive auth, PTY with window-change tracking, a scripted
+shell - `echo`, `env`, `size`, `big n`, `sleep`, `hang`, `exit n` - exec, a built-in minimal SFTP v3
+server (`tests/support/TestSftpHandler`; libssh's own SFTP server is compiled out on Windows),
+direct-tcpip, abrupt client drops), so `tst_sshconnection` and the whole-application
+`tst_sshsession` suite run on every developer machine and on both CI platforms with no external
+sshd. `tst_sshconnection` additionally contains a live probe against a real OpenSSH server that
+runs only when `SU_SSH_PROBE_TARGET=user@host[:port]` (and optionally `SU_SSH_PROBE_PASSWORD`)
+is set; it was run against the WSL Ubuntu sshd during development.
+
+**Packaging.** libssh is fetched from libssh.org at configure time (SHA-256 pinned, `WITH_SERVER`
+and `WITH_SFTP` on, examples/zlib/gssapi off) and built as a shared library; its `ssh.dll` /
+`libssh.so.4` and OpenSSL's `libcrypto` are copied next to every executable after linking and
+shipped in the installer, the portable zip and the Linux tarball (the tarball's `libssh.so`
+carries `RUNPATH=$ORIGIN`, so the bundled `libcrypto.so.3` is used on distros without OpenSSL 3).
+Windows needs an OpenSSL 3 installation to *build* (`C:\Program Files\OpenSSL-Win64` or any
+prefix passed as `-DOPENSSL_ROOT_DIR`); users need nothing.
+
 ## 5. Build, run, test
 
 ```powershell
@@ -292,7 +379,22 @@ Packages build in isolation with `scripts/build.ps1 -BuildDir build/<pkg> -KeepG
 After integration: full build, tests green, `windeployqt` deploy, manual run against
 COM8 (CH343 → Rockchip board) and COM6 (J-Link CDC → MCU).
 
+### 6.1 v0.3.0 work packages (SSH)
+
+Same rules; every package built in its own `build/wf-<pkg>` directory while the others ran.
+Compilable stubs of every new class existed from the start so each package linked and tested on
+its own.
+
+| Package | Files owned |
+|---|---|
+| **transport-session** | `SerialConnection` on top of `Transport`; `SessionWidget` in serial or SSH mode; `MainWindow` actions (New SSH Session, SSH Profiles, Upload/Download); `AppSettings` SSH keys; Preferences SSH page; the related test suites |
+| **ssh-core** | `SshConnection.cpp` (worker thread), `SecretStore.cpp`, `tst_sshprofile`, `tst_secretstore`, `tst_sshconnection` (incl. a live probe against a real sshd, env-gated) |
+| **test-server** | `tests/support/TestSshServer.cpp`, `tst_testsshserver` |
+| **ssh-dialogs** | `SshConnectionBar.cpp`, the four SSH dialogs and their `.ui`, `tst_sshdialogs` |
+| **integrate / gui-e2e** | build everything together, `tst_sshconnection` end to end, `tst_sshsession` (whole-app flow) |
+
 ## 7. Future work
 
-TCP/telnet transport; XMODEM/YMODEM; search in scrollback UI; split view; session
-profiles (named connection presets); Linux packaging (AppImage/deb); auto-update check.
+TCP/telnet transport; XMODEM/YMODEM; search in scrollback UI; split view; Linux packaging
+(AppImage/deb); auto-update check; SSH: agent authentication on Windows (libssh has no agent
+support there), remote port forwards, SFTP browser.

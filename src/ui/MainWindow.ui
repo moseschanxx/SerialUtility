@@ -78,6 +78,7 @@
      <string>&amp;File</string>
     </property>
     <addaction name="actionNewSession"/>
+    <addaction name="actionNewSshSession"/>
     <addaction name="actionCloseSession"/>
     <addaction name="separator"/>
     <addaction name="actionStartLogging"/>
@@ -100,6 +101,8 @@
     <addaction name="actionResetTerminal"/>
     <addaction name="separator"/>
     <addaction name="actionSendFile"/>
+    <addaction name="actionUploadFile"/>
+    <addaction name="actionDownloadFile"/>
     <addaction name="actionSendBreak"/>
     <addaction name="actionSyncTerminalSize"/>
     <addaction name="separator"/>
@@ -116,6 +119,7 @@
     <addaction name="actionFind"/>
     <addaction name="separator"/>
     <addaction name="actionQuickCommands"/>
+    <addaction name="actionSshProfiles"/>
     <addaction name="actionPreferences"/>
    </widget>
    <widget class="QMenu" name="menuView">
@@ -183,11 +187,14 @@
     <bool>false</bool>
    </attribute>
    <addaction name="actionNewSession"/>
+   <addaction name="actionNewSshSession"/>
    <addaction name="actionConnect"/>
    <addaction name="actionDisconnect"/>
    <addaction name="separator"/>
    <addaction name="actionClear"/>
    <addaction name="actionSendFile"/>
+   <addaction name="actionUploadFile"/>
+   <addaction name="actionDownloadFile"/>
    <addaction name="separator"/>
    <addaction name="actionHexView"/>
    <addaction name="actionStartLogging"/>
@@ -210,6 +217,27 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+T</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionNewSshSession">
+   <property name="icon">
+    <iconset resource="../../resources/resources.qrc">
+     <normaloff>:/icons/ssh.svg</normaloff>:/icons/ssh.svg</iconset>
+   </property>
+   <property name="text">
+    <string>New &amp;SSH Session...</string>
+   </property>
+   <property name="iconText">
+    <string>New SSH Session</string>
+   </property>
+   <property name="toolTip">
+    <string>Open a new SSH session tab</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+T</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -377,6 +405,34 @@
     <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
+  <action name="actionUploadFile">
+   <property name="text">
+    <string>&amp;Upload File to Remote...</string>
+   </property>
+   <property name="iconText">
+    <string>Upload</string>
+   </property>
+   <property name="toolTip">
+    <string>Copy a local file to the SSH server (SFTP)</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionDownloadFile">
+   <property name="text">
+    <string>&amp;Download File from Remote...</string>
+   </property>
+   <property name="iconText">
+    <string>Download</string>
+   </property>
+   <property name="toolTip">
+    <string>Copy a file from the SSH server to this computer (SFTP)</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
   <action name="actionSendBreak">
    <property name="text">
     <string>Send &amp;Break</string>
@@ -463,6 +519,20 @@
    </property>
    <property name="toolTip">
     <string>Edit the quick command buttons</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSshProfiles">
+   <property name="text">
+    <string>SS&amp;H Profiles...</string>
+   </property>
+   <property name="iconText">
+    <string>SSH Profiles</string>
+   </property>
+   <property name="toolTip">
+    <string>Manage the saved SSH targets</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>

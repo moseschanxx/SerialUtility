@@ -27,7 +27,18 @@
  * connection/default (QVariantMap of SerialSettings), connection/autoReconnect,
  * connection/reconnectIntervalMs, connection/lastPort, connection/showSimulatedPorts,
  * logging/directory, logging/autoLog, logging/format, logging/includeTx, session/confirmClose,
- * session/restoreLastPorts, window/geometry, window/state.
+ * session/restoreLastPorts, session/lastOpenPorts, window/geometry, window/state.
+ *
+ * SSH group (v0.3, Preferences > SSH; the per-profile fields in SshProfile override these):
+ *   ssh/knownHostsFile   sshKnownHostsFile()          default "" = SshConnection::defaultKnownHostsFile()
+ *   ssh/terminalType     sshDefaultTerminalType()     default "xterm-256color"
+ *   ssh/keepAliveSeconds sshDefaultKeepAliveSeconds() default 30, clamped 0..600 (0 = off)
+ *   ssh/identityFile     sshDefaultIdentityFile()     default "" (= agent / ~/.ssh/id_* discovery)
+ *   ssh/lastTarget       lastSshTarget()              default ""; the restore key of the SSH tab
+ *                                                     connected last ("ssh:profile:<id>" or
+ *                                                     "ssh:target:<user@host:port>"), pre-filled
+ *                                                     into a new SSH session (never auto-connects)
+ * Every setter writes through and emits changed(key) like the rest.
  */
 class AppSettings : public QObject
 {
@@ -87,6 +98,18 @@ public:
     /// see core/DeviceSimulator.h) in the port list. Default true; off for production use.
     bool showSimulatedPorts() const;
     void setShowSimulatedPorts(bool on);
+
+    // ---- SSH (defaults for new profiles / ad-hoc targets) ---------------------------
+    QString sshKnownHostsFile() const;        ///< "" -> SshConnection::defaultKnownHostsFile()
+    void setSshKnownHostsFile(const QString& path);
+    QString sshDefaultTerminalType() const;   ///< default "xterm-256color" (never empty)
+    void setSshDefaultTerminalType(const QString& type);
+    int sshDefaultKeepAliveSeconds() const;   ///< default 30, clamp 0..600; 0 = off
+    void setSshDefaultKeepAliveSeconds(int seconds);
+    QString sshDefaultIdentityFile() const;   ///< default "" (agent / ~/.ssh/id_* discovery)
+    void setSshDefaultIdentityFile(const QString& path);
+    QString lastSshTarget() const;            ///< restore key of the last connected SSH tab; default ""
+    void setLastSshTarget(const QString& key);
 
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()

@@ -1,3 +1,13 @@
+V0.3.0
+	SSH sessions (File > New SSH Session..., Ctrl+Shift+T): the same terminal, quick commands, command input, hex view, logging, log replay and mark mode over SSH. Type user@host[:port] (also ssh:// URLs, [IPv6]:port and Host aliases from ~/.ssh/config) or pick a saved profile, then Connect.
+	Host keys are verified against ~/.ssh/known_hosts (the file the ssh command uses): fingerprint confirmation for new hosts, and the "REMOTE HOST IDENTIFICATION HAS CHANGED" warning with an explicit replace step when a board was reflashed.
+	Authentication: ssh-agent (Linux/macOS), key files (~/.ssh/id_ed25519, id_ecdsa, id_rsa or a chosen file, with passphrase prompt), password and keyboard-interactive, in the order the server offers; passwords and passphrases can be remembered per profile (Windows DPAPI; obfuscated elsewhere and labelled as such).
+	SSH profiles (Edit > SSH Profiles...): name, host, port, user, authentication method, key file, saved password, remote command, startup command, terminal type, keep-alive, timeout, compression, ProxyJump, alternative known_hosts file and local port forwards; JSON import/export (never with secrets); the connection bar lists the profiles and the last ten ad-hoc targets.
+	The remote shell follows the terminal size automatically (window-change requests); keep-alives detect dead links; a dropped connection reconnects with backoff using saved credentials only, while a clean "exit" ends the session without reconnecting.
+	SFTP file transfer on the same connection: Session > Upload File to Remote... / Download File from Remote... with progress and cancel; dropping a file onto an SSH terminal uploads it.
+	Preferences > SSH: default known_hosts file, identity file, terminal type and keep-alive interval. SSH tabs are restored on the next start (not connected). The status bar shows the host key type and the authentication method.
+	Built on libssh 0.11.1 (fetched and built from source, OpenSSL backend) and shipped with every package; the new test suites run against an in-process SSH server on both Windows and Linux CI.
+
 V0.2.0
 	Pause output while selecting (cmd.exe mark mode): starting a mouse selection freezes the display while incoming bytes queue up; Enter copies the selection to the clipboard and resumes, Esc cancels; on by default, switchable in View > Pause Output While Selecting and in Preferences > Terminal. Logging and the hex view keep receiving data while the display is paused.
 	cmd.exe-style right click: pastes the clipboard, or copies the selection when text is selected; the context menu moves to Shift+right click and the Menu key. On by default, switchable in View and Preferences.

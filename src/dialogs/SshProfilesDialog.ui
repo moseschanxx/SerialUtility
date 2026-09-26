@@ -1,0 +1,562 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SshProfilesDialog</class>
+ <widget class="QDialog" name="SshProfilesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>540</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>700</width>
+    <height>460</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>SSH Profiles</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QHBoxLayout" name="contentLayout">
+     <item>
+      <layout class="QVBoxLayout" name="listColumn">
+       <item>
+        <widget class="QListWidget" name="listProfiles">
+         <property name="minimumSize">
+          <size>
+           <width>200</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>260</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Saved SSH profiles</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QGridLayout" name="listButtons">
+         <item row="0" column="0">
+          <widget class="QPushButton" name="buttonNew">
+           <property name="text">
+            <string>New</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QPushButton" name="buttonDuplicate">
+           <property name="text">
+            <string>Duplicate</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QPushButton" name="buttonDelete">
+           <property name="text">
+            <string>Delete</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QPushButton" name="buttonImport">
+           <property name="toolTip">
+            <string>Merge profiles from a JSON file (by id)</string>
+           </property>
+           <property name="text">
+            <string>Import...</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QPushButton" name="buttonExport">
+           <property name="toolTip">
+            <string>Write every profile to a JSON file (passwords are never exported)</string>
+           </property>
+           <property name="text">
+            <string>Export...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <widget class="QTabWidget" name="tabs">
+       <property name="currentIndex">
+        <number>0</number>
+       </property>
+       <widget class="QWidget" name="tabConnection">
+        <attribute name="title">
+         <string>Connection</string>
+        </attribute>
+        <layout class="QFormLayout" name="formConnection">
+         <property name="fieldGrowthPolicy">
+          <enum>QFormLayout::FieldGrowthPolicy::ExpandingFieldsGrow</enum>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="labelName">
+           <property name="text">
+            <string>&amp;Name:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editName</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLineEdit" name="editName">
+           <property name="placeholderText">
+            <string>Display name (defaults to user@host)</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="labelHost">
+           <property name="text">
+            <string>&amp;Host:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editHost</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <layout class="QHBoxLayout" name="hostLayout">
+           <item>
+            <widget class="QLineEdit" name="editHost">
+             <property name="placeholderText">
+              <string>Host name or IP address</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="labelPort">
+             <property name="text">
+              <string>&amp;Port:</string>
+             </property>
+             <property name="buddy">
+              <cstring>spinPort</cstring>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="spinPort">
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>65535</number>
+             </property>
+             <property name="value">
+              <number>22</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="labelUser">
+           <property name="text">
+            <string>&amp;User:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editUser</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLineEdit" name="editUser">
+           <property name="placeholderText">
+            <string>Local user name</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="labelAuth">
+           <property name="text">
+            <string>&amp;Authentication:</string>
+           </property>
+           <property name="buddy">
+            <cstring>comboAuth</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QComboBox" name="comboAuth"/>
+         </item>
+         <item row="4" column="0">
+          <widget class="QLabel" name="labelIdentityFile">
+           <property name="text">
+            <string>Identity &amp;file:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editIdentityFile</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <layout class="QHBoxLayout" name="identityLayout">
+           <item>
+            <widget class="QLineEdit" name="editIdentityFile">
+             <property name="toolTip">
+              <string>Private key file; with Automatic authentication it is tried before the default ~/.ssh keys</string>
+             </property>
+             <property name="placeholderText">
+              <string>Private key file (e.g. ~/.ssh/id_ed25519)</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="buttonBrowseKey">
+             <property name="text">
+              <string>Browse...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="5" column="0">
+          <widget class="QCheckBox" name="checkSavePassword">
+           <property name="text">
+            <string>&amp;Save password:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <widget class="QLineEdit" name="editPassword">
+           <property name="echoMode">
+            <enum>QLineEdit::EchoMode::Password</enum>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="1">
+          <widget class="QLabel" name="labelSecretNote">
+           <property name="text">
+            <string/>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0">
+          <widget class="QLabel" name="labelDescription">
+           <property name="text">
+            <string>Description:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editDescription</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="1">
+          <widget class="QPlainTextEdit" name="editDescription">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>64</height>
+            </size>
+           </property>
+           <property name="tabChangesFocus">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="tabSession">
+        <attribute name="title">
+         <string>Session</string>
+        </attribute>
+        <layout class="QFormLayout" name="formSession">
+         <property name="fieldGrowthPolicy">
+          <enum>QFormLayout::FieldGrowthPolicy::ExpandingFieldsGrow</enum>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="labelRemoteCommand">
+           <property name="text">
+            <string>&amp;Remote command:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editRemoteCommand</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLineEdit" name="editRemoteCommand">
+           <property name="toolTip">
+            <string>Run this command instead of the login shell (with a PTY); the session ends when it exits</string>
+           </property>
+           <property name="placeholderText">
+            <string>Interactive shell</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="labelStartupCommand">
+           <property name="text">
+            <string>Start&amp;up command:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editStartupCommand</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLineEdit" name="editStartupCommand">
+           <property name="toolTip">
+            <string>Typed into the shell after login, e.g. &quot;cd /oem &amp;&amp; ls&quot;</string>
+           </property>
+           <property name="placeholderText">
+            <string>Typed into the shell after login</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="labelTerminalType">
+           <property name="text">
+            <string>&amp;Terminal type:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editTerminalType</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLineEdit" name="editTerminalType">
+           <property name="toolTip">
+            <string>TERM requested for the PTY</string>
+           </property>
+           <property name="placeholderText">
+            <string>xterm-256color</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="labelKeepAlive">
+           <property name="text">
+            <string>&amp;Keep-alive:</string>
+           </property>
+           <property name="buddy">
+            <cstring>spinKeepAlive</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QSpinBox" name="spinKeepAlive">
+           <property name="toolTip">
+            <string>Interval of the SSH keep-alive messages that detect a dead link (0 = off)</string>
+           </property>
+           <property name="suffix">
+            <string> s</string>
+           </property>
+           <property name="minimum">
+            <number>0</number>
+           </property>
+           <property name="maximum">
+            <number>600</number>
+           </property>
+           <property name="value">
+            <number>30</number>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0">
+          <widget class="QLabel" name="labelTimeout">
+           <property name="text">
+            <string>Connect time&amp;out:</string>
+           </property>
+           <property name="buddy">
+            <cstring>spinTimeout</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <widget class="QSpinBox" name="spinTimeout">
+           <property name="suffix">
+            <string> s</string>
+           </property>
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>120</number>
+           </property>
+           <property name="value">
+            <number>15</number>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="0">
+          <widget class="QLabel" name="labelProxyJump">
+           <property name="text">
+            <string>Proxy &amp;jump:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editProxyJump</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <widget class="QLineEdit" name="editProxyJump">
+           <property name="toolTip">
+            <string>Hop through this host first (ssh -J), e.g. moses@gateway:2222</string>
+           </property>
+           <property name="placeholderText">
+            <string>[user@]host[:port] (direct connection when empty)</string>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="1">
+          <widget class="QCheckBox" name="checkCompression">
+           <property name="text">
+            <string>Co&amp;mpression</string>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0">
+          <widget class="QLabel" name="labelKnownHosts">
+           <property name="text">
+            <string>known_&amp;hosts file:</string>
+           </property>
+           <property name="buddy">
+            <cstring>editKnownHosts</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="1">
+          <layout class="QHBoxLayout" name="knownHostsLayout">
+           <item>
+            <widget class="QLineEdit" name="editKnownHosts">
+             <property name="toolTip">
+              <string>OpenSSH known_hosts file used to verify this host's key (shared with the system ssh by default)</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="buttonBrowseKnownHosts">
+             <property name="text">
+              <string>Browse...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="tabForwards">
+        <attribute name="title">
+         <string>Port forwarding</string>
+        </attribute>
+        <layout class="QVBoxLayout" name="forwardsLayout">
+         <item>
+          <widget class="QLabel" name="labelForwardsHint">
+           <property name="text">
+            <string>Local ports forwarded through the SSH connection (like ssh -L localPort:remoteHost:remotePort). Double-click a cell to edit it; the bind address 0.0.0.0 exposes the local port on the LAN.</string>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QTableWidget" name="tableForwards">
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <property name="selectionMode">
+            <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
+           </property>
+           <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+           </property>
+           <attribute name="verticalHeaderVisible">
+            <bool>false</bool>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="forwardButtons">
+           <item>
+            <widget class="QPushButton" name="buttonAddForward">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="buttonRemoveForward">
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="forwardSpacer">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="labelValidation">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Orientation::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::StandardButton::Apply|QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <tabstops>
+  <tabstop>listProfiles</tabstop>
+  <tabstop>editName</tabstop>
+  <tabstop>editHost</tabstop>
+  <tabstop>spinPort</tabstop>
+  <tabstop>editUser</tabstop>
+  <tabstop>comboAuth</tabstop>
+  <tabstop>editIdentityFile</tabstop>
+  <tabstop>buttonBrowseKey</tabstop>
+  <tabstop>checkSavePassword</tabstop>
+  <tabstop>editPassword</tabstop>
+  <tabstop>editDescription</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

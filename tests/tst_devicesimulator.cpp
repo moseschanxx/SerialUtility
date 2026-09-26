@@ -6,6 +6,7 @@
 #include "core/DeviceSimulator.h"
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
+#include "core/Transport.h"
 
 namespace {
 
@@ -1023,10 +1024,25 @@ void Tst_devicesimulator::connectionReconnectsAfterSimulatedReset()
     QSignalSpy reconnected(&c, &SerialConnection::reconnected);
     QSignalSpy errors(&c, &SerialConnection::errorOccurred);
     Collector rx(c);
+    // The serial-specific signals and their Transport-generic twins, in emission order.
+    QStringList events;
+    connect(&c, &SerialConnection::errorOccurred, &c, [&events](const QString&) { events << QStringLiteral("error"); });
+    connect(&c, &SerialConnection::portDisappeared, &c,
+            [&events](const QString& name) { events << QStringLiteral("portDisappeared:") + name; });
+    connect(&c, &Transport::connectionLost, &c,
+            [&events](const QString& name) { events << QStringLiteral("connectionLost:") + name; });
+    connect(&c, &SerialConnection::reconnected, &c,
+            [&events](const QString& name) { events << QStringLiteral("reconnected:") + name; });
+    connect(&c, &Transport::connectionRestored, &c,
+            [&events](const QString& name) { events << QStringLiteral("connectionRestored:") + name; });
+    connect(&c, &Transport::stateChanged, &c, [&events](Transport::State state) {
+        events << QStringLiteral("state:") + Transport::stateText(state);
+    });
 
     QVERIFY(c.open());
     QTRY_VERIFY_WITH_TIMEOUT(rx.data.endsWith("> "), 2000);
     rx.clear();
+    events.clear();
 
     QCOMPARE(c.write(QByteArrayLiteral("AT+RST\r")), qint64(7));
     QTRY_COMPARE_WITH_TIMEOUT(disappeared.count(), 1, 3000);
@@ -1037,14 +1053,22 @@ void Tst_devicesimulator::connectionReconnectsAfterSimulatedReset()
     QVERIFY(errors.first().first().toString().contains(QStringLiteral("disconnected")));
     QCOMPARE(c.write(QByteArrayLiteral("x")), qint64(-1));
     QVERIFY(!DeviceSimulator::isPresent(QStringLiteral("SIM:mcu")));
+    // errorOccurred, then portDisappeared immediately followed by connectionLost (same name),
+    // then the state change.
+    QCOMPARE(events, (QStringList{QStringLiteral("error"), QStringLiteral("portDisappeared:SIM:mcu"),
+                                  QStringLiteral("connectionLost:SIM:mcu"), QStringLiteral("state:Reconnecting...")}));
 
     // An explicit open() while Reconnecting is a forced, non-quiet attempt: it re-powers the
     // simulated device, reports success through reconnected() and stops the retry timer.
     rx.clear();
+    events.clear();
     QVERIFY(c.open());
     QCOMPARE(c.state(), SerialConnection::State::Connected);
     QCOMPARE(reconnected.count(), 1);
     QCOMPARE(errors.count(), 1);
+    // stateChanged(Connected) first, then reconnected() immediately followed by connectionRestored().
+    QCOMPARE(events, (QStringList{QStringLiteral("state:Connected"), QStringLiteral("reconnected:SIM:mcu"),
+                                  QStringLiteral("connectionRestored:SIM:mcu")}));
     QVERIFY(DeviceSimulator::isPresent(QStringLiteral("SIM:mcu")));
     QTRY_VERIFY_WITH_TIMEOUT(rx.data.contains("BuildAI MCU shell v1.0"), 2000);
     QTest::qWait(2000);

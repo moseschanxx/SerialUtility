@@ -1,9 +1,10 @@
 // GUI test suite for MainWindow (tabs, actions and shortcuts, status bar, language switch,
-// state persistence, confirmation dialogs) and for the System Log dock (SystemLogViewer).
-// Runs offscreen (QT_QPA_PLATFORM=offscreen); QSettings and every file live in a temporary
-// directory, so nothing touches the user's real configuration. The built-in simulated devices
-// (SIM:loopback, SIM:mcu) stand in for serial ports and QDesktopServices::openUrl() is
-// intercepted so the suite never launches a browser or file manager.
+// state persistence, confirmation dialogs, the SSH tabs / actions / restore keys) and for the
+// System Log dock (SystemLogViewer). Runs offscreen (QT_QPA_PLATFORM=offscreen); QSettings and
+// every file live in a temporary directory or the QStandardPaths test-mode data directory, so
+// nothing touches the user's real configuration. The built-in simulated devices (SIM:loopback,
+// SIM:mcu) stand in for serial ports, no SSH connection is ever opened, and
+// QDesktopServices::openUrl() is intercepted so the suite never launches a browser or file manager.
 #include <QtTest>
 
 #include <QAbstractButton>
@@ -32,14 +33,18 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTimer>
+#include <QToolBar>
 #include <QUrl>
 
 #include "Version.h"
 #include "app/AppSettings.h"
 #include "app/Logging.h"
 #include "core/SerialConnection.h"
+#include "core/Transport.h"
 #include "dialogs/AboutDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "ssh/SshConnection.h"
+#include "ssh/SshProfile.h"
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
@@ -47,6 +52,7 @@
 #include "ui/MainWindow.h"
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
+#include "ui/SshConnectionBar.h"
 #include "ui/SystemLogViewer.h"
 
 // =======================================================================================
@@ -141,6 +147,7 @@ struct ActionSpec
 const ActionSpec kActions[] = {
     // File
     {"actionNewSession", "Ctrl+T", false},
+    {"actionNewSshSession", "Ctrl+Shift+T", false},
     {"actionCloseSession", "Ctrl+W", false},
     {"actionStartLogging", "", false},
     {"actionStopLogging", "", false},
@@ -154,6 +161,8 @@ const ActionSpec kActions[] = {
     {"actionClear", "Ctrl+Shift+L", false},
     {"actionResetTerminal", "", false},
     {"actionSendFile", "Ctrl+Shift+O", false},
+    {"actionUploadFile", "", false},
+    {"actionDownloadFile", "", false},
     {"actionSendBreak", "", false},
     {"actionSyncTerminalSize", "", false},
     {"actionRefreshPorts", "F5", false},
@@ -163,6 +172,7 @@ const ActionSpec kActions[] = {
     {"actionSelectAll", "", false},
     {"actionFind", "Ctrl+Shift+F", false},
     {"actionQuickCommands", "", false},
+    {"actionSshProfiles", "", false},
     {"actionPreferences", "Ctrl+,", false},
     // View
     {"actionHexView", "Ctrl+Shift+H", true},
@@ -294,6 +304,17 @@ private slots:
     void restoreLastPortsRoundTrip();
     void restoreLastPortsDisabled();
     void restoreLastPortsDeduplicates();
+
+    // ---- SSH (no connection is ever opened) -----------------------------------------
+    void sshActionsInMenusAndToolbar();
+    void newSshSessionAddsTab();
+    void newSshSessionShortcut();
+    void newSshSessionPrefillsLastTarget();
+    void sshActionEnableRules();
+    void sshRestoreRoundTrip();
+    void sshProfilesDialogOpens();
+    void sshProfileStoreSavedAndReloaded();
+    void statusBarForSshTab();
 
     // ---- Replay / folders / help ----------------------------------------------------
     void replayEnablesStopReplay();
@@ -533,7 +554,7 @@ void Tst_mainwindow::triggerEveryActionDisconnected()
         const bool opensModal =
             qstrcmp(spec.name, "actionFind") == 0 || qstrcmp(spec.name, "actionQuickCommands") == 0 ||
             qstrcmp(spec.name, "actionPreferences") == 0 || qstrcmp(spec.name, "actionStartLogging") == 0 ||
-            qstrcmp(spec.name, "actionReplayLog") == 0;
+            qstrcmp(spec.name, "actionReplayLog") == 0 || qstrcmp(spec.name, "actionSshProfiles") == 0;
         if (opensModal) {
             QVERIFY2(dismisser.count() >= 1, spec.name);
         }
@@ -560,8 +581,8 @@ void Tst_mainwindow::triggerEveryActionConnected()
     for (const ActionSpec& spec : kActions) {
         // Keep the session connected and current for the whole pass.
         if (qstrcmp(spec.name, "actionQuit") == 0 || qstrcmp(spec.name, "actionCloseSession") == 0 ||
-            qstrcmp(spec.name, "actionNewSession") == 0 || qstrcmp(spec.name, "actionDisconnect") == 0 ||
-            qstrcmp(spec.name, "actionConnect") == 0) {
+            qstrcmp(spec.name, "actionNewSession") == 0 || qstrcmp(spec.name, "actionNewSshSession") == 0 ||
+            qstrcmp(spec.name, "actionDisconnect") == 0 || qstrcmp(spec.name, "actionConnect") == 0) {
             continue;
         }
         QAction* a = action(w, spec.name);
@@ -1692,6 +1713,377 @@ void Tst_mainwindow::restoreLastPortsDeduplicates()
     QCOMPARE(w.sessionAt(0)->portName(), kLoopback);
     QCOMPARE(w.sessionAt(1)->portName(), kMcu);
     QCOMPARE(w.currentSession(), w.sessionAt(0));
+}
+
+// =======================================================================================
+// SSH
+// =======================================================================================
+
+void Tst_mainwindow::sshActionsInMenusAndToolbar()
+{
+    MainWindow w;
+    QAction* newSsh = action(w, "actionNewSshSession");
+    QAction* profiles = action(w, "actionSshProfiles");
+    QAction* upload = action(w, "actionUploadFile");
+    QAction* download = action(w, "actionDownloadFile");
+    QVERIFY(newSsh && profiles && upload && download);
+
+    // Texts as documented (the mnemonic ampersand aside).
+    QCOMPARE(QString(newSsh->text()).remove(QLatin1Char('&')), QStringLiteral("New SSH Session..."));
+    QCOMPARE(QString(profiles->text()).remove(QLatin1Char('&')), QStringLiteral("SSH Profiles..."));
+    QCOMPARE(QString(upload->text()).remove(QLatin1Char('&')), QStringLiteral("Upload File to Remote..."));
+    QCOMPARE(QString(download->text()).remove(QLatin1Char('&')), QStringLiteral("Download File from Remote..."));
+    QCOMPARE(newSsh->shortcut(), QKeySequence(QStringLiteral("Ctrl+Shift+T"), QKeySequence::PortableText));
+    // The terminal-with-lock glyph (or the style fallback when Qt has no SVG engine) is rendered.
+    QVERIFY(!newSsh->icon().isNull());
+    QVERIFY(!newSsh->icon().pixmap(16).isNull());
+
+    // File: right after New Session.
+    const QList<QAction*> file = child<QMenu>(&w, "menuFile")->actions();
+    const qsizetype newSession = file.indexOf(action(w, "actionNewSession"));
+    QVERIFY(newSession >= 0);
+    QCOMPARE(file.at(newSession + 1), newSsh);
+    // Edit: after Quick Commands.
+    const QList<QAction*> edit = child<QMenu>(&w, "menuEdit")->actions();
+    const qsizetype quick = edit.indexOf(action(w, "actionQuickCommands"));
+    QVERIFY(quick >= 0);
+    QCOMPARE(edit.at(quick + 1), profiles);
+    // Session: Upload, Download after Send File.
+    const QList<QAction*> session = child<QMenu>(&w, "menuSession")->actions();
+    const qsizetype sendFile = session.indexOf(action(w, "actionSendFile"));
+    QVERIFY(sendFile >= 0);
+    QCOMPARE(session.at(sendFile + 1), upload);
+    QCOMPARE(session.at(sendFile + 2), download);
+    // Toolbar: after New Session and after Send File.
+    auto* toolbar = child<QToolBar>(&w, "mainToolBar");
+    QVERIFY(toolbar);
+    const QList<QAction*> tools = toolbar->actions();
+    const qsizetype toolNew = tools.indexOf(action(w, "actionNewSession"));
+    const qsizetype toolSend = tools.indexOf(action(w, "actionSendFile"));
+    QVERIFY(toolNew >= 0 && toolSend >= 0);
+    QCOMPARE(tools.at(toolNew + 1), newSsh);
+    QCOMPARE(tools.at(toolSend + 1), upload);
+    QCOMPARE(tools.at(toolSend + 2), download);
+}
+
+void Tst_mainwindow::newSshSessionAddsTab()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QCOMPARE(w.sessionCount(), 1);
+    SessionWidget* serial = w.currentSession();
+
+    action(w, "actionNewSshSession")->trigger();
+    QCOMPARE(w.sessionCount(), 2);
+    SessionWidget* ssh = w.currentSession();
+    QVERIFY(ssh != serial);
+    QVERIFY(ssh->isSsh());
+    QCOMPARE(ssh->kind(), Transport::Kind::Ssh);
+    QVERIFY(ssh->sshConnection() != nullptr);
+    QVERIFY(ssh->connection() == nullptr);
+    QCOMPARE(ssh->title(), QStringLiteral("New SSH Session"));
+    QCOMPARE(tabs(w)->tabText(1), QStringLiteral("New SSH Session"));
+    QVERIFY(!ssh->isConnected());
+    QVERIFY(ssh->portName().isEmpty());
+    // The target field has the focus so the user can type straight away.
+    QVERIFY(ssh->sshConnectionBar() != nullptr);
+    QTRY_VERIFY(QApplication::focusWidget() != nullptr);
+    QVERIFY2(ssh->sshConnectionBar()->isAncestorOf(QApplication::focusWidget()),
+             QApplication::focusWidget()->metaObject()->className());
+    // The bar shares the window's profile store.
+    QVERIFY(ssh->sshConnectionBar()->store() != nullptr);
+
+    // With a target: title, restore key and window title follow the transport's display name.
+    SessionWidget* targeted = w.newSshSession(QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(w.sessionCount(), 3);
+    QCOMPARE(w.currentSession(), targeted);
+    QCOMPARE(targeted->title(), QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(tabs(w)->tabText(2), QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(targeted->portName(), QStringLiteral("ssh:target:root@10.0.0.24:2222"));
+    QVERIFY(!targeted->isConnected());
+    QVERIFY(w.windowTitle().endsWith(QStringLiteral(" - root@10.0.0.24:2222")));
+    QVERIFY(tabs(w)->tabToolTip(2).contains(QStringLiteral("root@10.0.0.24:2222")));
+    QVERIFY(!tabs(w)->tabIcon(2).isNull());
+    // A restore key works the same way through newSession().
+    SessionWidget* restored = w.newSession(QStringLiteral("ssh:target:pi@10.0.0.7"));
+    QVERIFY(restored->isSsh());
+    QCOMPARE(restored->title(), QStringLiteral("pi@10.0.0.7"));
+    QCOMPARE(restored->sshConnectionBar()->targetText(), QStringLiteral("pi@10.0.0.7"));
+
+    // Closing SSH tabs works like serial ones (never asks while disconnected).
+    ModalDismisser dismisser(ModalDismisser::Answer::Reject);
+    w.closeCurrentSession();
+    dismisser.stop();
+    QCOMPARE(dismisser.count(), 0);
+    QCOMPARE(w.sessionCount(), 3);
+}
+
+void Tst_mainwindow::newSshSessionShortcut()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QCOMPARE(w.sessionCount(), 1);
+    // Connected and focused: the terminal must still pass Ctrl+Shift+T through to the action
+    // (every Ctrl+Shift+<letter> belongs to the application's shortcut map).
+    QVERIFY(connectCurrent(w, kLoopback));
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+
+    QTest::keyClick(session->terminal(), Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(w.sessionCount(), 2);
+    QVERIFY(w.currentSession()->isSsh());
+    QVERIFY(session->isConnected());   // the key never reached the device as a control byte
+
+    tabs(w)->setCurrentIndex(0);
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!session->isConnected(), kSimTimeoutMs);
+}
+
+void Tst_mainwindow::newSshSessionPrefillsLastTarget()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+
+    // The last connected ad-hoc target is offered again - never connected.
+    AppSettings::instance().setLastSshTarget(QStringLiteral("ssh:target:pi@10.0.0.7:2222"));
+    SessionWidget* ssh = w.newSshSession();
+    QVERIFY(ssh->isSsh());
+    QCOMPARE(ssh->title(), QStringLiteral("pi@10.0.0.7:2222"));
+    QCOMPARE(ssh->portName(), QStringLiteral("ssh:target:pi@10.0.0.7:2222"));
+    QVERIFY(!ssh->isConnected());
+    QCOMPARE(ssh->transport()->state(), Transport::State::Disconnected);
+
+    // A profile key is not pre-filled (the combo lists the profiles anyway) ...
+    AppSettings::instance().setLastSshTarget(QStringLiteral("ssh:profile:00000000-0000-0000-0000-000000000000"));
+    QCOMPARE(w.newSshSession()->title(), QStringLiteral("New SSH Session"));
+    // ... and an explicit target always wins.
+    AppSettings::instance().setLastSshTarget(QStringLiteral("ssh:target:pi@10.0.0.7:2222"));
+    QCOMPARE(w.newSshSession(QStringLiteral("root@10.0.0.24"))->title(), QStringLiteral("root@10.0.0.24"));
+    AppSettings::instance().setLastSshTarget(QString());
+    QCOMPARE(w.newSshSession()->title(), QStringLiteral("New SSH Session"));
+}
+
+void Tst_mainwindow::sshActionEnableRules()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    SessionWidget* serial = w.currentSession();
+    QAction* connectAction = action(w, "actionConnect");
+    QAction* upload = action(w, "actionUploadFile");
+    QAction* download = action(w, "actionDownloadFile");
+    QAction* sendBreak = action(w, "actionSendBreak");
+    QAction* refresh = action(w, "actionRefreshPorts");
+    QAction* sync = action(w, "actionSyncTerminalSize");
+    QAction* sendFile = action(w, "actionSendFile");
+
+    // Serial tab, disconnected.
+    QVERIFY(!connectAction->isEnabled());   // no port
+    QVERIFY(!upload->isEnabled());
+    QVERIFY(!download->isEnabled());
+    QVERIFY(!sendBreak->isEnabled());
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(!sync->isEnabled());
+
+    // SSH tab, disconnected: Connect is offered (it asks for a target), the serial-only
+    // actions are off, the SFTP actions wait for a connection.
+    SessionWidget* ssh = w.newSshSession();
+    QCOMPARE(w.currentSession(), ssh);
+    QVERIFY(connectAction->isEnabled());
+    QVERIFY(!upload->isEnabled());
+    QVERIFY(!download->isEnabled());
+    QVERIFY(!sendBreak->isEnabled());
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(!sync->isEnabled());
+    QVERIFY(!sendFile->isEnabled());
+    QVERIFY(!action(w, "actionPaste")->isEnabled());
+    QVERIFY(action(w, "actionClear")->isEnabled());
+    QVERIFY(action(w, "actionStartLogging")->isEnabled());
+    QVERIFY(action(w, "actionReplayLog")->isEnabled());
+    // Connect without a target: refused in the status bar, focus to the target field.
+    w.statusBar()->clearMessage();
+    connectAction->trigger();
+    QVERIFY(!ssh->isConnected());
+    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("Enter a target such as user@host"));
+    // Upload / Download on a disconnected SSH tab (a disabled QAction never fires, so through the
+    // session's slots the menu forwards to): refused, no dialog.
+    ssh->uploadFile();
+    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("Not connected"));
+    ssh->downloadFile();
+    QVERIFY(w.findChildren<QDialog*>().isEmpty());
+
+    // Back on the serial tab: the rules flip; connected, BREAK / sync are on, SFTP stays off.
+    tabs(w)->setCurrentIndex(0);
+    QCOMPARE(w.currentSession(), serial);
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(!sendBreak->isEnabled());
+    QVERIFY(connectCurrent(w, kLoopback));
+    QTRY_VERIFY(sendBreak->isEnabled());
+    QVERIFY(sync->isEnabled());
+    QVERIFY(sendFile->isEnabled());
+    QVERIFY(!upload->isEnabled());
+    QVERIFY(!download->isEnabled());
+    w.statusBar()->clearMessage();
+    serial->uploadFile();   // the slot behind the (disabled) action: refused with a message
+    QVERIFY2(w.statusBar()->currentMessage().contains(QStringLiteral("SSH")),
+             qPrintable(w.statusBar()->currentMessage()));
+    QVERIFY(w.findChildren<QDialog*>().isEmpty());
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!serial->isConnected(), kSimTimeoutMs);
+}
+
+void Tst_mainwindow::sshRestoreRoundTrip()
+{
+    const QString key = QStringLiteral("ssh:target:root@10.0.0.24:2222");
+    {
+        MainWindow first;
+        QVERIFY(showAndActivate(first));
+        first.currentSession()->setPortName(kLoopback);
+        SessionWidget* ssh = first.newSshSession(QStringLiteral("root@10.0.0.24:2222"));
+        QCOMPARE(ssh->portName(), key);
+        QCOMPARE(first.sessionCount(), 2);
+        first.close();
+        QTRY_VERIFY(!first.isVisible());
+    }
+    QCOMPARE(AppSettings::instance().lastOpenPorts(), (QStringList{kLoopback, key}));
+    QCOMPARE(AppSettings::instance().lastPortName(), key);
+
+    MainWindow second;
+    QVERIFY(showAndActivate(second));
+    QCOMPARE(second.sessionCount(), 2);
+    QCOMPARE(second.sessionAt(0)->portName(), kLoopback);
+    QVERIFY(!second.sessionAt(0)->isSsh());
+    SessionWidget* ssh = second.sessionAt(1);
+    QVERIFY(ssh->isSsh());
+    QCOMPARE(ssh->portName(), key);
+    QCOMPARE(ssh->title(), QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(ssh->sshConnectionBar()->targetText(), QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(tabs(second)->tabText(1), QStringLiteral("root@10.0.0.24:2222"));
+    QCOMPARE(second.currentSession(), ssh);   // the previously active tab
+    QVERIFY(!ssh->isConnected());             // never auto-connecting
+    QCOMPARE(ssh->transport()->state(), Transport::State::Disconnected);
+    QVERIFY(second.windowTitle().endsWith(QStringLiteral(" - root@10.0.0.24:2222")));
+
+    // With restore disabled the last key still seeds the single start-up tab (an SSH one).
+    AppSettings::instance().setRestoreLastPorts(false);
+    MainWindow third;
+    QVERIFY(showAndActivate(third));
+    QCOMPARE(third.sessionCount(), 1);
+    QVERIFY(third.currentSession()->isSsh());
+    QCOMPARE(third.currentSession()->portName(), key);
+    QVERIFY(!third.currentSession()->isConnected());
+}
+
+void Tst_mainwindow::sshProfilesDialogOpens()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+
+    {
+        ModalDismisser dismisser(ModalDismisser::Answer::Reject);
+        action(w, "actionSshProfiles")->trigger();
+        dismisser.stop();
+        QCOMPARE(dismisser.count(), 1);
+        QCOMPARE(dismisser.classNames().first(), QStringLiteral("SshProfilesDialog"));
+    }
+    QCOMPARE(w.sessionCount(), 1);   // a rejected dialog opens no tab
+    QVERIFY(QApplication::activeModalWidget() == nullptr);
+
+    // The SSH bar's gear asks the window for the same dialog, pre-selecting the tab's profile.
+    SessionWidget* ssh = w.newSshSession(QStringLiteral("root@10.0.0.24"));
+    {
+        ModalDismisser dismisser(ModalDismisser::Answer::Reject);
+        emit ssh->sshProfilesEditRequested();
+        dismisser.stop();
+        QCOMPARE(dismisser.count(), 1);
+        QCOMPARE(dismisser.classNames().first(), QStringLiteral("SshProfilesDialog"));
+    }
+    QCOMPARE(w.sessionCount(), 2);
+    QVERIFY(w.isVisible());
+}
+
+void Tst_mainwindow::sshProfileStoreSavedAndReloaded()
+{
+    const QString path = SshProfileStore::defaultFilePath();
+    QVERIFY2(!path.contains(QStringLiteral("/BuildAI/SerialUtility/")), qPrintable(path));   // test-mode data dir
+    QFile::remove(path);
+
+    QString id;
+    {
+        MainWindow w;
+        QVERIFY(showAndActivate(w));
+        SessionWidget* ssh = w.newSshSession();
+        SshProfileStore* store = ssh->sshConnectionBar()->store();
+        QVERIFY(store);
+        QVERIFY(store->profiles().isEmpty());
+
+        // A change (the profile dialog, a connect touching a profile, ...) is written shortly after.
+        SshProfile profile;
+        profile.name = QStringLiteral("Pico Ultra");
+        profile.host = QStringLiteral("192.168.100.2");
+        profile.user = QStringLiteral("root");
+        id = store->upsert(profile).id;
+        QVERIFY(!id.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(path), 2000);
+        SshProfileStore check;
+        QVERIFY(check.load(path));
+        QVERIFY(check.profile(id).has_value());
+        QCOMPARE(check.profile(id)->name, QStringLiteral("Pico Ultra"));
+
+        // The tab restores by profile id and shows the profile's name.
+        ssh->setSshTarget(QStringLiteral("ssh:profile:") + id);
+        QCOMPARE(ssh->title(), QStringLiteral("Pico Ultra"));
+        QCOMPARE(ssh->portName(), QStringLiteral("ssh:profile:") + id);
+        w.close();
+        QTRY_VERIFY(!w.isVisible());
+    }
+
+    // The next window loads the file and restores the profile tab from the saved key.
+    MainWindow second;
+    QVERIFY(showAndActivate(second));
+    SessionWidget* restored = nullptr;
+    for (int i = 0; i < second.sessionCount(); ++i) {
+        if (second.sessionAt(i)->isSsh()) {
+            restored = second.sessionAt(i);
+        }
+    }
+    QVERIFY(restored);
+    QCOMPARE(restored->title(), QStringLiteral("Pico Ultra"));
+    QCOMPARE(restored->sshConnection()->profile().host, QStringLiteral("192.168.100.2"));
+    QVERIFY(restored->sshConnectionBar()->store()->profile(id).has_value());
+    QVERIFY(!restored->isConnected());
+    QFile::remove(path);
+}
+
+void Tst_mainwindow::statusBarForSshTab()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QLabel* connection = statusLabel(w, "statusConnectionLabel");
+    QLabel* counters = statusLabel(w, "statusCountersLabel");
+    QVERIFY(connection && counters);
+
+    SessionWidget* ssh = w.newSshSession();
+    QCOMPARE(connection->text(), Transport::stateText(Transport::State::Disconnected));   // no target yet
+    QCOMPARE(counters->text(), QStringLiteral("RX 0 B  TX 0 B"));
+
+    ssh->setSshTarget(QStringLiteral("root@10.0.0.24:2222"));
+    QVERIFY2(connection->text().startsWith(Transport::stateText(Transport::State::Disconnected)),
+             qPrintable(connection->text()));
+    QVERIFY2(connection->text().contains(QStringLiteral("root@10.0.0.24:2222")), qPrintable(connection->text()));
+    QVERIFY2(connection->text().contains(ssh->transport()->summary()), qPrintable(connection->text()));
+    QVERIFY2(connection->text().contains(QStringLiteral(" · ")), qPrintable(connection->text()));
+    const QString tip = tabs(w)->tabToolTip(1);
+    QVERIFY2(tip.contains(QStringLiteral("root@10.0.0.24:2222")), qPrintable(tip));
+    QVERIFY2(tip.contains(ssh->transport()->summary()), qPrintable(tip));
+    QVERIFY2(tip.contains(Transport::stateText(Transport::State::Disconnected)), qPrintable(tip));
+
+    // Switching back to the serial tab shows that tab's own (serial) summary again.
+    w.sessionAt(0)->setPortName(kLoopback);
+    tabs(w)->setCurrentIndex(0);
+    QVERIFY(connection->text().contains(kLoopback));
+    QVERIFY(connection->text().contains(QStringLiteral("115200 8N1")));
+    QVERIFY(!connection->text().contains(QStringLiteral("root@")));
 }
 
 // =======================================================================================

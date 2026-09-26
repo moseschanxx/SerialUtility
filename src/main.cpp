@@ -13,10 +13,12 @@
 
 namespace {
 
-/// Make `port` the current session: reuse a tab that already shows it, otherwise fill the
-/// current empty tab, otherwise open a new one. Returns the session (never null).
+/// Make `port` (a serial port name or an SSH restore key) the current session: reuse a tab that
+/// already shows it, otherwise fill the current empty tab of the same kind, otherwise open a new
+/// one. Returns the session (never null).
 SessionWidget* selectPortSession(MainWindow& window, const QString& port)
 {
+    const bool ssh = SessionWidget::isSshRestoreKey(port);
     for (int i = 0; i < window.sessionCount(); ++i) {
         SessionWidget* session = window.sessionAt(i);
         if (session && session->portName() == port) {
@@ -27,11 +29,16 @@ SessionWidget* selectPortSession(MainWindow& window, const QString& port)
             return session;
         }
     }
-    if (SessionWidget* current = window.currentSession(); current && current->portName().isEmpty()) {
-        current->setPortName(port);
+    if (SessionWidget* current = window.currentSession();
+        current && current->portName().isEmpty() && current->isSsh() == ssh) {
+        if (ssh) {
+            current->setSshTarget(port);
+        } else {
+            current->setPortName(port);
+        }
         return current;
     }
-    return window.newSession(port);
+    return window.newSession(port);   // dispatches to newSshSession() for an SSH key
 }
 
 } // namespace
@@ -62,8 +69,13 @@ int main(int argc, char* argv[])
                                  QStringLiteral("Serial port to pre-select in the first tab (e.g. COM8)."),
                                  QStringLiteral("[port]"));
     const QCommandLineOption connectOption({QStringLiteral("c"), QStringLiteral("connect")},
-                                           QStringLiteral("Open the given port immediately."));
+                                           QStringLiteral("Open the given port or SSH target immediately."));
     parser.addOption(connectOption);
+    const QCommandLineOption sshOption(
+        QStringLiteral("ssh"),
+        QStringLiteral("Open an SSH session tab for user@host[:port] (or ssh://...) instead of a serial port."),
+        QStringLiteral("target"));
+    parser.addOption(sshOption);
     const QCommandLineOption replayOption(
         {QStringLiteral("r"), QStringLiteral("replay")},
         QStringLiteral("Replay a captured log file (raw or timestamped text capture) into the first tab."),
@@ -77,8 +89,13 @@ int main(int argc, char* argv[])
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
-    const QString portArg = positional.isEmpty() ? QString() : positional.first().trimmed();
+    QString portArg = positional.isEmpty() ? QString() : positional.first().trimmed();
     const bool connectNow = parser.isSet(connectOption);
+    if (parser.isSet(sshOption)) {
+        // "user@host:port" -> the SSH restore key selectPortSession() understands.
+        const QString target = parser.value(sshOption).trimmed();
+        portArg = SessionWidget::isSshRestoreKey(target) ? target : QStringLiteral("ssh:target:") + target;
+    }
 
     MainWindow window;
 
@@ -91,7 +108,7 @@ int main(int argc, char* argv[])
             QTimer::singleShot(0, session, [session]() { session->connectPort(); });
         }
     } else if (connectNow) {
-        qCWarning(lcApp) << "--connect given without a port name; ignored";
+        qCWarning(lcApp) << "--connect given without a port name or --ssh target; ignored";
     }
 
     if (parser.isSet(replayOption)) {

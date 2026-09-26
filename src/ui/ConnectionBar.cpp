@@ -422,6 +422,13 @@ void ConnectionBar::setConnectionState(SerialConnection::State state)
         m_connectButton->setIcon(dotIcon(kDotReconnecting, dpr));
         m_connectButton->setToolTip(tr("Waiting for the port to come back (click to cancel)"));
         break;
+    case SerialConnection::State::Connecting:
+        // A serial port opens synchronously and never reports Connecting; drawn like Reconnecting
+        // so every Transport::State has a face should the bar ever be fed one.
+        m_connectButton->setText(tr("Connecting..."));
+        m_connectButton->setIcon(dotIcon(kDotReconnecting, dpr));
+        m_connectButton->setToolTip(tr("Opening the port (click to cancel)"));
+        break;
     case SerialConnection::State::Disconnected:
         m_connectButton->setText(tr("Connect"));
         m_connectButton->setIcon(dotIcon(selectedPortName().isEmpty() ? kDotUnavailable : kDotConnected, dpr));

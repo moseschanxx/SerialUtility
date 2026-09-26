@@ -2,5 +2,6 @@
     <qresource prefix="/">
         <file>icons/buildai.png</file>
         <file>icons/buildai_64.png</file>
+        <file>icons/ssh.svg</file>
     </qresource>
 </RCC>

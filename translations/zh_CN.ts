@@ -56,6 +56,74 @@
     </message>
 </context>
 <context>
+    <name>AuthPromptDialog</name>
+    <message>
+        <location filename="../src/dialogs/AuthPromptDialog.ui" line="+14"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+27"/>
+        <location line="+2"/>
+        <source>Authentication</source>
+        <translation>身份验证</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+7"/>
+        <source>Password:</source>
+        <translation>密码：</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Show the typed characters</source>
+        <translation>显示输入的字符</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+64"/>
+        <source>Show</source>
+        <translation>显示</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Remember in this profile</source>
+        <translation>在此配置文件中记住</translation>
+    </message>
+    <message>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-77"/>
+        <source>Password</source>
+        <translation>密码</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Key Passphrase</source>
+        <translation>密钥口令</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Passphrase for the private key:</source>
+        <translation>私钥口令：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Passphrase for key &apos;%1&apos;:</source>
+        <translation>密钥 &apos;%1&apos; 的口令：</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+2"/>
+        <source>Response:</source>
+        <translation>响应：</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Authentication failed, try again (attempt %1 of %2)</source>
+        <translation>身份验证失败，请重试（第 %1 次，共 %2 次）</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Hide</source>
+        <translation>隐藏</translation>
+    </message>
+</context>
+<context>
     <name>CommandInput</name>
     <message>
         <location filename="../src/ui/CommandInput.cpp" line="+106"/>
@@ -257,6 +325,16 @@
         <translation>等待端口恢复（点击取消）</translation>
     </message>
     <message>
+        <location line="+5"/>
+        <source>Connecting...</source>
+        <translation>正在连接...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Opening the port (click to cancel)</source>
+        <translation>正在打开端口（点击取消）</translation>
+    </message>
+    <message>
         <location line="+3"/>
         <source>Connect</source>
         <translation>连接</translation>
@@ -348,6 +426,134 @@
     </message>
 </context>
 <context>
+    <name>HostKeyDialog</name>
+    <message>
+        <location filename="../src/dialogs/HostKeyDialog.ui" line="+14"/>
+        <location filename="../src/dialogs/HostKeyDialog.cpp" line="+108"/>
+        <source>Host Key Verification</source>
+        <translation>主机密钥验证</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The authenticity of host can&apos;t be established.</source>
+        <translation>无法确认主机的真实性。</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Host:</source>
+        <translation>主机：</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Key type:</source>
+        <translation>密钥类型：</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>SHA256:</source>
+        <translation>SHA256：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>SHA256 fingerprint of the server&apos;s host key (as shown by ssh-keygen -lf)</source>
+        <translation>服务器主机密钥的 SHA256 指纹（与 ssh-keygen -lf 显示的一致）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>MD5:</source>
+        <translation>MD5：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Legacy MD5 fingerprint (as shown by ssh-keygen -E md5 -lf)</source>
+        <translation>旧式 MD5 指纹（与 ssh-keygen -E md5 -lf 显示的一致）</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>I understand the risk, replace the stored key</source>
+        <translation>我了解风险，替换已存储的密钥</translation>
+    </message>
+    <message>
+        <location filename="../src/dialogs/HostKeyDialog.cpp" line="-42"/>
+        <source>unknown</source>
+        <translation>未知</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>known_hosts file: %1</source>
+        <translation>known_hosts 文件：%1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Connect once</source>
+        <translation>仅连接一次</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Connect without changing the known_hosts file</source>
+        <translation>连接但不修改 known_hosts 文件</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Host Key Changed</source>
+        <translation>主机密钥已更改</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!</source>
+        <translation>警告：远程主机标识已更改！</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The %1 key presented by %2 differs from the one stored for this host. Someone could be eavesdropping on you right now (man-in-the-middle attack) - or the host key simply changed, for example because the board was re-flashed or reinstalled, which is common with development boards.
+
+Only replace the stored key if you are sure the change is expected.</source>
+        <translation>%2 出示的 %1 密钥与此主机已存储的密钥不同。可能有人正在窃听您的连接（中间人攻击）- 也可能只是主机密钥发生了变化，例如开发板被重新刷写或重装了系统，这在开发板上很常见。
+
+只有在确定这一变化符合预期时，才替换已存储的密钥。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Replace key and connect</source>
+        <translation>替换密钥并连接</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Replace the stored key for this host in known_hosts and connect</source>
+        <translation>替换 known_hosts 中此主机已存储的密钥并连接</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The authenticity of host &apos;%1&apos; can&apos;t be established.</source>
+        <translation>无法确认主机 &apos;%1&apos; 的真实性。</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>known_hosts holds a key of another type for this host; the server now also offers a %1 key. This is normal after an SSH server upgrade, but compare the fingerprint with the one shown on the device before you continue.</source>
+        <translation>known_hosts 中存有此主机另一种类型的密钥；服务器现在还提供了 %1 密钥。这在 SSH 服务器升级后属于正常情况，但在继续之前，请将指纹与设备上显示的指纹进行比对。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The known_hosts file could not be read, so the key could not be checked. Compare the fingerprint with the one shown on the device before you continue.</source>
+        <translation>无法读取 known_hosts 文件，因此无法检查密钥。在继续之前，请将指纹与设备上显示的指纹进行比对。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>This host is not in your known_hosts file yet. Compare the fingerprint with the one shown on the device (ssh-keygen -lf /etc/ssh/ssh_host_%1_key.pub) before you continue.</source>
+        <translation>此主机尚未记录在您的 known_hosts 文件中。在继续之前，请将指纹与设备上显示的指纹（ssh-keygen -lf /etc/ssh/ssh_host_%1_key.pub）进行比对。</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Connect and remember</source>
+        <translation>连接并记住</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Add the key to known_hosts and connect</source>
+        <translation>将密钥添加到 known_hosts 并连接</translation>
+    </message>
+</context>
+<context>
     <name>LogReplayer</name>
     <message>
         <location filename="../src/core/LogReplayer.cpp" line="+57"/>
@@ -398,17 +604,17 @@
         <translation>文件(&amp;F)</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
         <source>&amp;Session</source>
         <translation>会话(&amp;S)</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+18"/>
         <source>&amp;Edit</source>
         <translation>编辑(&amp;E)</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+14"/>
         <source>&amp;View</source>
         <translation>视图(&amp;V)</translation>
     </message>
@@ -428,7 +634,7 @@
         <translation>主工具栏</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+44"/>
         <source>&amp;New Session</source>
         <translation>新建会话(&amp;N)</translation>
     </message>
@@ -443,7 +649,7 @@
         <translation>Ctrl+T</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+29"/>
         <source>&amp;Close Session</source>
         <translation>关闭会话(&amp;C)</translation>
     </message>
@@ -553,22 +759,42 @@
         <translation>Ctrl+Shift+O</translation>
     </message>
     <message>
-        <location line="+77"/>
+        <location line="+105"/>
         <source>Ctrl+Shift+F</source>
         <translation>Ctrl+Shift+F</translation>
     </message>
     <message>
-        <location line="+48"/>
+        <location line="+62"/>
         <source>Ctrl+Shift+H</source>
         <translation>Ctrl+Shift+H</translation>
     </message>
     <message>
-        <location line="-187"/>
+        <location line="-229"/>
         <source>&amp;Connect</source>
         <translation>连接(&amp;C)</translation>
     </message>
     <message>
+        <location line="-109"/>
+        <source>New &amp;SSH Session...</source>
+        <translation>新建 SSH 会话(&amp;S)...</translation>
+    </message>
+    <message>
         <location line="+3"/>
+        <source>New SSH Session</source>
+        <translation>新建 SSH 会话</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Open a new SSH session tab</source>
+        <translation>打开一个新的 SSH 会话标签页</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+T</source>
+        <translation>Ctrl+Shift+T</translation>
+    </message>
+    <message>
+        <location line="+103"/>
         <source>Open the selected serial port</source>
         <translation>打开所选串口</translation>
     </message>
@@ -624,6 +850,36 @@
     </message>
     <message>
         <location line="+11"/>
+        <source>&amp;Upload File to Remote...</source>
+        <translation>上传文件到远程(&amp;U)...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Upload</source>
+        <translation>上传</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Copy a local file to the SSH server (SFTP)</source>
+        <translation>将本地文件复制到 SSH 服务器（SFTP）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>&amp;Download File from Remote...</source>
+        <translation>从远程下载文件(&amp;D)...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Copy a file from the SSH server to this computer (SFTP)</source>
+        <translation>将文件从 SSH 服务器复制到本机（SFTP）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
         <source>Send &amp;Break</source>
         <translation>发送 Break(&amp;B)</translation>
     </message>
@@ -701,6 +957,21 @@
         <location line="+3"/>
         <source>Edit the quick command buttons</source>
         <translation>编辑快捷命令按钮</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>SS&amp;H Profiles...</source>
+        <translation>SSH 配置文件(&amp;H)...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>SSH Profiles</source>
+        <translation>SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Manage the saved SSH targets</source>
+        <translation>管理已保存的 SSH 目标</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -848,13 +1119,13 @@
         <translation>BuildAI 主页(&amp;H)</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+100"/>
-        <location line="+337"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+105"/>
+        <location line="+409"/>
         <source>New Session (Ctrl+T)</source>
         <translation>新建会话 (Ctrl+T)</translation>
     </message>
     <message>
-        <location line="-53"/>
+        <location line="-56"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>会话 %1 仍处于连接状态。
@@ -899,20 +1170,20 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+48"/>
-        <location line="+762"/>
+        <location line="+51"/>
+        <location line="+824"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-657"/>
-        <location line="+613"/>
+        <location line="-719"/>
+        <location line="+675"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-548"/>
+        <location line="-596"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -925,12 +1196,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+314"/>
+        <location line="+350"/>
         <source>Cannot open %1</source>
         <translation>无法打开 %1</translation>
     </message>
     <message>
-        <location line="-271"/>
+        <location line="-307"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
@@ -950,12 +1221,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>未找到</translation>
     </message>
     <message>
-        <location line="+302"/>
+        <location line="+349"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
     <message>
-        <location line="+96"/>
+        <location line="+97"/>
         <source>Connection state and line settings</source>
         <translation>连接状态和线路设置</translation>
     </message>
@@ -989,7 +1260,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+68"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
         <source>Preferences</source>
         <translation>首选项</translation>
     </message>
@@ -1165,6 +1436,73 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+11"/>
+        <source>SSH</source>
+        <translation>SSH</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>known_hosts file:</source>
+        <translation>known_hosts 文件：</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>OpenSSH known_hosts file used to verify server host keys; shared with the system ssh. Empty = ~/.ssh/known_hosts. A profile can override it.</source>
+        <translation>用于验证服务器主机密钥的 OpenSSH known_hosts 文件；与系统 ssh 共用。留空 = ~/.ssh/known_hosts。配置文件可覆盖此设置。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Default identity file:</source>
+        <translation>默认身份文件：</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Private key tried for targets typed into the SSH bar. Empty = the agent and ~/.ssh/id_ed25519, id_ecdsa, id_rsa.</source>
+        <translation>连接 SSH 栏中输入的目标时尝试使用的私钥。留空 = 使用 SSH agent 以及 ~/.ssh/id_ed25519、id_ecdsa、id_rsa。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Terminal type:</source>
+        <translation>终端类型：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>TERM requested for the remote PTY (xterm-256color, xterm, vt100, ...).</source>
+        <translation>为远程 PTY 请求的 TERM 类型（xterm-256color、xterm、vt100 等）。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>xterm-256color</source>
+        <translation>xterm-256color</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Keep-alive interval:</source>
+        <translation>保活间隔：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Seconds between keep-alive messages that detect a dead link (0 = off).</source>
+        <translation>用于检测链路断开的保活消息的发送间隔（秒，0 = 关闭）。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
+        <source>Off</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-1"/>
+        <source> s</source>
+        <translation> 秒</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Saved passwords:</source>
+        <translation>已保存的密码：</translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>Logging</source>
         <translation>日志</translation>
     </message>
@@ -1174,7 +1512,9 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>日志目录：</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="-107"/>
+        <location line="+25"/>
+        <location line="+94"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
@@ -1209,7 +1549,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>启动时重新打开上次的会话标签页</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+61"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-27"/>
         <source>None</source>
         <translation>无</translation>
     </message>
@@ -1234,7 +1574,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>传号 (Mark)</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+29"/>
         <source>Raw bytes (replayable capture)</source>
         <translation>原始字节（可重放的捕获）</translation>
     </message>
@@ -1249,7 +1589,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>十六进制转储</translation>
     </message>
     <message>
-        <location line="+121"/>
+        <location line="+138"/>
         <source>Terminal Font</source>
         <translation>终端字体</translation>
     </message>
@@ -1257,6 +1597,26 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <location line="+16"/>
         <source>Select Log Directory</source>
         <translation>选择日志目录</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Select known_hosts File</source>
+        <translation>选择 known_hosts 文件</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>known_hosts (known_hosts*);;All files (*)</source>
+        <translation>known_hosts (known_hosts*);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Select Private Key File</source>
+        <translation>选择私钥文件</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>All files (*)</source>
+        <translation>所有文件 (*)</translation>
     </message>
 </context>
 <context>
@@ -1583,6 +1943,260 @@ Nothing is saved until you press OK.</source>
     </message>
 </context>
 <context>
+    <name>RemoteFileDialog</name>
+    <message>
+        <location filename="../src/dialogs/RemoteFileDialog.ui" line="+14"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+69"/>
+        <location line="+57"/>
+        <source>Remote File Transfer</source>
+        <translation>远程文件传输</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Direction:</source>
+        <translation>方向：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Copy a local file to the remote host (SFTP)</source>
+        <translation>将本地文件复制到远程主机（SFTP）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>&amp;Upload to remote</source>
+        <translation>上传到远程(&amp;U)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Copy a remote file to this computer (SFTP)</source>
+        <translation>将远程文件复制到本机（SFTP）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>&amp;Download from remote</source>
+        <translation>从远程下载(&amp;D)</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+252"/>
+        <source>&amp;Local file:</source>
+        <translation>本地文件(&amp;L)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Path of the local file</source>
+        <translation>本地文件的路径</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>&amp;Browse...</source>
+        <translation>浏览(&amp;B)...</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+1"/>
+        <source>&amp;Remote path:</source>
+        <translation>远程路径(&amp;R)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Absolute path on the remote host, or a directory ending in /</source>
+        <translation>远程主机上的绝对路径，或以 / 结尾的目录</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Use the remote home directory</source>
+        <translation>使用远程主目录</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>~</source>
+        <translation>~</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>&amp;Overwrite existing file</source>
+        <translation>覆盖已有文件(&amp;O)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Keep the permission bits of the source file (an executable stays executable)</source>
+        <translation>保留源文件的权限位（可执行文件仍保持可执行）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>&amp;Preserve permissions</source>
+        <translation>保留权限(&amp;P)</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+109"/>
+        <source>Not connected.</source>
+        <translation>未连接。</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>&amp;Start</source>
+        <translation>开始(&amp;S)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>&amp;Cancel</source>
+        <translation>取消(&amp;C)</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Cl&amp;ose</source>
+        <translation>关闭(&amp;O)</translation>
+    </message>
+    <message>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="-179"/>
+        <source>Select File to Upload</source>
+        <translation>选择要上传的文件</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <location line="+5"/>
+        <source>All files (*)</source>
+        <translation>所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Save Downloaded File As</source>
+        <translation>下载文件另存为</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Resolving the remote home directory...</source>
+        <translation>正在解析远程主目录...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The remote home directory is known once the session is connected.</source>
+        <translation>会话连接后才能获知远程主目录。</translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <source>The file to upload</source>
+        <translation>要上传的文件</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Where to write it on the remote host (a directory ending in / keeps the file name)</source>
+        <translation>在远程主机上的写入位置（以 / 结尾的目录将保留原文件名）</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>&amp;Save as:</source>
+        <translation>另存为(&amp;S)：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>&amp;Remote file:</source>
+        <translation>远程文件(&amp;R)：</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Where to write the downloaded file (an existing directory keeps the file name)</source>
+        <translation>下载文件的写入位置（已存在的目录将保留原文件名）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The remote file to download</source>
+        <translation>要下载的远程文件</translation>
+    </message>
+    <message>
+        <location line="-6"/>
+        <source>&amp;Start upload</source>
+        <translation>开始上传(&amp;S)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Start download</source>
+        <translation>开始下载(&amp;S)</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Enter both the local and the remote path.</source>
+        <translation>请同时输入本地路径和远程路径。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Local file not found: %1</source>
+        <translation>找不到本地文件：%1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1 already exists (enable Overwrite to replace it).</source>
+        <translation>%1 已存在（启用“覆盖”以替换它）。</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>The transfer could not be started (not connected, or another transfer is running).</source>
+        <translation>无法开始传输（未连接，或另一个传输正在进行）。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+17"/>
+        <source>Uploading %1...</source>
+        <translation>正在上传 %1...</translation>
+    </message>
+    <message>
+        <location line="-16"/>
+        <location line="+17"/>
+        <source>Downloading %1...</source>
+        <translation>正在下载 %1...</translation>
+    </message>
+    <message>
+        <location line="-8"/>
+        <source>Cancelling...</source>
+        <translation>正在取消...</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Transfer complete.</source>
+        <translation>传输完成。</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Transfer failed.</source>
+        <translation>传输失败。</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Ready.</source>
+        <translation>就绪。</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>A transfer is already running.</source>
+        <translation>已有传输正在进行。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Connect the session first.</source>
+        <translation>请先连接会话。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Enter the local and the remote path.</source>
+        <translation>请输入本地路径和远程路径。</translation>
+    </message>
+</context>
+<context>
+    <name>SecretStore</name>
+    <message>
+        <location filename="../src/ssh/SecretStore.cpp" line="+211"/>
+        <source>Stored with Windows Data Protection (DPAPI) for the current user</source>
+        <translation>使用 Windows 数据保护 (DPAPI) 为当前用户加密存储</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Obfuscated in the settings file - not encrypted</source>
+        <translation>在设置文件中混淆存储 - 未加密</translation>
+    </message>
+</context>
+<context>
     <name>SendFileDialog</name>
     <message>
         <location filename="../src/dialogs/SendFileDialog.ui" line="+14"/>
@@ -1811,57 +2425,42 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SerialConnection</name>
     <message>
-        <location filename="../src/core/SerialConnection.cpp" line="+281"/>
-        <location line="+485"/>
+        <location filename="../src/core/SerialConnection.cpp" line="+279"/>
+        <location line="+461"/>
         <source>baud rate %1</source>
         <translation>波特率 %1</translation>
     </message>
     <message>
-        <location line="-481"/>
-        <location line="+484"/>
+        <location line="-457"/>
+        <location line="+460"/>
         <source>data bits %1</source>
         <translation>数据位 %1</translation>
     </message>
     <message>
-        <location line="-479"/>
-        <location line="+482"/>
+        <location line="-455"/>
+        <location line="+458"/>
         <source>parity %1</source>
         <translation>校验位 %1</translation>
     </message>
     <message>
-        <location line="-477"/>
-        <location line="+480"/>
+        <location line="-453"/>
+        <location line="+456"/>
         <source>stop bits %1</source>
         <translation>停止位 %1</translation>
     </message>
     <message>
-        <location line="-475"/>
-        <location line="+478"/>
+        <location line="-451"/>
+        <location line="+454"/>
         <source>flow control %1</source>
         <translation>流控制 %1</translation>
     </message>
     <message>
-        <location line="-471"/>
+        <location line="-447"/>
         <source>Cannot apply %1 to %2: %3</source>
         <translation>无法将 %1 应用到 %2：%3</translation>
     </message>
     <message>
-        <location line="+115"/>
-        <source>Connected</source>
-        <translation>已连接</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Reconnecting...</source>
-        <translation>正在重连...</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Disconnected</source>
-        <translation>已断开</translation>
-    </message>
-    <message>
-        <location line="+27"/>
+        <location line="+119"/>
         <source>No serial port selected</source>
         <translation>未选择串口</translation>
     </message>
@@ -1872,13 +2471,13 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+332"/>
+        <location line="+337"/>
         <location line="+5"/>
         <source>Port %1 not found</source>
         <translation>找不到端口 %1</translation>
     </message>
     <message>
-        <location line="-334"/>
+        <location line="-339"/>
         <source>Cannot open %1: %2</source>
         <translation>无法打开 %1：%2</translation>
     </message>
@@ -1898,29 +2497,49 @@ Nothing is saved until you press OK.</source>
         <translation>无法在 %1 上设置 DTR：%2</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+20"/>
         <source>Cannot set RTS on %1: %2</source>
         <translation>无法在 %1 上设置 RTS：%2</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>Cannot send BREAK on %1: %2</source>
         <translation>无法在 %1 上发送 BREAK：%2</translation>
     </message>
     <message>
-        <location line="+231"/>
+        <location line="+235"/>
         <source>Port %1 disconnected</source>
         <translation>端口 %1 已断开</translation>
     </message>
     <message>
-        <location line="-159"/>
+        <location line="-162"/>
         <source>Port %1: %2</source>
         <translation>端口 %1：%2</translation>
     </message>
     <message>
-        <location line="+62"/>
+        <location line="+63"/>
         <source>Cannot set %1 on %2: %3</source>
         <translation>无法在 %2 上设置 %1：%3</translation>
+    </message>
+    <message>
+        <location filename="../src/core/Transport.cpp" line="+81"/>
+        <source>Disconnected</source>
+        <translation>已断开</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Connecting...</source>
+        <translation>正在连接...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Connected</source>
+        <translation>已连接</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Reconnecting...</source>
+        <translation>正在重连...</translation>
     </message>
 </context>
 <context>
@@ -2028,17 +2647,17 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+750"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+1211"/>
         <source>Output paused while selecting - Enter copies, Esc cancels</source>
         <translation>选择文本时已暂停输出 - 按 Enter 复制，Esc 取消</translation>
     </message>
     <message>
-        <location line="-665"/>
+        <location line="-1063"/>
         <source>Output resumed: %1 arrived while the display was paused</source>
         <translation>输出已恢复：暂停期间收到了 %1 数据</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+45"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -2048,9 +2667,14 @@ Nothing is saved until you press OK.</source>
         <translation>日志已关闭：%1（%2 字节）</translation>
     </message>
     <message>
-        <location line="+115"/>
+        <location line="+151"/>
         <source>Replay: %1</source>
         <translation>回放：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>New SSH Session</source>
+        <translation>新建 SSH 会话</translation>
     </message>
     <message>
         <location line="+3"/>
@@ -2058,7 +2682,7 @@ Nothing is saved until you press OK.</source>
         <translation>新建会话</translation>
     </message>
     <message>
-        <location line="+109"/>
+        <location line="+178"/>
         <source>Select a serial port first</source>
         <translation>请先选择串口</translation>
     </message>
@@ -2068,7 +2692,22 @@ Nothing is saved until you press OK.</source>
         <translation>已连接到 %1（%2）</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+14"/>
+        <source>Enter a target such as user@host</source>
+        <translation>请输入目标，例如 user@host</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Cannot connect to %1</source>
+        <translation>无法连接到 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Connecting to %1...</source>
+        <translation>正在连接到 %1...</translation>
+    </message>
+    <message>
+        <location line="+35"/>
         <source>%1 unsent bytes discarded on disconnect</source>
         <translation>断开时丢弃了 %1 个未发送字节</translation>
     </message>
@@ -2088,18 +2727,18 @@ Nothing is saved until you press OK.</source>
         <translation>终端已重置</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+17"/>
         <source>Save session log</source>
         <translation>保存会话日志</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+330"/>
+        <location line="+529"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>日志文件 (*.log *.txt);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="-308"/>
+        <location line="-506"/>
         <source>(no port)</source>
         <translation>（无端口）</translation>
     </message>
@@ -2110,17 +2749,34 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+23"/>
-        <location line="+27"/>
+        <source>File transfer is only available for SSH sessions</source>
+        <translation>文件传输仅适用于 SSH 会话</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+56"/>
+        <location line="+22"/>
+        <location line="+13"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
     <message>
-        <location line="-19"/>
+        <location line="-39"/>
+        <source>Not available for SSH sessions</source>
+        <translation>不适用于 SSH 会话</translation>
+    </message>
+    <message>
+        <location line="+12"/>
         <source>BREAK sent</source>
         <translation>已发送 BREAK</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+14"/>
+        <source>Terminal size sent to the server</source>
+        <translation>终端尺寸已发送到服务器</translation>
+    </message>
+    <message>
+        <location line="+17"/>
         <source>Write to %1 failed</source>
         <translation>写入 %1 失败</translation>
     </message>
@@ -2130,7 +2786,27 @@ Nothing is saved until you press OK.</source>
         <translation>快捷命令 &quot;%1&quot;：%2</translation>
     </message>
     <message>
-        <location line="+65"/>
+        <location line="+84"/>
+        <source>connection to %1 lost, waiting to reconnect</source>
+        <translation>与 %1 的连接已断开，等待重连</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Connection to %1 lost - reconnecting</source>
+        <translation>与 %1 的连接已断开 - 正在重连</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>connection to %1 lost</source>
+        <translation>与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Connection to %1 lost</source>
+        <translation>与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>port %1 disappeared, waiting to reconnect</source>
         <translation>端口 %1 已消失，等待重连</translation>
     </message>
@@ -2160,7 +2836,27 @@ Nothing is saved until you press OK.</source>
         <translation>已重新连接到 %1</translation>
     </message>
     <message>
-        <location line="+116"/>
+        <location line="+108"/>
+        <source>Authenticated (%1)</source>
+        <translation>已通过身份验证（%1）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>connected to %1 (%2, %3)</source>
+        <translation>已连接到 %1（%2，%3）</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>connection closed (exit status %1)</source>
+        <translation>连接已关闭（退出状态 %1）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>connection closed</source>
+        <translation>连接已关闭</translation>
+    </message>
+    <message>
+        <location line="+89"/>
         <source>Disconnect from %1 before replaying a log file</source>
         <translation>回放日志文件前，请先断开与 %1 的连接</translation>
     </message>
@@ -2208,6 +2904,938 @@ Nothing is saved until you press OK.</source>
         <location line="+0"/>
         <source>Replay the file at:</source>
         <translation>以此速度回放文件：</translation>
+    </message>
+</context>
+<context>
+    <name>SshConnection</name>
+    <message>
+        <location filename="../src/ssh/SshConnection.cpp" line="+416"/>
+        <source>No SSH host given</source>
+        <translation>未指定 SSH 主机</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Invalid SSH port for %1</source>
+        <translation>%1 的 SSH 端口无效</translation>
+    </message>
+    <message>
+        <location filename="../src/ssh/SshWorker.cpp" line="+295"/>
+        <source>unknown size</source>
+        <translation>大小未知</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 B</source>
+        <translation>%1 B</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 KB</source>
+        <translation>%1 KB</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>none</source>
+        <translation>无</translation>
+    </message>
+</context>
+<context>
+    <name>SshConnectionBar</name>
+    <message>
+        <location filename="../src/ui/SshConnectionBar.cpp" line="+214"/>
+        <source>Target:</source>
+        <translation>目标：</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>user@host[:port]</source>
+        <translation>user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Manage SSH profiles...</source>
+        <translation>管理 SSH 配置文件...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Host key type and authentication method</source>
+        <translation>主机密钥类型和身份验证方式</translation>
+    </message>
+    <message>
+        <location line="+216"/>
+        <source>Enter user@host[:port]</source>
+        <translation>请输入 user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Saved profile or user@host[:port] (also ssh://user@host:port, [v6]:port)</source>
+        <translation>已保存的配置文件或 user@host[:port]（也支持 ssh://user@host:port、[v6]:port）</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Disconnect</source>
+        <translation>断开</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Close the SSH session</source>
+        <translation>关闭 SSH 会话</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Connecting...</source>
+        <translation>正在连接...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Connecting (click to cancel)</source>
+        <translation>正在连接（点击取消）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Reconnecting...</source>
+        <translation>正在重连...</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Waiting for the link to come back (click to cancel)</source>
+        <translation>等待链路恢复（点击取消）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Connect</source>
+        <translation>连接</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Open an SSH session to the selected target</source>
+        <translation>打开到所选目标的 SSH 会话</translation>
+    </message>
+</context>
+<context>
+    <name>SshProfile</name>
+    <message>
+        <location filename="../src/ssh/SshProfile.cpp" line="+257"/>
+        <source>Automatic</source>
+        <translation>自动</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Public key</source>
+        <translation>公钥</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Password</source>
+        <translation>密码</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Keyboard-interactive</source>
+        <translation>键盘交互</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SSH agent</source>
+        <translation>SSH agent</translation>
+    </message>
+</context>
+<context>
+    <name>SshProfileStore</name>
+    <message>
+        <location line="+261"/>
+        <source>Cannot open %1: %2</source>
+        <translation>无法打开 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>%1 is not valid JSON: %2</source>
+        <translation>%1 不是有效的 JSON：%2</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>%1 contains no SSH profiles</source>
+        <translation>%1 不包含任何 SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>%1 contains no valid SSH profiles</source>
+        <translation>%1 不包含任何有效的 SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <location line="+7"/>
+        <source>Cannot write %1: %2</source>
+        <translation>无法写入 %1：%2</translation>
+    </message>
+</context>
+<context>
+    <name>SshProfilesDialog</name>
+    <message>
+        <location filename="../src/dialogs/SshProfilesDialog.ui" line="+20"/>
+        <location filename="../src/dialogs/SshProfilesDialog.cpp" line="+232"/>
+        <location line="+444"/>
+        <location line="+8"/>
+        <source>SSH Profiles</source>
+        <translation>SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Saved SSH profiles</source>
+        <translation>已保存的 SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>New</source>
+        <translation>新建</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Duplicate</source>
+        <translation>创建副本</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Merge profiles from a JSON file (by id)</source>
+        <translation>从 JSON 文件合并配置文件（按 id）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Import...</source>
+        <translation>导入...</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Write every profile to a JSON file (passwords are never exported)</source>
+        <translation>将所有配置文件写入一个 JSON 文件（绝不导出密码）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Export...</source>
+        <translation>导出...</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Connection</source>
+        <translation>连接</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>&amp;Name:</source>
+        <translation>名称(&amp;N)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Display name (defaults to user@host)</source>
+        <translation>显示名称（默认为 user@host）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Host:</source>
+        <translation>主机(&amp;H)：</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Host name or IP address</source>
+        <translation>主机名或 IP 地址</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Port:</source>
+        <translation>端口(&amp;P)：</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>&amp;User:</source>
+        <translation>用户(&amp;U)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Local user name</source>
+        <translation>本地用户名</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Authentication:</source>
+        <translation>身份验证(&amp;A)：</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Identity &amp;file:</source>
+        <translation>身份文件(&amp;F)：</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Private key file; with Automatic authentication it is tried before the default ~/.ssh keys</source>
+        <translation>私钥文件；使用“自动”身份验证时，会先于默认的 ~/.ssh 密钥尝试</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Private key file (e.g. ~/.ssh/id_ed25519)</source>
+        <translation>私钥文件（例如 ~/.ssh/id_ed25519）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+227"/>
+        <source>Browse...</source>
+        <translation>浏览...</translation>
+    </message>
+    <message>
+        <location line="-218"/>
+        <location filename="../src/dialogs/SshProfilesDialog.cpp" line="-113"/>
+        <source>&amp;Save password:</source>
+        <translation>保存密码(&amp;S)：</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Description:</source>
+        <translation>说明：</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Session</source>
+        <translation>会话</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>&amp;Remote command:</source>
+        <translation>远程命令(&amp;R)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Run this command instead of the login shell (with a PTY); the session ends when it exits</source>
+        <translation>运行此命令而不是登录 shell（带 PTY）；命令退出后会话即结束</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Interactive shell</source>
+        <translation>交互式 shell</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Start&amp;up command:</source>
+        <translation>启动命令(&amp;U)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Typed into the shell after login, e.g. &quot;cd /oem &amp;&amp; ls&quot;</source>
+        <translation>登录后输入到 shell 中，例如 &quot;cd /oem &amp;&amp; ls&quot;</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Typed into the shell after login</source>
+        <translation>登录后输入到 shell 中</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Terminal type:</source>
+        <translation>终端类型(&amp;T)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>TERM requested for the PTY</source>
+        <translation>为 PTY 请求的 TERM 类型</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>xterm-256color</source>
+        <translation>xterm-256color</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>&amp;Keep-alive:</source>
+        <translation>保活(&amp;K)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Interval of the SSH keep-alive messages that detect a dead link (0 = off)</source>
+        <translation>用于检测链路断开的 SSH 保活消息的发送间隔（0 = 关闭）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+26"/>
+        <source> s</source>
+        <translation> 秒</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Connect time&amp;out:</source>
+        <translation>连接超时(&amp;O)：</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Proxy &amp;jump:</source>
+        <translation>跳板主机(&amp;J)：</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Hop through this host first (ssh -J), e.g. moses@gateway:2222</source>
+        <translation>先经由此主机跳转（ssh -J），例如 moses@gateway:2222</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>[user@]host[:port] (direct connection when empty)</source>
+        <translation>[user@]host[:port]（留空则直接连接）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Co&amp;mpression</source>
+        <translation>压缩(&amp;M)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>known_&amp;hosts file:</source>
+        <translation>known_hosts 文件(&amp;H)：</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>OpenSSH known_hosts file used to verify this host&apos;s key (shared with the system ssh by default)</source>
+        <translation>用于验证此主机密钥的 OpenSSH known_hosts 文件（默认与系统 ssh 共用）</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Port forwarding</source>
+        <translation>端口转发</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Local ports forwarded through the SSH connection (like ssh -L localPort:remoteHost:remotePort). Double-click a cell to edit it; the bind address 0.0.0.0 exposes the local port on the LAN.</source>
+        <translation>通过 SSH 连接转发的本地端口（类似 ssh -L localPort:remoteHost:remotePort）。双击单元格进行编辑；绑定地址 0.0.0.0 会将本地端口暴露到局域网。</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Add</source>
+        <translation>添加</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Remove</source>
+        <translation>移除</translation>
+    </message>
+    <message>
+        <location filename="../src/dialogs/SshProfilesDialog.cpp" line="-416"/>
+        <source>Host is required.</source>
+        <translation>必须填写主机。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Port must be between 1 and 65535.</source>
+        <translation>端口必须在 1 到 65535 之间。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>An identity file is required for public key authentication.</source>
+        <translation>公钥身份验证需要指定身份文件。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Identity file not found: %1</source>
+        <translation>找不到身份文件：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Proxy jump must be [user@]host[:port].</source>
+        <translation>跳板主机必须为 [user@]host[:port] 格式。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Port forward %1 is incomplete.</source>
+        <translation>端口转发 %1 不完整。</translation>
+    </message>
+    <message>
+        <location line="+69"/>
+        <source>Off</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Default: %1</source>
+        <translation>默认：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Local user name (%1)</source>
+        <translation>本地用户名（%1）</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Local port</source>
+        <translation>本地端口</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Remote host</source>
+        <translation>远程主机</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Remote port</source>
+        <translation>远程端口</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Bind address</source>
+        <translation>绑定地址</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Connect</source>
+        <translation>连接</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Save the profiles and open a session to the selected one</source>
+        <translation>保存配置文件并打开到所选配置的会话</translation>
+    </message>
+    <message>
+        <location line="+182"/>
+        <source>(saved)</source>
+        <translation>（已保存）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Stored on Apply, never in the profile file</source>
+        <translation>点击“应用”时保存，绝不写入配置文件 (JSON)</translation>
+    </message>
+    <message>
+        <location line="+112"/>
+        <source>&amp;Save key passphrase:</source>
+        <translation>保存密钥口令(&amp;S)：</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>%1: %2</source>
+        <translation>%1：%2</translation>
+    </message>
+    <message>
+        <location line="+86"/>
+        <source>The password could not be saved for: %1
+
+%2
+You will be asked for it when connecting.</source>
+        <translation>无法为以下配置文件保存密码：%1
+
+%2
+连接时将会要求您输入密码。</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>The profiles could not be saved to %1. The changes apply to this run only.</source>
+        <translation>无法将配置文件保存到 %1。更改仅在本次运行中生效。</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>New profile</source>
+        <translation>新配置文件</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>%1 (copy)</source>
+        <translation>%1（副本）</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <location line="+23"/>
+        <source>Import SSH Profiles</source>
+        <translation>导入 SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="-22"/>
+        <location line="+10"/>
+        <source>JSON files (*.json);;All files (*)</source>
+        <translation>JSON 文件 (*.json);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="-1"/>
+        <location line="+42"/>
+        <source>Export SSH Profiles</source>
+        <translation>导出 SSH 配置文件</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Select Private Key File</source>
+        <translation>选择私钥文件</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <location line="+17"/>
+        <source>All files (*)</source>
+        <translation>所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Select known_hosts File</source>
+        <translation>选择 known_hosts 文件</translation>
+    </message>
+</context>
+<context>
+    <name>SshWorker</name>
+    <message>
+        <location filename="../src/ssh/SshWorker.cpp" line="+254"/>
+        <location line="+100"/>
+        <source>Not connected</source>
+        <translation>未连接</translation>
+    </message>
+    <message>
+        <location line="-96"/>
+        <source>Another transfer is still running</source>
+        <translation>另一个传输仍在进行</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Local file not found: %1</source>
+        <translation>找不到本地文件：%1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Remote file already exists: %1</source>
+        <translation>远程文件已存在：%1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+1355"/>
+        <source>Cannot read %1: %2</source>
+        <translation>无法读取 %1：%2</translation>
+    </message>
+    <message>
+        <location line="-1350"/>
+        <source>Cannot create remote file %1: %2</source>
+        <translation>无法创建远程文件 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Local file already exists: %1</source>
+        <translation>本地文件已存在：%1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Remote file not found: %1 (%2)</source>
+        <translation>找不到远程文件：%1（%2）</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Cannot open remote file %1: %2</source>
+        <translation>无法打开远程文件 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+1347"/>
+        <location line="+31"/>
+        <source>Cannot write %1: %2</source>
+        <translation>无法写入 %1：%2</translation>
+    </message>
+    <message>
+        <location line="-1357"/>
+        <location line="+1286"/>
+        <source>Transfer cancelled</source>
+        <translation>传输已取消</translation>
+    </message>
+    <message>
+        <location line="-1266"/>
+        <source>Cannot resolve the remote home directory: %1</source>
+        <translation>无法解析远程主目录：%1</translation>
+    </message>
+    <message>
+        <location line="+70"/>
+        <source>Cannot create an SSH session</source>
+        <translation>无法创建 SSH 会话</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Cannot connect to %1: %2</source>
+        <translation>无法连接到 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>Cannot set SSH option %1: %2</source>
+        <translation>无法设置 SSH 选项 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>Cannot read the host key of %1: %2</source>
+        <translation>无法读取 %1 的主机密钥：%2</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>The host key of %1 is not known (%2) - reconnect cancelled</source>
+        <translation>%1 的主机密钥未知（%2）- 重连已取消</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Host key rejected for %1</source>
+        <translation>已拒绝 %1 的主机密钥</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Authentication with %1 failed: %2</source>
+        <translation>使用 %1 进行身份验证失败：%2</translation>
+    </message>
+    <message>
+        <location line="+77"/>
+        <source>No usable authentication method for %1: the server offers %2, the profile uses %3</source>
+        <translation>没有可用于 %1 的身份验证方式：服务器提供 %2，配置文件使用 %3</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Authentication failed for %1: %2</source>
+        <translation>%1 身份验证失败：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>every method was rejected</source>
+        <translation>所有方式均被拒绝</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>Cannot read the key %1</source>
+        <translation>无法读取密钥 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Wrong passphrase for %1</source>
+        <translation>%1 的口令错误</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The key %1 needs a passphrase - reconnect cancelled</source>
+        <translation>密钥 %1 需要口令 - 重连已取消</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Key passphrase</source>
+        <translation>密钥口令</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Enter passphrase for key &apos;%1&apos;:</source>
+        <translation>请输入密钥 &apos;%1&apos; 的口令：</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>Wrong password for %1</source>
+        <translation>%1 的密码错误</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>A password is needed for %1 - reconnect cancelled</source>
+        <translation>%1 需要密码 - 重连已取消</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Password</source>
+        <translation>密码</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Password for %1:</source>
+        <translation>%1 的密码：</translation>
+    </message>
+    <message>
+        <location line="+44"/>
+        <source>Keyboard-interactive authentication did not finish</source>
+        <translation>键盘交互身份验证未完成</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1 asks for interactive input - reconnect cancelled</source>
+        <translation>%1 要求交互式输入 - 重连已取消</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Keyboard-interactive authentication</source>
+        <translation>键盘交互身份验证</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Response:</source>
+        <translation>响应：</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Keyboard-interactive authentication failed for %1</source>
+        <translation>%1 的键盘交互身份验证失败</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Cannot create a channel: %1</source>
+        <translation>无法创建通道：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Cannot open the session channel on %1: %2</source>
+        <translation>无法在 %1 上打开会话通道：%2</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>PTY request on %1 failed: %2</source>
+        <translation>在 %1 上请求 PTY 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Cannot start a shell on %1: %2</source>
+        <translation>无法在 %1 上启动 shell：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cannot run &apos;%1&apos; on %2: %3</source>
+        <translation>无法在 %2 上运行 &apos;%1&apos;：%3</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Connection to %1 cancelled</source>
+        <translation>到 %1 的连接已取消</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>No answer within 5 minutes - connection to %1 cancelled</source>
+        <translation>5 分钟内无应答 - 到 %1 的连接已取消</translation>
+    </message>
+    <message>
+        <location line="+115"/>
+        <source>Connection to %1 lost: %2</source>
+        <translation>与 %1 的连接已断开：%2</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+347"/>
+        <source>Write to %1 failed: %2</source>
+        <translation>写入 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="-316"/>
+        <source>Connection to %1 lost</source>
+        <translation>与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+54"/>
+        <source>Keep-alive to %1 failed %2 times</source>
+        <translation>到 %1 的保活已失败 %2 次</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Transfer aborted: the connection was closed</source>
+        <translation>传输中止：连接已关闭</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Invalid port forward %1</source>
+        <translation>无效的端口转发 %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Invalid bind address &quot;%1&quot; for the port forward %2</source>
+        <translation>端口转发 %2 的绑定地址 &quot;%1&quot; 无效</translation>
+    </message>
+    <message>
+        <location line="+155"/>
+        <source>Cannot start SFTP on %1: %2</source>
+        <translation>无法在 %1 上启动 SFTP：%2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>SFTP initialisation on %1 failed: %2 (code %3)</source>
+        <translation>在 %1 上初始化 SFTP 失败：%2（代码 %3）</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Read from %1 failed: %2</source>
+        <translation>从 %1 读取失败：%2</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Closing %1 failed: %2</source>
+        <translation>关闭 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Uploaded %1 to %2 (%3)</source>
+        <translation>已将 %1 上传到 %2（%3）</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Cannot replace %1</source>
+        <translation>无法替换 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Cannot rename %1 to %2</source>
+        <translation>无法将 %1 重命名为 %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Downloaded %1 to %2 (%3)</source>
+        <translation>已将 %1 下载到 %2（%3）</translation>
+    </message>
+    <message>
+        <location line="+109"/>
+        <source>end of file</source>
+        <translation>文件结束</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>no such file</source>
+        <translation>文件不存在</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>permission denied</source>
+        <translation>权限被拒绝</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>operation failed</source>
+        <translation>操作失败</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>bad message</source>
+        <translation>消息格式错误</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>connection lost</source>
+        <translation>连接已断开</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>operation not supported</source>
+        <translation>不支持该操作</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>invalid handle</source>
+        <translation>无效的句柄</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>file already exists</source>
+        <translation>文件已存在</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>write protected</source>
+        <translation>写保护</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>no media</source>
+        <translation>无介质</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+4"/>
+        <source>SFTP error %1</source>
+        <translation>SFTP 错误 %1</translation>
     </message>
 </context>
 <context>
@@ -2365,6 +3993,19 @@ Nothing is saved until you press OK.</source>
         <location line="+5"/>
         <source>&amp;Find...</source>
         <translation>查找(&amp;F)...</translation>
+    </message>
+</context>
+<context>
+    <name>Transport</name>
+    <message>
+        <location filename="../src/core/Transport.cpp" line="+9"/>
+        <source>Serial</source>
+        <translation>串口</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SSH</source>
+        <translation>SSH</translation>
     </message>
 </context>
 <context>

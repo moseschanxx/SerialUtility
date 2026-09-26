@@ -15,8 +15,15 @@ speaks bytes.
 ## Features
 
 - **Multi-tab sessions** - one port per tab, movable and closable, with a coloured connection
-  dot (green connected, amber reconnecting, grey disconnected). Tabs from the previous run are
-  reopened on start.
+  dot (green connected, amber connecting / reconnecting, grey disconnected). Tabs from the
+  previous run are reopened on start.
+- **SSH sessions** - the same terminal over SSH (libssh, OpenSSL): type `root@192.168.100.2`
+  and connect, or keep named profiles (key file, password, keyboard-interactive or agent
+  authentication, startup command, port forwards). Host keys are verified against your
+  `~/.ssh/known_hosts` with a proper "identification has changed" warning, `~/.ssh/config`
+  aliases are honoured, passwords can be remembered (Windows DPAPI), the shell follows the
+  window size, keep-alives detect dead links and a dropped connection reconnects by itself.
+  Upload / download files over SFTP (drag a file onto the terminal to upload).
 - **Real terminal emulation** - VT100 / xterm subset: cursor movement, erase/insert/delete,
   scroll regions, 16 / 256 / true colours, alternate screen (`top`, `vi`, `menuconfig`),
   bracketed paste, DSR / DA replies, window title. Chinese and other CJK text occupies two
@@ -69,14 +76,18 @@ speaks bytes.
 
 | Component | Version |
 |---|---|
-| Qt | **6.8** with modules Core, Gui, Widgets, SerialPort, LinguistTools (Test for the unit tests) |
-| CMake | 3.22 or newer (3.25+ for the presets) |
+| Qt | **6.8** with modules Core, Gui, Widgets, SerialPort, Network, LinguistTools (Test for the unit tests) |
+| OpenSSL | 3.x development files for libssh's crypto backend: Windows `C:\Program Files\OpenSSL-Win64` (Shining Light installer) or any prefix via `-DOPENSSL_ROOT_DIR`; Linux `libssl-dev` |
+| CMake | 3.22 or newer (3.25+ for the presets); internet access at the first configure to fetch libssh 0.11.1 |
 | Generator | Ninja |
 | Compiler (Windows) | MSVC 2022 x64 (`D:\Qt\6.8.3\msvc2022_64` is the default Qt prefix) |
 | Compiler (Linux) | GCC 12+ or Clang 15+ |
 | Linux distro Qt packages | Debian 13+ / Ubuntu 25.10+ (older releases: install Qt 6.8.3 via aqtinstall) |
 
-No third-party libraries beyond Qt are required.
+The only third-party library besides Qt is **libssh 0.11.1**, which CMake downloads (SHA-256
+pinned) and builds from source at configure time; it needs OpenSSL. The resulting `ssh.dll` /
+`libssh.so.4` and `libcrypto` are copied next to the executables and shipped with every package,
+so end users install nothing.
 
 ## Building
 
@@ -274,6 +285,56 @@ Connection* if you prefer manual control.
 - Control characters: type them in the terminal (Ctrl+C, Ctrl+D, Ctrl+Z, ESC) or use the
   *Control* quick commands, which send the raw byte.
 
+### SSH sessions
+
+*File > New SSH Session...* (Ctrl+Shift+T, or the toolbar button) opens a tab with an SSH bar
+instead of the serial one. Type a target and press Enter or **Connect**:
+
+```
+root@192.168.100.2          user@host, port 22
+root@192.168.100.2:2222     with a port
+ssh://root@10.0.0.24:22     URL form
+[fe80::1%eth0]:22           IPv6 in brackets
+luckfox                     a Host alias from ~/.ssh/config (user, port, key and ProxyJump apply)
+```
+
+- **Host key** - the first connection to a host shows its key type and SHA-256 / MD5
+  fingerprints; *Connect and remember* appends it to `~/.ssh/known_hosts` (the same file the
+  `ssh` command uses, so a host you trusted in a terminal is silently accepted here and vice
+  versa). If a known host suddenly presents a different key you get the red *REMOTE HOST
+  IDENTIFICATION HAS CHANGED* warning; a reflashed dev board is the usual reason, and *Replace
+  key and connect* (after ticking the checkbox) updates the stored key.
+- **Authentication** - automatic order: ssh-agent (Linux / macOS), the profile's key file,
+  `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, then a password or keyboard-interactive prompt. A
+  key passphrase or password is asked in a dialog (three attempts); for a stored profile you can
+  tick *Remember* - on Windows it is encrypted with DPAPI for your user account, elsewhere it is
+  only obfuscated and the dialog says so.
+- **Profiles** - the gear button or *Edit > SSH Profiles...* keeps named targets with the
+  authentication method, key file, saved password, a remote command instead of the shell, a
+  startup command typed after login (`cd /oem && ls`), terminal type, keep-alive and timeout,
+  compression, a *ProxyJump* host, an alternative `known_hosts` file and local port forwards
+  (`8080 -> 127.0.0.1:80` makes the board's web UI reachable at `localhost:8080` while the
+  session is open). Import / export as JSON (secrets are never exported). The list in the bar
+  shows your profiles followed by the last ten ad-hoc targets.
+- **In the session** - everything a serial tab offers: quick commands, the command input line,
+  hex view, logging, log replay, mark mode, right-click paste. The shell learns the terminal
+  size automatically (no `stty` needed; *Sync Terminal Size* re-sends it). A keep-alive every
+  30 s detects a dead link; when the link drops (board rebooted, Wi-Fi hiccup) the tab shows
+  `connection lost` and reconnects with backoff, exactly like a re-plugged serial adapter,
+  using the saved credentials only - a clean `exit` closes the tab's connection without
+  reconnecting.
+- **Files** - *Session > Upload File to Remote...* / *Download File from Remote...* transfer a
+  file over the session's SFTP channel with progress and cancel; dropping a file on an SSH
+  terminal opens the upload dialog with that file. *Send File* still exists and pastes the file
+  into the shell like on a serial port.
+- Session tabs are restored on the next start with their target selected, never auto-connected.
+  From the command line, `BuildAI-SerialUtility --ssh root@192.168.100.2` opens an SSH tab with
+  that target (add `--connect` to connect immediately).
+- *Preferences > SSH* holds the defaults used when a profile or ad-hoc target leaves a field
+  empty: known_hosts file, identity file, terminal type and keep-alive interval.
+- Windows limitation: libssh has no ssh-agent support on Windows, so use key files (or Pageant's
+  keys exported to files) there; on Linux the agent from `SSH_AUTH_SOCK` is used.
+
 ### Quick commands
 
 *Edit > Quick Commands...* opens the editor. Each row has a name, the command text, a group
@@ -368,6 +429,7 @@ applies first and the queued output then continues on the empty screen.
 | Shortcut | Action |
 |---|---|
 | Ctrl+T / Ctrl+W | New session tab / close tab |
+| Ctrl+Shift+T | New SSH session tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | F2 / F3 | Connect / disconnect |
 | F5 | Refresh port list |
@@ -395,20 +457,23 @@ disconnected and reaches the device (`ESC O Q`) only while connected.
 
 ```
 MainWindow (tabs, menus, status bar, System Log dock)
-  └── SessionWidget x N
-        ├── ConnectionBar        port + line parameters + connect
+  └── SessionWidget x N   (serial or SSH)
+        ├── ConnectionBar | SshConnectionBar     port + line parameters | target + profiles
         ├── TerminalWidget  ──►  AnsiParser  ──►  TerminalScreen   (or HexDumpView)
         ├── QuickCommandBar      QuickCommandStore (shared)
         ├── CommandInput         CommandHistory (shared)
-        ├── SerialConnection     QSerialPort + auto-reconnect
+        ├── Transport            SerialConnection (QSerialPort + auto-reconnect)
+        │                        | SshConnection (libssh on a worker thread, SFTP, forwards)
         └── SessionLogger
-Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender)
+Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender),
+         HostKey, AuthPrompt, SshProfiles, RemoteFile (SFTP)
 ```
 
-Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/terminal` minus the
-widget; UI-free, unit-tested), `su_app` (static library: every widget and dialog, linked by the
-GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources). Everything runs on the
-GUI thread; `QSerialPort` is asynchronous and rendering is coalesced to 16 ms.
+Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/ssh`, `src/terminal`
+minus the widget; UI-free, unit-tested), `su_app` (static library: every widget and dialog, linked
+by the GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources), plus libssh built
+from source. Everything runs on the GUI thread except the SSH worker thread behind each
+`SshConnection`; `QSerialPort` is asynchronous and rendering is coalesced to 16 ms.
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) - architecture, conventions, module contracts, work packages.
 - [`docs/TERMINAL_EMULATION.md`](docs/TERMINAL_EMULATION.md) - supported escape sequences and key mapping.
@@ -424,13 +489,16 @@ SerialUtility/
 │   ├── app/            AppSettings, Logging, Version.h.in
 │   ├── core/           SerialConnection, SerialPortEnumerator, LineEnding, HexUtils,
 │   │                   CommandHistory, QuickCommand(Store), FileSender, SessionLogger,
-│   │                   DeviceSimulator (SIM: pseudo-ports)
+│   │                   DeviceSimulator (SIM: pseudo-ports), Transport (serial | SSH interface)
+│   ├── ssh/            SshConnection (libssh worker), SshProfile(Store), SecretStore
 │   ├── terminal/       TerminalScreen, AnsiParser, CharWidth, TerminalTheme, TerminalWidget
-│   ├── ui/             MainWindow, SessionWidget, ConnectionBar, CommandInput,
+│   ├── ui/             MainWindow, SessionWidget, ConnectionBar, SshConnectionBar, CommandInput,
 │   │                   QuickCommandBar, HexDumpView, SystemLogViewer
-│   ├── dialogs/        About, Version, Preferences, QuickCommands, SendFile (.ui + .cpp)
+│   ├── dialogs/        About, Version, Preferences, QuickCommands, SendFile,
+│   │                   HostKey, AuthPrompt, SshProfiles, RemoteFile (.ui + .cpp)
 │   └── main.cpp
-├── tests/              Qt Test suites: unit tests (su_core) and offscreen GUI tests (su_app)
+├── tests/              Qt Test suites: unit tests (su_core) and offscreen GUI tests (su_app);
+│                       support/TestSshServer - in-process libssh server for the SSH suites
 ├── translations/       en_US.ts, zh_CN.ts
 ├── resources/          icons, resources.qrc, resources.rc
 └── docs/               DESIGN.md, TERMINAL_EMULATION.md, QUICKSTART.md
@@ -453,6 +521,10 @@ Windows). Per-user data files (quick commands, history) live in
 | Colours or `top` look wrong | Try *Session > Reset Terminal* and *Sync Terminal Size* (sends the current rows x columns to the shell via `stty`-compatible resize). |
 | Lost characters at 1.5 Mbaud | Use a CH343 / FTDI adapter (CH340 tops out at ~2 Mbaud but drops bytes); avoid USB hubs. |
 | Port disappears on every reboot and never returns | Auto-reconnect is off - enable it in *Preferences > Connection* - or the adapter re-enumerates with a different COM number; pick it again. |
+| SSH: "REMOTE HOST IDENTIFICATION HAS CHANGED" | The board was reflashed (new host key) or something sits between you and it. If you expect the change, tick the checkbox and *Replace key and connect*; the old line in `~/.ssh/known_hosts` is replaced. |
+| SSH: connects but authentication fails with a key | The server does not accept that key (check `authorized_keys` on the board), or the key needs a passphrase you cancelled. Set *Authentication: Public key* with the file in the profile to see libssh's exact error in the System Log. |
+| SSH: prompt appears but typing shows nothing | The startup / remote command is still running, or the server did not grant a PTY (some restricted shells); try *Session > Reset Terminal*, then reconnect with an empty remote command. |
+| SSH: the app does not start, "ssh.dll" or "libcrypto-3-x64.dll" missing | The portable zip was unpacked incompletely - the two DLLs must sit next to the executable (the installer always places them). |
 
 The **System Log** dock (*View > System Log*) shows every port open / close / error with a
 timestamp; *Help > Version* has a **Copy** button that collects everything needed for a bug
@@ -472,4 +544,6 @@ report (versions, compiler, OS, codecs).
 
 Copyright 2026 BuildAI - all rights reserved.
 
-Qt is used under the terms of the GNU LGPL v3 (<https://www.qt.io/licensing>).
+Qt is used under the terms of the GNU LGPL v3 (<https://www.qt.io/licensing>). libssh
+(<https://www.libssh.org>) is used as a shared library under the GNU LGPL v2.1; OpenSSL
+(<https://www.openssl.org>) under the Apache License 2.0.

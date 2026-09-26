@@ -48,6 +48,8 @@
 #include "dialogs/QuickCommandsDialog.h"
 #include "dialogs/SendFileDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "ssh/SecretStore.h"
+#include "ssh/SshConnection.h"
 #include "terminal/AnsiParser.h"
 #include "terminal/TerminalTheme.h"
 
@@ -106,7 +108,7 @@ private:
 namespace {
 
 // Tab indices of PreferencesDialog.ui.
-enum Page { PageTerminal = 0, PageInput, PageConnection, PageLogging, PageGeneral };
+enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageLogging, PageGeneral };
 
 template <typename T>
 T* child(const QObject* parent, const char* objectName)
@@ -175,6 +177,13 @@ struct PrefControls
     QCheckBox* restoreSessions = nullptr;
     QCheckBox* pauseWhileSelecting = nullptr;
     QCheckBox* rightClickPastes = nullptr;
+    QLineEdit* sshKnownHosts = nullptr;
+    QPushButton* sshKnownHostsBrowse = nullptr;
+    QLineEdit* sshIdentity = nullptr;
+    QPushButton* sshIdentityBrowse = nullptr;
+    QLineEdit* sshTerminalType = nullptr;
+    QSpinBox* sshKeepAlive = nullptr;
+    QLabel* sshSecretsNote = nullptr;
     QTabWidget* tabs = nullptr;
     QDialogButtonBox* buttons = nullptr;
 
@@ -184,7 +193,8 @@ struct PrefControls
                backspaceDelete && localEcho && encoding && baud && dataBits && parity && stopBits && flow && dtr &&
                rts && autoReconnect && reconnectInterval && showSimulated && logDir && logDirBrowse && autoLog &&
                logFormat && logIncludeTx && confirmClose && restoreSessions && pauseWhileSelecting &&
-               rightClickPastes && tabs && buttons;
+               rightClickPastes && sshKnownHosts && sshKnownHostsBrowse && sshIdentity && sshIdentityBrowse &&
+               sshTerminalType && sshKeepAlive && sshSecretsNote && tabs && buttons;
     }
 };
 
@@ -221,6 +231,13 @@ PrefControls controlsOf(const PreferencesDialog& dialog)
     c.logIncludeTx = child<QCheckBox>(&dialog, "logIncludeTxCheck");
     c.confirmClose = child<QCheckBox>(&dialog, "confirmCloseCheck");
     c.restoreSessions = child<QCheckBox>(&dialog, "restoreSessionsCheck");
+    c.sshKnownHosts = child<QLineEdit>(&dialog, "sshKnownHostsEdit");
+    c.sshKnownHostsBrowse = child<QPushButton>(&dialog, "sshKnownHostsBrowseButton");
+    c.sshIdentity = child<QLineEdit>(&dialog, "sshIdentityEdit");
+    c.sshIdentityBrowse = child<QPushButton>(&dialog, "sshIdentityBrowseButton");
+    c.sshTerminalType = child<QLineEdit>(&dialog, "sshTerminalTypeEdit");
+    c.sshKeepAlive = child<QSpinBox>(&dialog, "sshKeepAliveSpin");
+    c.sshSecretsNote = child<QLabel>(&dialog, "sshSecretsNoteLabel");
     c.tabs = child<QTabWidget>(&dialog, "tabWidget");
     c.buttons = child<QDialogButtonBox>(&dialog, "buttonBox");
     return c;
@@ -273,6 +290,8 @@ private slots:
     void preferencesRestoreDefaultsTerminal();
     void preferencesRestoreDefaultsInput();
     void preferencesRestoreDefaultsConnection();
+    void preferencesRestoreDefaultsSsh();
+    void preferencesSshRoundTrip();
     void preferencesRestoreDefaultsLogging();
     void preferencesRestoreDefaultsGeneral();
     void preferencesShowSimulatedPortsRoundTrip();
@@ -397,6 +416,10 @@ void Tst_dialogs::setNonDefaultSettings()
     s.setLogIncludeTx(false);
     s.setConfirmCloseWhenConnected(false);
     s.setRestoreLastPorts(false);
+    s.setSshKnownHostsFile(tempPath(QStringLiteral("known_hosts")));
+    s.setSshDefaultIdentityFile(tempPath(QStringLiteral("id_ed25519")));
+    s.setSshDefaultTerminalType(QStringLiteral("vt100"));
+    s.setSshDefaultKeepAliveSeconds(0);
 }
 
 QString Tst_dialogs::tempPath(const QString& name) const
@@ -419,8 +442,9 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QCOMPARE(dialog.windowTitle(), QStringLiteral("Preferences"));
     const PrefControls c = controlsOf(dialog);
     QVERIFY(c.complete());
-    QCOMPARE(c.tabs->count(), 5);
+    QCOMPARE(c.tabs->count(), 6);
     QCOMPARE(c.tabs->currentIndex(), PageTerminal);
+    QCOMPARE(c.tabs->tabText(PageSsh), QStringLiteral("SSH"));
 
     // Terminal
     QCOMPARE(c.fontPreview->text(), QStringLiteral("Courier New 14"));
@@ -460,6 +484,21 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QCOMPARE(c.reconnectInterval->minimum(), 200);
     QCOMPARE(c.reconnectInterval->maximum(), 60000);
     QVERIFY(!c.showSimulated->isChecked());
+
+    // SSH
+    QVERIFY(c.tabs->widget(PageSsh)->isAncestorOf(c.sshKnownHosts));
+    QCOMPARE(c.sshKnownHosts->text(), QDir::toNativeSeparators(tempPath(QStringLiteral("known_hosts"))));
+    QCOMPARE(c.sshKnownHosts->placeholderText(), QDir::toNativeSeparators(SshConnection::defaultKnownHostsFile()));
+    QCOMPARE(c.sshIdentity->text(), QDir::toNativeSeparators(tempPath(QStringLiteral("id_ed25519"))));
+    QCOMPARE(c.sshTerminalType->text(), QStringLiteral("vt100"));
+    QCOMPARE(c.sshKeepAlive->value(), 0);
+    QCOMPARE(c.sshKeepAlive->minimum(), 0);
+    QCOMPARE(c.sshKeepAlive->maximum(), 600);
+    QCOMPARE(c.sshKeepAlive->suffix(), QStringLiteral(" s"));
+    QCOMPARE(c.sshKeepAlive->specialValueText(), QStringLiteral("Off"));
+    QCOMPARE(c.sshKeepAlive->text(), QStringLiteral("Off"));
+    QCOMPARE(c.sshSecretsNote->text(), SecretStore::storageDescription());
+    QVERIFY(!c.sshSecretsNote->text().isEmpty());
 
     // Logging
     QCOMPARE(c.logDir->text(), QDir::toNativeSeparators(tempPath(QStringLiteral("pref-logs"))));
@@ -516,6 +555,13 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     c.autoReconnect->setChecked(false);
     c.reconnectInterval->setValue(3000);
     c.showSimulated->setChecked(false);
+    // SSH
+    const QString knownHosts = tempPath(QStringLiteral("apply-known_hosts"));
+    const QString identity = tempPath(QStringLiteral("apply-id_rsa"));
+    c.sshKnownHosts->setText(QDir::toNativeSeparators(knownHosts));
+    c.sshIdentity->setText(QDir::toNativeSeparators(identity));
+    c.sshTerminalType->setText(QStringLiteral("xterm"));
+    c.sshKeepAlive->setValue(120);
     // Logging
     c.logDir->setText(QDir::toNativeSeparators(logDir));
     c.autoLog->setChecked(true);
@@ -552,6 +598,11 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!s.autoReconnect());
     QCOMPARE(s.reconnectIntervalMs(), 3000);
     QVERIFY(!s.showSimulatedPorts());
+    QCOMPARE(s.sshKnownHostsFile(), knownHosts);
+    QCOMPARE(s.sshDefaultIdentityFile(), identity);
+    QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm"));
+    QCOMPARE(s.sshDefaultKeepAliveSeconds(), 120);
+    QCOMPARE(QSettings().value(QStringLiteral("ssh/keepAliveSeconds")).toInt(), 120);
     QCOMPARE(s.logDirectory(), logDir);
     QVERIFY(s.autoLog());
     QCOMPARE(s.logFormat(), QStringLiteral("raw"));
@@ -574,6 +625,10 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!c2.showSimulated->isChecked());
     QVERIFY(!c2.pauseWhileSelecting->isChecked());
     QVERIFY(!c2.rightClickPastes->isChecked());
+    QCOMPARE(c2.sshKnownHosts->text(), QDir::toNativeSeparators(knownHosts));
+    QCOMPARE(c2.sshIdentity->text(), QDir::toNativeSeparators(identity));
+    QCOMPARE(c2.sshTerminalType->text(), QStringLiteral("xterm"));
+    QCOMPARE(c2.sshKeepAlive->value(), 120);
 }
 
 void Tst_dialogs::preferencesOkAcceptsAndWrites()
@@ -705,6 +760,103 @@ void Tst_dialogs::preferencesRestoreDefaultsConnection()
     QVERIFY(AppSettings::instance().autoReconnect());
     QCOMPARE(AppSettings::instance().reconnectIntervalMs(), 1000);
     QVERIFY(AppSettings::instance().showSimulatedPorts());
+}
+
+void Tst_dialogs::preferencesRestoreDefaultsSsh()
+{
+    setNonDefaultSettings();
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+
+    c.tabs->setCurrentIndex(PageSsh);
+    c.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+
+    QVERIFY(c.sshKnownHosts->text().isEmpty());   // "" = ~/.ssh/known_hosts (the placeholder says so)
+    QVERIFY(c.sshIdentity->text().isEmpty());
+    QCOMPARE(c.sshTerminalType->text(), QStringLiteral("xterm-256color"));
+    QCOMPARE(c.sshKeepAlive->value(), 30);
+    QVERIFY(c.autoLog->isChecked());   // Logging page untouched
+    QVERIFY(!c.autoReconnect->isChecked());   // Connection page untouched
+    // Nothing is written until Apply.
+    QCOMPARE(AppSettings::instance().sshDefaultTerminalType(), QStringLiteral("vt100"));
+    QCOMPARE(AppSettings::instance().sshDefaultKeepAliveSeconds(), 0);
+    QCOMPARE(AppSettings::instance().sshKnownHostsFile(), tempPath(QStringLiteral("known_hosts")));
+
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(AppSettings::instance().sshKnownHostsFile().isEmpty());
+    QVERIFY(AppSettings::instance().sshDefaultIdentityFile().isEmpty());
+    QCOMPARE(AppSettings::instance().sshDefaultTerminalType(), QStringLiteral("xterm-256color"));
+    QCOMPARE(AppSettings::instance().sshDefaultKeepAliveSeconds(), 30);
+    QVERIFY(AppSettings::instance().autoLog());   // still the non-default value
+}
+
+void Tst_dialogs::preferencesSshRoundTrip()
+{
+    // Defaults of the AppSettings SSH group and the edge cases of the page.
+    AppSettings& s = AppSettings::instance();
+    QVERIFY(s.sshKnownHostsFile().isEmpty());
+    QVERIFY(s.sshDefaultIdentityFile().isEmpty());
+    QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm-256color"));
+    QCOMPARE(s.sshDefaultKeepAliveSeconds(), 30);
+    QVERIFY(s.lastSshTarget().isEmpty());
+    QSignalSpy changed(&s, &AppSettings::changed);
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    QVERIFY(c.sshKnownHosts->text().isEmpty());
+    QVERIFY(!c.sshKnownHosts->placeholderText().isEmpty());
+    QVERIFY(c.sshIdentity->text().isEmpty());
+    QCOMPARE(c.sshTerminalType->text(), QStringLiteral("xterm-256color"));
+    QCOMPARE(c.sshKeepAlive->value(), 30);
+    QVERIFY(c.sshKnownHostsBrowse->isEnabled());
+    QVERIFY(c.sshIdentityBrowse->isEnabled());
+
+    // The spin box clamps; an emptied terminal type falls back to the default on Apply.
+    c.sshKeepAlive->setValue(100000);
+    QCOMPARE(c.sshKeepAlive->value(), 600);
+    c.sshKeepAlive->setValue(-5);
+    QCOMPARE(c.sshKeepAlive->value(), 0);
+    c.sshKeepAlive->setValue(45);
+    c.sshTerminalType->setText(QStringLiteral("   "));
+    c.sshKnownHosts->setText(QStringLiteral("  ") + QDir::toNativeSeparators(tempPath(QStringLiteral("kh"))) +
+                             QStringLiteral("  "));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm-256color"));
+    QCOMPARE(c.sshTerminalType->text(), QStringLiteral("xterm-256color"));
+    QCOMPARE(s.sshDefaultKeepAliveSeconds(), 45);
+    QCOMPARE(s.sshKnownHostsFile(), tempPath(QStringLiteral("kh")));   // trimmed, forward slashes
+    QVERIFY(s.sshDefaultIdentityFile().isEmpty());
+    QStringList keys;
+    for (const QList<QVariant>& args : changed) {
+        keys.append(args.at(0).toString());
+    }
+    for (const char* key : {"ssh/knownHostsFile", "ssh/identityFile", "ssh/terminalType", "ssh/keepAliveSeconds"}) {
+        QVERIFY2(keys.contains(QLatin1String(key)), key);
+    }
+
+    // Cancel discards.
+    PreferencesDialog again;
+    QVERIFY(expose(&again));
+    const PrefControls c2 = controlsOf(again);
+    QCOMPARE(c2.sshKeepAlive->value(), 45);
+    c2.sshKeepAlive->setValue(0);
+    c2.sshTerminalType->setText(QStringLiteral("vt220"));
+    c2.buttons->button(QDialogButtonBox::Cancel)->click();
+    QCOMPARE(s.sshDefaultKeepAliveSeconds(), 45);
+    QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm-256color"));
+
+    // The setters clamp / default like the getters document; lastSshTarget is a plain string.
+    s.setSshDefaultKeepAliveSeconds(5000);
+    QCOMPARE(s.sshDefaultKeepAliveSeconds(), 600);
+    s.setSshDefaultTerminalType(QString());
+    QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm-256color"));
+    s.setLastSshTarget(QStringLiteral("ssh:target:root@10.0.0.24"));
+    QCOMPARE(s.lastSshTarget(), QStringLiteral("ssh:target:root@10.0.0.24"));
+    QCOMPARE(QSettings().value(QStringLiteral("ssh/lastTarget")).toString(), QStringLiteral("ssh:target:root@10.0.0.24"));
 }
 
 void Tst_dialogs::preferencesRestoreDefaultsLogging()

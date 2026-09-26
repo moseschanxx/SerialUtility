@@ -29,6 +29,11 @@ constexpr auto kAutoReconnect = "connection/autoReconnect";
 constexpr auto kReconnectInterval = "connection/reconnectIntervalMs";
 constexpr auto kLastPort = "connection/lastPort";
 constexpr auto kShowSimulatedPorts = "connection/showSimulatedPorts";
+constexpr auto kSshKnownHostsFile = "ssh/knownHostsFile";
+constexpr auto kSshTerminalType = "ssh/terminalType";
+constexpr auto kSshKeepAliveSeconds = "ssh/keepAliveSeconds";
+constexpr auto kSshIdentityFile = "ssh/identityFile";
+constexpr auto kSshLastTarget = "ssh/lastTarget";
 constexpr auto kLogDirectory = "logging/directory";
 constexpr auto kAutoLog = "logging/autoLog";
 constexpr auto kLogFormat = "logging/format";
@@ -45,6 +50,10 @@ constexpr int kDefaultScrollback = 10000;
 constexpr int kMinReconnectMs = 200;
 constexpr int kMaxReconnectMs = 60000;
 constexpr int kDefaultReconnectMs = 1000;
+constexpr int kMinSshKeepAlive = 0;
+constexpr int kMaxSshKeepAlive = 600;
+constexpr int kDefaultSshKeepAlive = 30;
+const QLatin1String kDefaultSshTerminalType("xterm-256color");
 
 QVariant readValue(const char* key, const QVariant& fallback = QVariant())
 {
@@ -321,6 +330,62 @@ bool AppSettings::showSimulatedPorts() const
 void AppSettings::setShowSimulatedPorts(bool on)
 {
     SU_WRITE_SETTING(kShowSimulatedPorts, on);
+}
+
+// ---- SSH -------------------------------------------------------------------------------
+
+QString AppSettings::sshKnownHostsFile() const
+{
+    return readValue(kSshKnownHostsFile).toString().trimmed();
+}
+
+void AppSettings::setSshKnownHostsFile(const QString& path)
+{
+    SU_WRITE_SETTING(kSshKnownHostsFile, path.trimmed());
+}
+
+QString AppSettings::sshDefaultTerminalType() const
+{
+    const QString type = readValue(kSshTerminalType).toString().trimmed();
+    return type.isEmpty() ? QString(kDefaultSshTerminalType) : type;
+}
+
+void AppSettings::setSshDefaultTerminalType(const QString& type)
+{
+    const QString trimmed = type.trimmed();
+    SU_WRITE_SETTING(kSshTerminalType, trimmed.isEmpty() ? QString(kDefaultSshTerminalType) : trimmed);
+}
+
+int AppSettings::sshDefaultKeepAliveSeconds() const
+{
+    bool ok = false;
+    const int seconds = readValue(kSshKeepAliveSeconds, kDefaultSshKeepAlive).toInt(&ok);
+    return qBound(kMinSshKeepAlive, ok ? seconds : kDefaultSshKeepAlive, kMaxSshKeepAlive);
+}
+
+void AppSettings::setSshDefaultKeepAliveSeconds(int seconds)
+{
+    SU_WRITE_SETTING(kSshKeepAliveSeconds, qBound(kMinSshKeepAlive, seconds, kMaxSshKeepAlive));
+}
+
+QString AppSettings::sshDefaultIdentityFile() const
+{
+    return readValue(kSshIdentityFile).toString().trimmed();
+}
+
+void AppSettings::setSshDefaultIdentityFile(const QString& path)
+{
+    SU_WRITE_SETTING(kSshIdentityFile, path.trimmed());
+}
+
+QString AppSettings::lastSshTarget() const
+{
+    return readValue(kSshLastTarget).toString();
+}
+
+void AppSettings::setLastSshTarget(const QString& key)
+{
+    SU_WRITE_SETTING(kSshLastTarget, key);
 }
 
 // ---- Logging ---------------------------------------------------------------------------

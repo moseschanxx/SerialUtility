@@ -83,7 +83,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build xvfb \
+          sudo apt-get install -y build-essential cmake ninja-build xvfb libssl-dev \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-cursor0 fonts-dejavu-core
 
       - name: Configure
@@ -107,7 +107,17 @@ jobs:
           test -f dist/lib/libQt6Core.so.6
           test -f dist/lib/libQt6SerialPort.so.6
           test -f dist/lib/libQt6Widgets.so.6
+          test -f dist/lib/libQt6Network.so.6
           test -f dist/plugins/platforms/libqxcb.so
+          # SSH: libssh (built from source) and the OpenSSL crypto library it needs are bundled too.
+          test -f dist/lib/libssh.so.4
+          test -f dist/lib/libcrypto.so.3
+          # libssh's own install rules also drop headers and CMake config files: not part of the package.
+          rm -rf dist/include dist/lib/cmake dist/lib/pkgconfig dist/lib/libssh.so
+          # libssh.so resolves libcrypto through its own RUNPATH ($ORIGIN), so the bundled copy is
+          # used even on a distro without OpenSSL 3.
+          readelf -d dist/lib/libssh.so.4 | grep -E 'RPATH|RUNPATH' | grep -q '\$ORIGIN'
+          env -u LD_LIBRARY_PATH ldd dist/lib/libssh.so.4 | grep libcrypto | grep -qE "$PWD/dist/lib/"
           # The deploy tool sets RUNPATH=$ORIGIN/../lib on the installed binary. install-qt-action
           # exports LD_LIBRARY_PATH (which outranks RUNPATH), so check with it unset: every Qt lib
           # must resolve from dist/lib and nothing may be unresolved.
@@ -116,6 +126,7 @@ jobs:
           ! env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility | grep -q 'not found'
           # (RUNPATH resolution prints the path as dist/bin/../lib/, hence the optional "bin/../")
           env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility | grep libQt6Core | grep -qE "$PWD/dist/(bin/\.\./)?lib/"
+          env -u LD_LIBRARY_PATH ldd dist/bin/BuildAI-SerialUtility | grep libssh | grep -qE "$PWD/dist/(bin/\.\./)?lib/"
           # and the package really starts on its own with the deployed xcb plugin (what end users
           # get): --version constructs QApplication, then prints the version and exits
           xvfb-run -a env -u LD_LIBRARY_PATH dist/bin/BuildAI-SerialUtility --version
@@ -167,6 +178,8 @@ jobs:
 
       - name: Configure
         shell: pwsh
+        # OpenSSL 3 (libssh's crypto backend) is preinstalled on the runner image in a location
+        # FindOpenSSL searches (C:\Program Files\OpenSSL); the configure summary prints which one.
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl.exe -DSU_BUILD_TESTS=ON -DSU_WARNINGS_AS_ERRORS=ON
 
       - name: Build
@@ -184,7 +197,12 @@ jobs:
         run: |
           cmake --install build --prefix "$env:GITHUB_WORKSPACE\dist" --config Release
           $required = @('dist\bin\BuildAI-SerialUtility.exe', 'dist\bin\qt.conf', 'dist\bin\Qt6Core.dll',
-                        'dist\bin\Qt6SerialPort.dll', 'dist\bin\Qt6Widgets.dll', 'dist\bin\platforms\qwindows.dll')
+                        'dist\bin\Qt6SerialPort.dll', 'dist\bin\Qt6Widgets.dll', 'dist\bin\Qt6Network.dll',
+                        'dist\bin\platforms\qwindows.dll',
+                        # SSH: libssh built from source plus the OpenSSL crypto DLL it depends on
+                        'dist\bin\ssh.dll', 'dist\bin\libcrypto-3-x64.dll')
+          # libssh's own install rules also drop its import library, headers and CMake files: not part of the package.
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist\include, dist\lib
           foreach ($f in $required) { if (-not (Test-Path $f)) { Write-Error "missing after deploy: $f"; exit 1 } }
           Get-ChildItem -Recurse dist | Select-Object -ExpandProperty FullName
 

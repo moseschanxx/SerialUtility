@@ -1,7 +1,10 @@
 // GUI test suite for SessionWidget and its control strips (ConnectionBar, CommandInput,
 // QuickCommandBar) driven over the built-in simulated devices (SIM:loopback, SIM:linux) and
-// the log replayer. Runs offscreen (QT_QPA_PLATFORM=offscreen); all settings and files live
-// in a temporary directory, nothing touches the user's real configuration.
+// the log replayer, plus the SSH mode of SessionWidget: construction, restore keys, refusals,
+// the profile store, and one dialog-free connect to the in-process TestSshServer (host key
+// pre-seeded in a temporary known_hosts, password from SecretStore) for what only a connected
+// session shows. Runs offscreen (QT_QPA_PLATFORM=offscreen); all settings and files live in a
+// temporary directory, nothing touches the user's real configuration, ~/.ssh or the profile store.
 #include <QtTest>
 
 #include <QApplication>
@@ -36,7 +39,13 @@
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
 #include "core/SessionLogger.h"
+#include "core/Transport.h"
+#include "dialogs/RemoteFileDialog.h"
 #include "dialogs/SendFileDialog.h"
+#include "ssh/SecretStore.h"
+#include "ssh/SshConnection.h"
+#include "ssh/SshProfile.h"
+#include "support/TestSshServer.h"
 #include "terminal/AnsiParser.h"
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
@@ -45,13 +54,46 @@
 #include "ui/HexDumpView.h"
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
+#include "ui/SshConnectionBar.h"
 
 namespace {
 
+// The historical spelling: SerialConnection::State is Transport::State since v0.3 and every
+// existing use (including State::Connecting now) must keep compiling.
 using State = SerialConnection::State;
+static_assert(static_cast<int>(State::Connecting) == static_cast<int>(Transport::State::Connecting));
 
 constexpr int kSimTimeoutMs = 10000;  ///< simulated device round trips / reconnects
 constexpr int kBootTimeoutMs = 15000; ///< a simulated Linux boot log up to "login:"
+constexpr int kSshTimeoutMs = 15000;  ///< a connect to the in-process SSH server
+
+/// A translator that answers for one context only and records every context it was asked for.
+class ContextTranslator : public QTranslator
+{
+public:
+    explicit ContextTranslator(const char* context)
+        : m_context(context)
+    {
+    }
+
+    QString translate(const char* context, const char* sourceText, const char* disambiguation, int n) const override
+    {
+        Q_UNUSED(disambiguation);
+        Q_UNUSED(n);
+        contexts.append(QString::fromUtf8(context));
+        if (qstrcmp(context, m_context) == 0) {
+            return QStringLiteral("[%1]").arg(QString::fromUtf8(sourceText));
+        }
+        return QString();
+    }
+
+    bool isEmpty() const override { return false; }
+
+    mutable QStringList contexts;
+
+private:
+    const char* m_context;
+};
 
 const QString kLoopback = QStringLiteral("SIM:loopback");
 const QString kLinux = QStringLiteral("SIM:linux");
@@ -218,6 +260,21 @@ private slots:
     void connectDuringReplayStopsReplay();
     void replayTimestampedCapture();
 
+    // ---- SSH mode (no SSH traffic: the connection is never opened) -------------------
+    void sshConstruction();
+    void sshRestoreKeys();
+    void sshTargetFromBarProfileChanged();
+    void sshConnectWithoutTarget();
+    void sshTransfersRefusedWhileDisconnected();
+    void sshBreakAndSyncSize();
+    void sshGridChangeNotifiesTransport();
+    void sshReconnectPreferences();
+    void sshLogHeaderUsesDisplayName();
+    void sshStateTextTranslationContext();
+    void sshProfileStoreChangesFollow();
+    void sshConnectPrefetchesHomeAndAutoLogs();
+    void serialTransportFacade();
+
     // ---- ConnectionBar --------------------------------------------------------------
     void barSetPorts();
     void barSelectMissingPortPlaceholder();
@@ -249,6 +306,7 @@ private slots:
 
 private:
     std::unique_ptr<SessionWidget> newSession();
+    std::unique_ptr<SessionWidget> newSshSession(SshProfileStore* profiles = nullptr);
     bool connectTo(SessionWidget* session, const QString& port);
     QString tempPath(const QString& name) const;
     static bool roundTrips(ConnectionBar& bar, const SerialSettings& settings);
@@ -290,6 +348,10 @@ void Tst_sessionwidget::initTestCase()
     QCOMPARE(app.reconnectIntervalMs(), 200);
     QVERIFY(settings.contains(QStringLiteral("connection/reconnectIntervalMs")));
 
+    // The SSH worker would read ~/.ssh/config before the profile fields; a developer's Host
+    // blocks must not change the connect below (see tst_sshconnection.cpp).
+    qputenv("SU_SSH_IGNORE_CONFIG", "1");
+
     m_store = new QuickCommandStore(this);
     // A missing file loads the defaults; nothing is ever saved to the real data directory.
     QVERIFY(m_store->load(m_tempDir.filePath(QStringLiteral("quick_commands.json"))));
@@ -314,6 +376,17 @@ void Tst_sessionwidget::init()
 std::unique_ptr<SessionWidget> Tst_sessionwidget::newSession()
 {
     auto session = std::make_unique<SessionWidget>(m_store, &m_history);
+    session->resize(1000, 700);
+    if (!expose(session.get())) {
+        return nullptr;
+    }
+    session->activateWindow();
+    return session;
+}
+
+std::unique_ptr<SessionWidget> Tst_sessionwidget::newSshSession(SshProfileStore* profiles)
+{
+    auto session = std::make_unique<SessionWidget>(Transport::Kind::Ssh, m_store, &m_history, profiles);
     session->resize(1000, 700);
     if (!expose(session.get())) {
         return nullptr;
@@ -1857,6 +1930,509 @@ void Tst_sessionwidget::replayTimestampedCapture()
     QVERIFY(!text.contains(QStringLiteral("TX>")));
     QVERIFY(!text.contains(QStringLiteral("# BuildAI")));
     QVERIFY(!text.contains(QStringLiteral("2026-09-20 10:00")));
+}
+
+// =======================================================================================
+// SSH mode
+// =======================================================================================
+
+void Tst_sessionwidget::sshConstruction()
+{
+    auto session = newSshSession();
+    QVERIFY(session);
+    QCOMPARE(session->kind(), Transport::Kind::Ssh);
+    QVERIFY(session->isSsh());
+    QVERIFY(session->transport() != nullptr);
+    QVERIFY(session->sshConnection() != nullptr);
+    QCOMPARE(session->transport(), static_cast<Transport*>(session->sshConnection()));
+    QCOMPARE(session->transport()->kind(), Transport::Kind::Ssh);
+    QVERIFY(session->connection() == nullptr);
+    QVERIFY(session->sshConnectionBar() != nullptr);
+    QVERIFY(session->connectionBar() == nullptr);
+    QCOMPARE(session->title(), QStringLiteral("New SSH Session"));
+    QVERIFY(session->portName().isEmpty());
+    QVERIFY(session->restoreKey().isEmpty());
+    QVERIFY(!session->isConnected());
+    QCOMPARE(session->transport()->state(), Transport::State::Disconnected);
+    QVERIFY(!session->terminal()->inputEnabled());
+    // The shared strips are there for both kinds.
+    QVERIFY(session->terminal() && session->hexView() && session->commandInput() && session->quickCommandBar() &&
+            session->logger());
+    QCOMPARE(session->quickCommandBar()->store(), m_store);
+    // Serial input is ignored on an SSH session.
+    session->setPortName(kLoopback);
+    QVERIFY(session->portName().isEmpty());
+    QCOMPARE(session->title(), QStringLiteral("New SSH Session"));
+
+    // The two-argument constructor is the serial kind.
+    auto serial = newSession();
+    QVERIFY(serial);
+    QCOMPARE(serial->kind(), Transport::Kind::Serial);
+    QVERIFY(!serial->isSsh());
+    QCOMPARE(serial->transport(), static_cast<Transport*>(serial->connection()));
+    QVERIFY(serial->sshConnection() == nullptr);
+    QVERIFY(serial->sshConnectionBar() == nullptr);
+    QVERIFY(serial->connectionBar() != nullptr);
+    QCOMPARE(serial->title(), QStringLiteral("New Session"));
+}
+
+void Tst_sessionwidget::sshRestoreKeys()
+{
+    QVERIFY(SessionWidget::isSshRestoreKey(QStringLiteral("ssh:target:root@10.0.0.24:2222")));
+    QVERIFY(SessionWidget::isSshRestoreKey(QStringLiteral("ssh:profile:0123-abcd")));
+    QVERIFY(!SessionWidget::isSshRestoreKey(QStringLiteral("COM8")));
+    QVERIFY(!SessionWidget::isSshRestoreKey(kLinux));
+    QVERIFY(!SessionWidget::isSshRestoreKey(QString()));
+    QVERIFY(!SessionWidget::isSshRestoreKey(QStringLiteral("ssh:")));
+    QVERIFY(!SessionWidget::isSshRestoreKey(QStringLiteral("root@10.0.0.24")));
+
+    SshProfileStore profiles;
+    QVERIFY(profiles.load(tempPath(QStringLiteral("ssh_profiles.json"))));   // missing file: empty store
+    SshProfile pico;
+    pico.name = QStringLiteral("Pico");
+    pico.host = QStringLiteral("192.168.100.2");
+    pico.user = QStringLiteral("root");
+    const SshProfile stored = profiles.upsert(pico);
+    QVERIFY(!stored.id.isEmpty());
+
+    auto session = newSshSession(&profiles);
+    QVERIFY(session);
+    QCOMPARE(session->sshConnectionBar()->store(), &profiles);
+    QSignalSpy titleSpy(session.get(), &SessionWidget::titleChanged);
+
+    // A persisted ad-hoc key.
+    session->setSshTarget(QStringLiteral("ssh:target:root@10.0.0.24:2222"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:target:root@10.0.0.24:2222"));
+    QCOMPARE(session->portName(), session->restoreKey());
+    QCOMPARE(session->title(), QStringLiteral("root@10.0.0.24:2222"));
+    QVERIFY(titleSpy.count() >= 1);
+    QCOMPARE(titleSpy.last().at(0).toString(), QStringLiteral("root@10.0.0.24:2222"));
+    SshProfile applied = session->sshConnection()->profile();
+    QCOMPARE(applied.host, QStringLiteral("10.0.0.24"));
+    QCOMPARE(applied.port, quint16(2222));
+    QCOMPARE(applied.user, QStringLiteral("root"));
+    QVERIFY(applied.id.isEmpty());
+    QCOMPARE(session->sshConnectionBar()->targetText(), QStringLiteral("root@10.0.0.24:2222"));
+
+    // Plain text typed by the user (or given on the command line): the default port is implied.
+    session->setSshTarget(QStringLiteral("root@10.0.0.24"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:target:root@10.0.0.24"));
+    QCOMPARE(session->title(), QStringLiteral("root@10.0.0.24"));
+    applied = session->sshConnection()->profile();
+    QCOMPARE(applied.port, quint16(22));
+    QVERIFY(applied.id.isEmpty());
+
+    // A stored profile by id: the key names the profile, the title its display name.
+    session->setSshTarget(QStringLiteral("ssh:profile:") + stored.id);
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:profile:") + stored.id);
+    QCOMPARE(session->title(), QStringLiteral("Pico"));
+    applied = session->sshConnection()->profile();
+    QCOMPARE(applied.id, stored.id);
+    QCOMPARE(applied.host, QStringLiteral("192.168.100.2"));
+
+    // An unknown profile id or text that is not a target leaves everything as it is.
+    session->setSshTarget(QStringLiteral("ssh:profile:no-such-profile"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:profile:") + stored.id);
+    session->setSshTarget(QStringLiteral("this is not a target"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:profile:") + stored.id);
+    QCOMPARE(session->title(), QStringLiteral("Pico"));
+
+    // setSshTarget() on a serial session is ignored.
+    auto serial = newSession();
+    QVERIFY(serial);
+    serial->setPortName(kLoopback);
+    serial->setSshTarget(QStringLiteral("ssh:target:root@10.0.0.24"));
+    QCOMPARE(serial->portName(), kLoopback);
+    QCOMPARE(serial->restoreKey(), kLoopback);
+    QCOMPARE(serial->title(), kLoopback);
+}
+
+void Tst_sessionwidget::sshTargetFromBarProfileChanged()
+{
+    // The bar reports a new selection / a valid typed target through profileChanged(); while
+    // disconnected the session adopts it for the title and the restore key.
+    auto session = newSshSession();
+    QVERIFY(session);
+    QSignalSpy titleSpy(session.get(), &SessionWidget::titleChanged);
+
+    SshProfile typed;
+    QVERIFY(SshProfile::parseTarget(QStringLiteral("pi@10.0.0.7:2222"), typed));
+    emit session->sshConnectionBar()->profileChanged(typed);
+    QCOMPARE(session->title(), QStringLiteral("pi@10.0.0.7:2222"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:target:pi@10.0.0.7:2222"));
+    QCOMPARE(titleSpy.count(), 1);
+    QCOMPARE(titleSpy.last().at(0).toString(), QStringLiteral("pi@10.0.0.7:2222"));
+
+    SshProfile named = typed;
+    named.id = QStringLiteral("11111111-2222-3333-4444-555555555555");
+    named.name = QStringLiteral("Lab Pi");
+    emit session->sshConnectionBar()->profileChanged(named);
+    QCOMPARE(session->title(), QStringLiteral("Lab Pi"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:profile:") + named.id);
+}
+
+void Tst_sessionwidget::sshConnectWithoutTarget()
+{
+    auto session = newSshSession();
+    QVERIFY(session);
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    QList<int> states;
+    connect(session.get(), &SessionWidget::connectionStateChanged, this,
+            [&states](Transport::State state) { states.append(static_cast<int>(state)); });
+
+    QVERIFY(!session->connectPort());
+    QVERIFY(!session->isConnected());
+    QVERIFY(states.isEmpty());
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Enter a target such as user@host"));
+    // The target field took the focus (QWidget::focusWidget() is independent of window activation).
+    QVERIFY(session->sshConnectionBar()->focusWidget() != nullptr);
+    QVERIFY(session->sshConnectionBar()->isAncestorOf(session->focusWidget()));
+
+    // toggleConnection() takes the same path while disconnected.
+    statusSpy.clear();
+    session->toggleConnection();
+    QVERIFY(!session->isConnected());
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Enter a target such as user@host"));
+    QVERIFY(AppSettings::instance().lastSshTarget().isEmpty());   // nothing was attempted
+
+    // Every TX path reports "Not connected" and sends nothing.
+    QSignalSpy sentSpy(session->transport(), &Transport::dataSent);
+    statusSpy.clear();
+    session->sendBytes(QByteArrayLiteral("x"));
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Not connected"));
+    QCOMPARE(sentSpy.count(), 0);
+    QTest::keyClicks(session->terminal(), QStringLiteral("abc"));
+    QCOMPARE(sentSpy.count(), 0);
+
+    // Disconnecting a never-connected SSH session is silent.
+    statusSpy.clear();
+    session->disconnectPort();
+    QCOMPARE(statusSpy.count(), 0);
+    QVERIFY(states.isEmpty());
+}
+
+void Tst_sessionwidget::sshTransfersRefusedWhileDisconnected()
+{
+    auto session = newSshSession();
+    QVERIFY(session);
+    session->setSshTarget(QStringLiteral("root@10.0.0.24"));
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+
+    session->uploadFile(tempPath(QStringLiteral("upload.bin")));
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Not connected"));
+    session->downloadFile();
+    QCOMPARE(statusSpy.count(), 2);
+    QCOMPARE(statusSpy.at(1).at(0).toString(), QStringLiteral("Not connected"));
+    QVERIFY(session->findChild<RemoteFileDialog*>() == nullptr);   // created on first *allowed* use
+
+    // A dropped file on a disconnected SSH terminal is refused the same way (not sent as text).
+    emit session->terminal()->fileDropped(tempPath(QStringLiteral("dropped.bin")));
+    QCOMPARE(statusSpy.count(), 3);
+    QCOMPARE(statusSpy.at(2).at(0).toString(), QStringLiteral("Not connected"));
+    QVERIFY(session->findChild<SendFileDialog*>() == nullptr);
+
+    // Serial sessions have no SFTP at all.
+    auto serial = newSession();
+    QVERIFY(serial);
+    QSignalSpy serialStatus(serial.get(), &SessionWidget::statusMessage);
+    serial->uploadFile();
+    serial->downloadFile();
+    QCOMPARE(serialStatus.count(), 2);
+    QVERIFY2(serialStatus.at(0).at(0).toString().contains(QStringLiteral("SSH")),
+             qPrintable(serialStatus.at(0).at(0).toString()));
+    QCOMPARE(serialStatus.at(1).at(0).toString(), serialStatus.at(0).at(0).toString());
+    QVERIFY(serial->findChild<RemoteFileDialog*>() == nullptr);
+}
+
+void Tst_sessionwidget::sshBreakAndSyncSize()
+{
+    auto session = newSshSession();
+    QVERIFY(session);
+    session->setSshTarget(QStringLiteral("root@10.0.0.24"));
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    QSignalSpy sentSpy(session->transport(), &Transport::dataSent);
+
+    session->sendBreak();
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Not available for SSH sessions"));
+
+    // Sync Terminal Size never types "stty" into an SSH shell: it is a window-change request,
+    // remembered by the connection for the next open (here: while disconnected).
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(terminal->columns() > 0 && terminal->visibleRows() > 0);
+    statusSpy.clear();
+    session->syncTerminalSize();
+    QCOMPARE(sentSpy.count(), 0);
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Not connected"));
+    const QString expected = QStringLiteral("%1x%2").arg(terminal->columns()).arg(terminal->visibleRows());
+    QCOMPARE(session->sshConnection()->lastTerminalSize().remove(QLatin1Char(' ')), expected);
+
+    // The context-menu request takes the same path.
+    emit terminal->syncSizeRequested();
+    QCOMPARE(sentSpy.count(), 0);
+}
+
+void Tst_sessionwidget::sshGridChangeNotifiesTransport()
+{
+    // Every grid change reaches the transport (SSH: a window-change request) besides the
+    // gridSizeChanged() signal MainWindow shows in the status bar.
+    auto session = newSshSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    SshConnection* ssh = session->sshConnection();
+    QSignalSpy gridSpy(session.get(), &SessionWidget::gridSizeChanged);
+
+    const int colsBefore = terminal->columns();
+    terminal->zoomIn();
+    terminal->zoomIn();
+    QTRY_VERIFY(terminal->columns() != colsBefore);
+    QVERIFY(gridSpy.count() >= 1);
+    QCOMPARE(gridSpy.last().at(0).toInt(), terminal->visibleRows());
+    QCOMPARE(gridSpy.last().at(1).toInt(), terminal->columns());
+    const QString expected = QStringLiteral("%1x%2").arg(terminal->columns()).arg(terminal->visibleRows());
+    QCOMPARE(ssh->lastTerminalSize().remove(QLatin1Char(' ')), expected);
+
+    terminal->resetZoom();
+    QTRY_COMPARE(terminal->columns(), colsBefore);
+    const QString reset = QStringLiteral("%1x%2").arg(terminal->columns()).arg(terminal->visibleRows());
+    QCOMPARE(ssh->lastTerminalSize().remove(QLatin1Char(' ')), reset);
+
+    // The same wiring exists for serial sessions (the serial transport ignores it, no crash).
+    auto serial = newSession();
+    QVERIFY(serial);
+    QSignalSpy serialGrid(serial.get(), &SessionWidget::gridSizeChanged);
+    serial->terminal()->zoomIn();
+    QTRY_VERIFY(serialGrid.count() >= 1);
+    QCOMPARE(serial->connection()->state(), State::Disconnected);
+}
+
+void Tst_sessionwidget::sshReconnectPreferences()
+{
+    // applyPreferences() pushes the reconnect settings to an SSH transport like to a serial one.
+    AppSettings& app = AppSettings::instance();
+    auto session = newSshSession();
+    QVERIFY(session);
+    auto serial = newSession();
+    QVERIFY(serial);
+    QVERIFY(session->transport()->autoReconnect());
+    QCOMPARE(session->transport()->reconnectIntervalMs(), 200);   // the fixture's setting
+    QCOMPARE(serial->transport()->reconnectIntervalMs(), 200);
+
+    app.setAutoReconnect(false);
+    app.setReconnectIntervalMs(2500);
+    QVERIFY(!session->transport()->autoReconnect());
+    QCOMPARE(session->transport()->reconnectIntervalMs(), 2500);
+    QVERIFY(!serial->transport()->autoReconnect());
+    QCOMPARE(serial->transport()->reconnectIntervalMs(), 2500);
+
+    app.setReconnectIntervalMs(50);   // clamped by AppSettings and by the transport
+    QCOMPARE(session->transport()->reconnectIntervalMs(), 200);
+
+    app.setAutoReconnect(true);
+    app.setReconnectIntervalMs(200);
+    QVERIFY(session->transport()->autoReconnect());
+    QCOMPARE(session->transport()->reconnectIntervalMs(), 200);
+}
+
+void Tst_sessionwidget::sshLogHeaderUsesDisplayName()
+{
+    // A log started on an SSH session names the target and the transport summary in its header,
+    // exactly like a serial log names the port and the line parameters.
+    auto session = newSshSession();
+    QVERIFY(session);
+    session->setSshTarget(QStringLiteral("root@10.0.0.24:2222"));
+    const QString logPath = tempPath(QStringLiteral("ssh-session.log"));
+    QSignalSpy loggingSpy(session.get(), &SessionWidget::loggingChanged);
+
+    session->startLoggingTo(logPath);
+    QVERIFY(session->isLogging());
+    QCOMPARE(loggingSpy.count(), 1);
+    session->stopLogging();
+    QVERIFY(!session->isLogging());
+
+    const QString header = QString::fromUtf8(readFile(logPath)).section(QLatin1Char('\n'), 0, 0);
+    QVERIFY2(header.startsWith(QStringLiteral("# BuildAI Serial Utility log - root@10.0.0.24:2222 ")),
+             qPrintable(header));
+    QVERIFY2(header.contains(session->transport()->summary()), qPrintable(header));
+}
+
+void Tst_sessionwidget::sshStateTextTranslationContext()
+{
+    // Transport::stateText() took the state strings over from SerialConnection in v0.3.0. The
+    // catalogues hold them under the "SerialConnection" context, so the code has to keep asking
+    // for that context - otherwise a Chinese serial tab shows an English "Connected" again.
+    ContextTranslator translator("SerialConnection");
+    QVERIFY(qApp->installTranslator(&translator));
+    QCOMPARE(Transport::stateText(Transport::State::Connected), QStringLiteral("[Connected]"));
+    QCOMPARE(Transport::stateText(Transport::State::Disconnected), QStringLiteral("[Disconnected]"));
+    QCOMPARE(Transport::stateText(Transport::State::Connecting), QStringLiteral("[Connecting...]"));
+    QCOMPARE(Transport::stateText(Transport::State::Reconnecting), QStringLiteral("[Reconnecting...]"));
+    QVERIFY(!translator.contexts.contains(QStringLiteral("Transport")));
+    QVERIFY(qApp->removeTranslator(&translator));
+    QCOMPARE(Transport::stateText(Transport::State::Connected), QStringLiteral("Connected"));
+    QCOMPARE(Transport::stateText(Transport::State::Reconnecting), QStringLiteral("Reconnecting..."));
+}
+
+void Tst_sessionwidget::sshProfileStoreChangesFollow()
+{
+    // The SSH Profiles dialog renames or deletes the profile an idle tab has selected: the bar
+    // rebuilds silently, and the connection's copy (title, window title, restore key) has to
+    // follow it, or the tab keeps the old name and the restore key names a profile that no
+    // longer exists (the next start would open an empty SSH tab).
+    SshProfileStore profiles;
+    QVERIFY(profiles.load(tempPath(QStringLiteral("ssh_profiles_follow.json"))));
+    SshProfile pico;
+    pico.name = QStringLiteral("Luckfox Pico");
+    pico.host = QStringLiteral("192.168.100.2");
+    pico.user = QStringLiteral("root");
+    const SshProfile stored = profiles.upsert(pico);
+    auto session = newSshSession(&profiles);
+    QVERIFY(session);
+    session->setSshTarget(QStringLiteral("ssh:profile:") + stored.id);
+    QCOMPARE(session->title(), QStringLiteral("Luckfox Pico"));
+    QSignalSpy titleSpy(session.get(), &SessionWidget::titleChanged);
+
+    // Renamed (and re-addressed): the title and the connection's copy follow, the key stays.
+    SshProfile renamed = stored;
+    renamed.name = QStringLiteral("Pico Ultra");
+    renamed.port = 2222;
+    profiles.upsert(renamed);
+    QCOMPARE(session->title(), QStringLiteral("Pico Ultra"));
+    QCOMPARE(session->sshConnection()->profile().port, quint16(2222));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:profile:") + stored.id);
+    QVERIFY(titleSpy.count() >= 1);
+    QCOMPARE(titleSpy.last().at(0).toString(), QStringLiteral("Pico Ultra"));
+
+    // Deleted: the bar falls back to the plain target, and so do the key and the title.
+    QVERIFY(profiles.remove(stored.id));
+    QCOMPARE(session->sshConnectionBar()->targetText(), QStringLiteral("root@192.168.100.2:2222"));
+    QCOMPARE(session->restoreKey(), QStringLiteral("ssh:target:root@192.168.100.2:2222"));
+    QCOMPARE(session->title(), QStringLiteral("root@192.168.100.2:2222"));
+    QVERIFY(session->sshConnection()->profile().id.isEmpty());
+
+    // A store change leaves a tab without a target alone.
+    auto blank = newSshSession(&profiles);
+    QVERIFY(blank);
+    profiles.addRecentTarget(QStringLiteral("pi@10.0.0.7"));
+    QVERIFY(blank->restoreKey().isEmpty());
+    QCOMPARE(blank->title(), QStringLiteral("New SSH Session"));
+}
+
+void Tst_sessionwidget::sshConnectPrefetchesHomeAndAutoLogs()
+{
+    // A dialog-free connect to the in-process server: the host key is already in a temporary
+    // known_hosts and the password comes from SecretStore for the stored profile, so neither the
+    // host-key nor the auth dialog opens. Nothing touches ~/.ssh.
+    TestSshServer::Options options;
+    options.rootDir = tempPath(QStringLiteral("ssh-root"));
+    QVERIFY(QDir().mkpath(options.rootDir));
+    TestSshServer server(options);
+    QVERIFY(server.start());
+
+    SshProfileStore profiles;
+    QVERIFY(profiles.load(tempPath(QStringLiteral("ssh_profiles_connect.json"))));
+    SshProfile p;
+    p.name = QStringLiteral("Test box");
+    p.host = QStringLiteral("127.0.0.1");
+    p.port = server.port();
+    p.user = QStringLiteral("test");
+    p.auth = SshProfile::Auth::Password;
+    p.passwordSaved = true;
+    p.keepAliveSeconds = 0;
+    p.connectTimeoutSeconds = 5;
+    p.knownHostsFile = tempPath(QStringLiteral("known_hosts_connect"));
+    QVERIFY(writeFile(p.knownHostsFile, (server.knownHostsLine() + QLatin1Char('\n')).toUtf8()));
+    const SshProfile stored = profiles.upsert(p);
+    const QString secretKey = QStringLiteral("ssh/%1/password").arg(stored.id);
+    QVERIFY(SecretStore::store(secretKey, QStringLiteral("secret")));
+
+    AppSettings& app = AppSettings::instance();
+    app.setAutoLog(true);
+    const QDir logDir(app.logDirectory());
+    const QStringList logPattern{QStringLiteral("Test_box_*.log")};
+    auto session = newSshSession(&profiles);
+    QVERIFY(session);
+    session->setSshTarget(QStringLiteral("ssh:profile:") + stored.id);
+    QSignalSpy hostKeys(session->sshConnection(), &SshConnection::hostKeyVerificationRequired);
+    QSignalSpy prompts(session->sshConnection(), &SshConnection::authPromptRequired);
+    QSignalSpy loggingSpy(session.get(), &SessionWidget::loggingChanged);
+
+    QVERIFY(session->connectPort());
+    QCOMPARE(session->transport()->state(), Transport::State::Connecting);
+    QVERIFY(!session->isLogging());   // not before the outcome is known
+    QTRY_COMPARE_WITH_TIMEOUT(session->transport()->state(), Transport::State::Connected, kSshTimeoutMs);
+    QCOMPARE(hostKeys.count(), 0);
+    QCOMPARE(prompts.count(), 0);
+    // The scripted shell greets with "welcome\r\n$ " (lineText() trims the prompt's trailing blank).
+    QTRY_VERIFY_WITH_TIMEOUT(allText(session->terminal()).contains(QStringLiteral("welcome")), kSshTimeoutMs);
+    QVERIFY(session->isConnected());
+
+    // The remote home is pre-fetched for the transfer dialog. The facade accepts the request
+    // only once Connected, which it reports after shellStarted(): asked there, it was refused.
+    QTRY_VERIFY_WITH_TIMEOUT(!session->sshConnection()->remoteHome().isEmpty(), kSshTimeoutMs);
+    QCOMPARE(QFileInfo(session->sshConnection()->remoteHome()).canonicalFilePath(),
+             QFileInfo(options.rootDir).canonicalFilePath());
+
+    // The auto-log started with the connection, its header complete (started while Connecting,
+    // summary() was still just "SSH").
+    QVERIFY(session->isLogging());
+    QCOMPARE(loggingSpy.count(), 1);
+    const QString logPath = session->logFilePath();
+    QVERIFY2(QFileInfo(logPath).fileName().startsWith(QStringLiteral("Test_box_")), qPrintable(logPath));
+    session->stopLogging();
+    const QString header = QString::fromUtf8(readFile(logPath)).section(QLatin1Char('\n'), 0, 0);
+    QVERIFY2(header.contains(QStringLiteral("Test box ssh-ed25519 · password")), qPrintable(header));
+    QCOMPARE(logDir.entryList(logPattern, QDir::Files).size(), 1);
+
+    session->disconnectPort();
+    QCOMPARE(session->transport()->state(), Transport::State::Disconnected);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kSshTimeoutMs);
+
+    // A failed connect leaves no log file behind.
+    server.setAcceptConnections(false);
+    QVERIFY(session->connectPort());
+    QTRY_COMPARE_WITH_TIMEOUT(session->transport()->state(), Transport::State::Disconnected, kSshTimeoutMs);
+    QVERIFY(!session->isLogging());
+    QCOMPARE(loggingSpy.count(), 2);   // started and stopped above, nothing since
+    QCOMPARE(logDir.entryList(logPattern, QDir::Files).size(), 1);
+    QVERIFY(SecretStore::remove(secretKey));
+}
+
+void Tst_sessionwidget::serialTransportFacade()
+{
+    // The serial transport seen through the Transport interface, over the loopback device: the
+    // generic signals carry the same bytes and counters as before.
+    auto session = newSession();
+    QVERIFY(session);
+    Transport* transport = session->transport();
+    QCOMPARE(transport->kind(), Transport::Kind::Serial);
+    QVERIFY(transport->displayName().isEmpty());
+    QCOMPARE(transport->summary(), QStringLiteral("115200 8N1"));
+    session->setPortName(kLoopback);
+    QCOMPARE(transport->displayName(), kLoopback);
+    QCOMPARE(transport->settingsMap().value(QStringLiteral("kind")).toString(), QStringLiteral("serial"));
+    QCOMPARE(transport->settingsMap().value(QStringLiteral("port")).toString(), kLoopback);
+
+    QByteArray received;
+    connect(transport, &Transport::dataReceived, this, [&received](const QByteArray& bytes) { received += bytes; });
+    QSignalSpy stateSpy(transport, &Transport::stateChanged);
+    QVERIFY(session->connectPort());
+    QCOMPARE(stateSpy.count(), 1);
+    QCOMPARE(stateSpy.at(0).at(0).value<Transport::State>(), Transport::State::Connected);
+    QCOMPARE(transport->write(QByteArrayLiteral("ping\r")), qint64(5));
+    QTRY_COMPARE_WITH_TIMEOUT(received, QByteArrayLiteral("ping\r"), kSimTimeoutMs);
+    QCOMPARE(transport->bytesSent(), quint64(5));
+    QCOMPARE(transport->bytesReceived(), quint64(5));
+    QCOMPARE(session->connection()->bytesSent(), quint64(5));
+
+    session->disconnectPort();
+    QCOMPARE(transport->state(), Transport::State::Disconnected);
+    QCOMPARE(transport->write(QByteArrayLiteral("x")), qint64(-1));
 }
 
 // =======================================================================================

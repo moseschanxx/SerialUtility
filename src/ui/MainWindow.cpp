@@ -35,12 +35,15 @@
 #include "dialogs/AboutDialog.h"
 #include "dialogs/PreferencesDialog.h"
 #include "dialogs/QuickCommandsDialog.h"
+#include "dialogs/SshProfilesDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "ssh/SshProfile.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
 #include "ui/HexDumpView.h"
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
+#include "ui/SshConnectionBar.h"
 #include "ui/SystemLogViewer.h"
 
 namespace {
@@ -49,6 +52,8 @@ const QLatin1String kShowCommandInputKey("ui/showCommandInput");
 const QLatin1String kShowQuickCommandsKey("ui/showQuickCommands");
 const QLatin1String kLanguageEnglish("en_US");
 const QLatin1String kLanguageChinese("zh_CN");
+const QLatin1String kSshTargetKeyPrefix("ssh:target:");
+constexpr int kSshProfilesSaveDelayMs = 250;
 
 QString historyFilePath()
 {
@@ -107,23 +112,40 @@ MainWindow::MainWindow(QWidget* parent)
     if (!m_quickCommands->load()) {
         qCWarning(lcUi) << "quick commands file is malformed, using current list";
     }
+    m_sshProfiles = new SshProfileStore(this);
+    if (!m_sshProfiles->load()) {
+        qCWarning(lcSsh) << "SSH profiles file is unreadable, starting with an empty list";
+    }
+    // Every store change (profile dialog, touch on connect, recent targets) is persisted shortly
+    // afterwards; closeEvent flushes whatever is still pending.
+    m_sshProfilesSaveTimer.setSingleShot(true);
+    m_sshProfilesSaveTimer.setInterval(kSshProfilesSaveDelayMs);
+    connect(&m_sshProfilesSaveTimer, &QTimer::timeout, this, &MainWindow::saveSshProfiles);
+    connect(m_sshProfiles, &SshProfileStore::changed, &m_sshProfilesSaveTimer, qOverload<>(&QTimer::start));
     m_history.load(historyFilePath());
     SerialPortEnumerator::instance().start();
 
     // Toolbar icons (Qt has no bundled icon theme on Windows -> QStyle fallbacks).
     const QStyle* s = style();
     setActionIcon(ui->actionNewSession, "tab-new", QStyle::SP_FileIcon, s);
+    if (ui->actionNewSshSession->icon().pixmap(16).isNull()) {
+        // :/icons/ssh.svg needs Qt's SVG icon engine; without it fall back like the other actions.
+        setActionIcon(ui->actionNewSshSession, "utilities-terminal", QStyle::SP_ComputerIcon, s);
+    }
     setActionIcon(ui->actionCloseSession, "tab-close", QStyle::SP_DialogCloseButton, s);
     setActionIcon(ui->actionConnect, "network-connect", QStyle::SP_DialogApplyButton, s);
     setActionIcon(ui->actionDisconnect, "network-disconnect", QStyle::SP_DialogCancelButton, s);
     setActionIcon(ui->actionClear, "edit-clear", QStyle::SP_TrashIcon, s);
     setActionIcon(ui->actionResetTerminal, "view-refresh", QStyle::SP_DialogResetButton, s);
     setActionIcon(ui->actionSendFile, "document-send", QStyle::SP_ArrowUp, s);
+    setActionIcon(ui->actionUploadFile, "go-up", QStyle::SP_ArrowUp, s);
+    setActionIcon(ui->actionDownloadFile, "go-down", QStyle::SP_ArrowDown, s);
     setActionIcon(ui->actionHexView, "view-list-details", QStyle::SP_FileDialogDetailedView, s);
     setActionIcon(ui->actionStartLogging, "media-record", QStyle::SP_DialogSaveButton, s);
     setActionIcon(ui->actionStopLogging, "media-playback-stop", QStyle::SP_MediaStop, s);
     setActionIcon(ui->actionOpenLogFolder, "folder-open", QStyle::SP_DirOpenIcon, s);
     setActionIcon(ui->actionQuickCommands, "system-run", QStyle::SP_CommandLink, s);
+    setActionIcon(ui->actionSshProfiles, "network-server", QStyle::SP_DriveNetIcon, s);
     setActionIcon(ui->actionPreferences, "preferences-system", QStyle::SP_FileDialogInfoView, s);
     setActionIcon(ui->actionRefreshPorts, "view-refresh", QStyle::SP_BrowserReload, s);
     setActionIcon(ui->actionQuit, "application-exit", QStyle::SP_DialogCloseButton, s);
@@ -148,6 +170,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ---- File ----
     connect(ui->actionNewSession, &QAction::triggered, this, [this]() { newSession(); });
+    connect(ui->actionNewSshSession, &QAction::triggered, this, [this]() { newSshSession(); });
     connect(ui->actionCloseSession, &QAction::triggered, this, &MainWindow::closeCurrentSession);
     connect(ui->actionStartLogging, &QAction::triggered, this, &MainWindow::onStartLogging);
     connect(ui->actionStopLogging, &QAction::triggered, this, &MainWindow::onStopLogging);
@@ -162,6 +185,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->actionClear, &QAction::triggered, this, &MainWindow::onClear);
     connect(ui->actionResetTerminal, &QAction::triggered, this, &MainWindow::onResetTerminal);
     connect(ui->actionSendFile, &QAction::triggered, this, &MainWindow::onSendFile);
+    connect(ui->actionUploadFile, &QAction::triggered, this, &MainWindow::onUploadFile);
+    connect(ui->actionDownloadFile, &QAction::triggered, this, &MainWindow::onDownloadFile);
     connect(ui->actionSendBreak, &QAction::triggered, this, &MainWindow::onSendBreak);
     connect(ui->actionSyncTerminalSize, &QAction::triggered, this, &MainWindow::onSyncTerminalSize);
     connect(ui->actionRefreshPorts, &QAction::triggered, this, &MainWindow::onRefreshPorts);
@@ -172,6 +197,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->actionSelectAll, &QAction::triggered, this, &MainWindow::onSelectAll);
     connect(ui->actionFind, &QAction::triggered, this, &MainWindow::onFind);
     connect(ui->actionQuickCommands, &QAction::triggered, this, &MainWindow::onQuickCommands);
+    connect(ui->actionSshProfiles, &QAction::triggered, this, &MainWindow::onSshProfiles);
     connect(ui->actionPreferences, &QAction::triggered, this, &MainWindow::onPreferences);
 
     // ---- View ----
@@ -232,6 +258,23 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    // Destroying a window that is still visible closes it from QWidget::~QWidget, i.e. after this
+    // body ran: the close takes the focus away from whatever strip field holds it (the SSH target
+    // combo, the baud edit), whose editingFinished ends - via the bar's profileChanged /
+    // settingsChanged and the session's titleChanged - in slots of this window. None of them may
+    // run once `ui` is gone, so every session, the tab widget and the global emitters are cut
+    // off first.
+    for (int i = 0; i < sessionCount(); ++i) {
+        if (SessionWidget* session = sessionAt(i)) {
+            disconnect(session, nullptr, this, nullptr);
+        }
+    }
+    if (m_tabs) {
+        disconnect(m_tabs, nullptr, this, nullptr);
+    }
+    disconnect(&AppSettings::instance(), nullptr, this, nullptr);
+    disconnect(&SerialPortEnumerator::instance(), nullptr, this, nullptr);
+    m_sshProfilesSaveTimer.stop();
     delete ui;
     ui = nullptr;
 }
@@ -269,10 +312,41 @@ int MainWindow::indexOf(SessionWidget* session) const
 
 SessionWidget* MainWindow::newSession(const QString& portName)
 {
+    if (SessionWidget::isSshRestoreKey(portName)) {
+        return newSshSession(portName);   // a persisted SSH tab comes back as one
+    }
     auto* session = new SessionWidget(m_quickCommands, &m_history, this);
     if (!portName.isEmpty()) {
         session->setPortName(portName);
     }
+    addSessionTab(session, portName.isEmpty() ? QStringLiteral("(no port)") : portName);
+    return session;
+}
+
+SessionWidget* MainWindow::newSshSession(const QString& target)
+{
+    auto* session = new SessionWidget(Transport::Kind::Ssh, m_quickCommands, &m_history, m_sshProfiles, this);
+    QString applied = target;
+    if (applied.isEmpty()) {
+        // Convenience only: the last ad-hoc target typed in is offered again, never a stored
+        // profile (the combo lists those anyway) and never with a connect.
+        const QString last = AppSettings::instance().lastSshTarget();
+        if (last.startsWith(kSshTargetKeyPrefix)) {
+            applied = last;
+        }
+    }
+    if (!applied.isEmpty()) {
+        session->setSshTarget(applied);
+    }
+    addSessionTab(session, applied.isEmpty() ? QStringLiteral("(no target)") : applied);
+    if (SshConnectionBar* bar = session->sshConnectionBar()) {
+        bar->setFocusToTarget();
+    }
+    return session;
+}
+
+void MainWindow::addSessionTab(SessionWidget* session, const QString& logName)
+{
     connectSession(session);
 
     // Panel visibility follows the (persisted) View menu state.
@@ -283,17 +357,16 @@ SessionWidget* MainWindow::newSession(const QString& portName)
         session->quickCommandBar()->setVisible(ui->actionShowQuickCommands->isChecked());
     }
 
-    const int index = m_tabs->addTab(session, stateIcon(SerialConnection::State::Disconnected), session->title());
+    const int index = m_tabs->addTab(session, stateIcon(Transport::State::Disconnected), session->title());
     updateTabAppearance(session);
     m_tabs->setCurrentIndex(index);
     session->focusTerminal();
 
-    qCInfo(lcUi) << "new session" << (portName.isEmpty() ? QStringLiteral("(no port)") : portName);
+    qCInfo(lcUi) << "new" << (session->isSsh() ? "SSH" : "serial") << "session" << logName;
 
     updateActions();
     updateStatusBar();
     updateWindowTitle();
-    return session;
 }
 
 void MainWindow::closeSession(int index)
@@ -344,6 +417,7 @@ void MainWindow::connectSession(SessionWidget* session)
     connect(session, &SessionWidget::loggingChanged, this, &MainWindow::onSessionLoggingChanged);
     connect(session, &SessionWidget::gridSizeChanged, this, &MainWindow::onSessionGridSize);
     connect(session, &SessionWidget::quickCommandsEditRequested, this, &MainWindow::onQuickCommands);
+    connect(session, &SessionWidget::sshProfilesEditRequested, this, &MainWindow::onSshProfiles);
     connect(session, &SessionWidget::findRequested, this, &MainWindow::onFind);
     connect(session, &SessionWidget::viewModeChanged, this, [this, session](SessionWidget::ViewMode) {
         if (session == currentSession()) {
@@ -421,6 +495,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
             session->disconnectPort();
         }
     }
+    // The disconnects above may have touched the store (recent targets); flush synchronously.
+    m_sshProfilesSaveTimer.stop();
+    saveSshProfiles();
 
     qCInfo(lcApp) << "main window closed";
     event->accept();
@@ -501,7 +578,7 @@ void MainWindow::onSessionTitleChanged(const QString& title)
     }
 }
 
-void MainWindow::onSessionStateChanged(SerialConnection::State state)
+void MainWindow::onSessionStateChanged(Transport::State state)
 {
     auto* session = qobject_cast<SessionWidget*>(sender());
     if (!session) {
@@ -598,6 +675,20 @@ void MainWindow::onSendFile()
 {
     if (SessionWidget* session = currentSession()) {
         session->sendFile();
+    }
+}
+
+void MainWindow::onUploadFile()
+{
+    if (SessionWidget* session = currentSession()) {
+        session->uploadFile();
+    }
+}
+
+void MainWindow::onDownloadFile()
+{
+    if (SessionWidget* session = currentSession()) {
+        session->downloadFile();
     }
 }
 
@@ -834,6 +925,42 @@ void MainWindow::onQuickCommands()
     }
 }
 
+void MainWindow::onSshProfiles()
+{
+    SshProfilesDialog dialog(m_sshProfiles, this);
+    if (SessionWidget* current = currentSession(); current && current->isSsh() && current->sshConnection()) {
+        const QString id = current->sshConnection()->profile().id;
+        if (!id.isEmpty()) {
+            dialog.selectProfile(id);
+        }
+    }
+    // "Connect" in the dialog: remembered here and acted on once exec() returned, because the
+    // dialog writes the (possibly new) profile back to the store in accept(), after the signal.
+    std::optional<SshProfile> requested;
+    connect(&dialog, &SshProfilesDialog::connectRequested, this,
+            [&requested](const SshProfile& profile) { requested = profile; });
+    dialog.exec();
+    if (!requested) {
+        return;
+    }
+
+    qCInfo(lcSsh) << "connect requested from the profile dialog:" << requested->displayTarget();
+    SessionWidget* session = newSshSession();
+    if (!requested->id.isEmpty() && m_sshProfiles->profile(requested->id)) {
+        session->setSshTarget(QStringLiteral("ssh:profile:") + requested->id);
+    } else {
+        session->setSshTarget(requested->displayTarget());
+    }
+    session->connectPort();
+}
+
+void MainWindow::saveSshProfiles()
+{
+    if (m_sshProfiles && !m_sshProfiles->save()) {
+        qCWarning(lcSsh) << "cannot save SSH profiles to" << SshProfileStore::defaultFilePath();
+    }
+}
+
 void MainWindow::onPreferences()
 {
     PreferencesDialog dialog(this);
@@ -971,21 +1098,30 @@ void MainWindow::onHomepage()
 
 void MainWindow::updateActions()
 {
+    if (!ui) {
+        return;   // a signal that slipped through while the window is being destroyed
+    }
     SessionWidget* session = currentSession();
     const bool hasSession = session != nullptr;
     const bool connected = hasSession && session->isConnected();
-    const SerialConnection::State state =
-        (hasSession && session->connection()) ? session->connection()->state() : SerialConnection::State::Disconnected;
-    const bool reconnecting = state == SerialConnection::State::Reconnecting;
-    const bool portSelected = hasSession && !session->portName().isEmpty();
+    const bool ssh = hasSession && session->isSsh();
+    const Transport::State state =
+        (hasSession && session->transport()) ? session->transport()->state() : Transport::State::Disconnected;
+    const bool busy = state == Transport::State::Reconnecting || state == Transport::State::Connecting;
+    // A serial tab needs a port picked; an SSH tab's Connect may run without a target (it then
+    // asks for one in the status bar and focuses the field).
+    const bool targetSelected = hasSession && (ssh || !session->portName().isEmpty());
     const bool logging = hasSession && session->isLogging();
     const bool hexMode = hasSession && session->viewMode() == SessionWidget::ViewMode::HexDump;
 
     ui->actionCloseSession->setEnabled(hasSession);
-    ui->actionConnect->setEnabled(hasSession && !connected && !reconnecting && portSelected);
-    ui->actionDisconnect->setEnabled(connected || reconnecting);
+    ui->actionConnect->setEnabled(hasSession && !connected && !busy && targetSelected);
+    ui->actionDisconnect->setEnabled(connected || busy);
     ui->actionSendFile->setEnabled(connected);
-    ui->actionSendBreak->setEnabled(connected);
+    ui->actionUploadFile->setEnabled(connected && ssh);
+    ui->actionDownloadFile->setEnabled(connected && ssh);
+    ui->actionSendBreak->setEnabled(connected && !ssh);
+    ui->actionRefreshPorts->setEnabled(!ssh);
     ui->actionSyncTerminalSize->setEnabled(connected);
     ui->actionClear->setEnabled(hasSession);
     ui->actionResetTerminal->setEnabled(hasSession);
@@ -1019,15 +1155,17 @@ void MainWindow::updateTabAppearance(SessionWidget* session)
     if (index < 0) {
         return;
     }
-    const SerialConnection::State state =
-        session->connection() ? session->connection()->state() : SerialConnection::State::Disconnected;
+    const Transport* transport = session->transport();
+    const Transport::State state = transport ? transport->state() : Transport::State::Disconnected;
 
     m_tabs->setTabText(index, session->title());
     m_tabs->setTabIcon(index, stateIcon(state));
 
-    QString tip = SerialConnection::stateText(state);
-    if (session->connection() && !session->portName().isEmpty()) {
-        tip = QStringLiteral("%1 · %2\n%3").arg(session->portName(), session->connection()->settings().summary(), tip);
+    QString tip = Transport::stateText(state);
+    // A name and summary only once a port / SSH target is selected (portName() is the restore
+    // key, empty until then; an SSH transport without a target renders a placeholder name).
+    if (transport && !session->portName().isEmpty()) {
+        tip = QStringLiteral("%1 · %2\n%3").arg(transport->displayName(), transport->summary(), tip);
     }
     if (session->isLogging()) {
         tip += QLatin1Char('\n') + tr("Logging to %1").arg(QDir::toNativeSeparators(session->logFilePath()));
@@ -1038,23 +1176,24 @@ void MainWindow::updateTabAppearance(SessionWidget* session)
 void MainWindow::updateWindowTitle()
 {
     QString title = QStringLiteral("%1 %2").arg(QStringLiteral(APP_DISPLAY_NAME), QStringLiteral(APP_VERSION));
-    if (SessionWidget* session = currentSession(); session && !session->portName().isEmpty()) {
-        title += QStringLiteral(" - ") + session->portName();
+    if (SessionWidget* session = currentSession(); session && session->transport() && !session->portName().isEmpty()) {
+        title += QStringLiteral(" - ") + session->transport()->displayName();
     }
     setWindowTitle(title);
 }
 
-QIcon MainWindow::stateIcon(SerialConnection::State state)
+QIcon MainWindow::stateIcon(Transport::State state)
 {
     QColor color;
     switch (state) {
-    case SerialConnection::State::Connected:
+    case Transport::State::Connected:
         color = QColor(0x3C, 0xB0, 0x43);   // green
         break;
-    case SerialConnection::State::Reconnecting:
+    case Transport::State::Connecting:
+    case Transport::State::Reconnecting:
         color = QColor(0xF0, 0xA0, 0x30);   // amber
         break;
-    case SerialConnection::State::Disconnected:
+    case Transport::State::Disconnected:
         color = QColor(0x90, 0x90, 0x90);   // grey
         break;
     }
@@ -1157,17 +1296,17 @@ void MainWindow::updateStatusBar()
         return;
     }
 
-    SerialConnection* connection = session->connection();
-    const SerialConnection::State state = connection ? connection->state() : SerialConnection::State::Disconnected;
-    QString connectionText = SerialConnection::stateText(state);
-    if (!session->portName().isEmpty()) {
-        const QString summary = connection ? connection->settings().summary() : QString();
-        connectionText = QStringLiteral("%1   %2 · %3").arg(connectionText, session->portName(), summary);
+    const Transport* transport = session->transport();
+    const Transport::State state = transport ? transport->state() : Transport::State::Disconnected;
+    QString connectionText = Transport::stateText(state);
+    if (transport && !session->portName().isEmpty()) {   // a port / SSH target is selected
+        connectionText =
+            QStringLiteral("%1   %2 · %3").arg(connectionText, transport->displayName(), transport->summary());
     }
     m_statusConnection->setText(connectionText);
 
-    const quint64 rx = connection ? connection->bytesReceived() : 0;
-    const quint64 tx = connection ? connection->bytesSent() : 0;
+    const quint64 rx = transport ? transport->bytesReceived() : 0;
+    const quint64 tx = transport ? transport->bytesSent() : 0;
     m_statusCounters->setText(tr("RX %1  TX %2").arg(formatBytes(rx), formatBytes(tx)));
 
     if (TerminalWidget* terminal = session->terminal()) {

@@ -17,3 +17,4 @@ Q_DECLARE_LOGGING_CATEGORY(lcApp)       // "buildai.app"      application lifecy
 Q_DECLARE_LOGGING_CATEGORY(lcSerial)    // "buildai.serial"   port enumeration, open/close, errors
 Q_DECLARE_LOGGING_CATEGORY(lcTerminal)  // "buildai.terminal" parser / screen model
 Q_DECLARE_LOGGING_CATEGORY(lcUi)        // "buildai.ui"       widgets, dialogs
+Q_DECLARE_LOGGING_CATEGORY(lcSsh)       // "buildai.ssh"      SSH sessions (libssh), profiles, secrets

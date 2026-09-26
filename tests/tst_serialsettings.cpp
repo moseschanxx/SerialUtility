@@ -4,6 +4,7 @@
 
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
+#include "core/Transport.h"
 
 class Tst_serialsettings : public QObject
 {
@@ -480,6 +481,14 @@ void Tst_serialsettings::connectionInitialState()
     QVERIFY(c.dtr());
     QVERIFY(c.rts());
     QCOMPARE(c.settings(), SerialSettings());
+    // The Transport facade (v0.3): kind, names and the persisted map.
+    Transport* transport = &c;
+    QCOMPARE(transport->kind(), Transport::Kind::Serial);
+    QVERIFY(transport->displayName().isEmpty());
+    QCOMPARE(transport->summary(), SerialSettings().summary());
+    QCOMPARE(transport->pendingTxBytes(), qint64(0));
+    QCOMPARE(transport->settingsMap().value(QStringLiteral("kind")).toString(), QStringLiteral("serial"));
+    QCOMPARE(SerialSettings::fromMap(transport->settingsMap()), SerialSettings());
 
     // setSettings() on a closed connection stores everything unvalidated (the driver checks the
     // values on the next open()). While open, a rejected line parameter is NOT stored and
@@ -490,6 +499,10 @@ void Tst_serialsettings::connectionInitialState()
     QCOMPARE(c.portName(), QStringLiteral("COM8"));
     QVERIFY(!c.dtr());
     QVERIFY(!c.rts());
+    QCOMPARE(transport->displayName(), QStringLiteral("COM8"));
+    QCOMPARE(transport->summary(), s.summary());
+    QCOMPARE(SerialSettings::fromMap(transport->settingsMap()), s);
+    QCOMPARE(transport->settingsMap().value(QStringLiteral("kind")).toString(), QStringLiteral("serial"));
     // Closing an already closed connection is harmless and silent.
     QSignalSpy stateSpy(&c, &SerialConnection::stateChanged);
     c.close();
@@ -576,6 +589,16 @@ void Tst_serialsettings::connectionReconnectSettings()
     QCOMPARE(stateSpy.count(), 0);   // not reconnecting -> nothing to give up
     c.setAutoReconnect(true);
     QVERIFY(c.autoReconnect());
+
+    // The same setters through the Transport interface (virtual overrides).
+    Transport* transport = &c;
+    transport->setReconnectIntervalMs(700);
+    QCOMPARE(c.reconnectIntervalMs(), 700);
+    QCOMPARE(transport->reconnectIntervalMs(), 700);
+    transport->setAutoReconnect(false);
+    QVERIFY(!c.autoReconnect());
+    transport->setAutoReconnect(true);
+    QCOMPARE(stateSpy.count(), 0);
 }
 
 void Tst_serialsettings::connectionPins()
@@ -605,6 +628,13 @@ void Tst_serialsettings::connectionStateText()
     QCOMPARE(SerialConnection::stateText(SerialConnection::State::Disconnected), QStringLiteral("Disconnected"));
     QCOMPARE(SerialConnection::stateText(SerialConnection::State::Connected), QStringLiteral("Connected"));
     QCOMPARE(SerialConnection::stateText(SerialConnection::State::Reconnecting), QStringLiteral("Reconnecting..."));
+    // SerialConnection::State is Transport::State: the spelling a serial port never produces
+    // exists too, and both names give the same text.
+    QCOMPARE(SerialConnection::stateText(SerialConnection::State::Connecting), QStringLiteral("Connecting..."));
+    QCOMPARE(Transport::stateText(Transport::State::Connecting),
+             SerialConnection::stateText(SerialConnection::State::Connecting));
+    QCOMPARE(Transport::kindText(Transport::Kind::Serial), QStringLiteral("Serial"));
+    QCOMPARE(Transport::kindText(Transport::Kind::Ssh), QStringLiteral("SSH"));
 }
 
 QTEST_GUILESS_MAIN(Tst_serialsettings)

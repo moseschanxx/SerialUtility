@@ -1,4 +1,4 @@
-# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27)
+# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27, v0.3.0 addendum 2026-09-27)
 
 This report records how the first release of BuildAI Serial Utility was verified on
 2026-09-20/21, what was tested at each layer, what was found and fixed, and what could
@@ -157,3 +157,45 @@ and switchable in View and Preferences > Terminal.
 
 Known behaviour choices: a DSR/DA query received while paused is answered when the display resumes (the
 query is not parsed earlier); double-clicking a word while already paused first resumes (as conhost does).
+
+## 11. v0.3.0 — SSH sessions (2026-09-27)
+
+Added in 0.3.0: SSH sessions over libssh 0.11.1 (built from source, OpenSSL backend) behind a new
+`Transport` interface shared with the serial connection: host-key verification against OpenSSH
+`known_hosts`, agent / key / password / keyboard-interactive authentication with dialogs, remembered
+secrets (DPAPI), PTY that follows the terminal size, keep-alive, auto-reconnect with backoff, local port
+forwards, SFTP upload/download, SSH profiles with import/export, `~/.ssh/config` aliases, Preferences > SSH,
+session restore, `--ssh <target>`.
+
+How it was built and verified (one night, four implementation packages in parallel on a stubbed tree,
+then integration, adversarial review and fixes):
+
+| Layer | Result |
+|---|---|
+| Contracts | 9 new headers written first (`Transport`, `SshProfile`/`SshProfileStore`, `SecretStore`, `SshConnection`, `TestSshServer`, `SshConnectionBar`, `HostKeyDialog`, `AuthPromptDialog`, `SshProfilesDialog`, `RemoteFileDialog`); compilable stubs let every package build and test in isolation |
+| New unit suites (`su_core`) | `tst_sshprofile` 47 checks (JSON round trips, `parseTarget` table incl. IPv6 and `ssh://`, store load/save/upsert/import/export), `tst_secretstore` 13 (DPAPI round trips, tampered values, keys with `/`, unicode) |
+| In-process SSH server (`tests/support/TestSshServer`, libssh server API + own SFTP v3 handler) | `tst_testsshserver` 21 checks driven with the raw libssh client API: password / public-key (plain and passphrase) / keyboard-interactive auth, wrong password, banner, PTY + window change, scripted shell, exec + exit status, 2000-line output, hang + abrupt drop, refused connections, SFTP write/read/stat/realpath/mkdir/rename/readdir/unlink, direct-tcpip echo, host-key regeneration, three concurrent clients, stop while connected; 3 identical runs |
+| `SshConnection` end to end against the in-process server | `tst_sshconnection` 41 checks: state sequence, every auth method, wrong password + cancel, host key Unknown / rejected / Changed with `known_hosts` file assertions, saved and stale `SecretStore` passwords, banner, terminal size before and during the session, startup command, exec + exit status, 64 KiB typed burst and 20 000-line output intact, keep-alive, link drop → `connectionLost` → reconnect (and no reconnect when disabled), local forward with 100 KiB echo round trip and `forwardFailed`, 2 MiB SFTP upload/download byte-identical with monotonic progress, overwrite refusal, cancel without `.part`, transfer interleaved with the shell, remote home, `close()` during a host-key question / auth prompt / connect, destruction while connected and while reconnecting, two connections in parallel; ~35 s, 4 identical runs |
+| Live probe against a real OpenSSH 8.9 server (WSL Ubuntu 22.04, user `sshprobe`; env-gated part of `tst_sshconnection`, `SU_SSH_PROBE_TARGET`) | 22/22: unknown host key accept + remember, password login, `echo PROBE-OK-42`, resize confirmed by `stty size`, 1 MiB SFTP round trip, overwrite refusals, cancel with `.part` removal, remote home, wrong password → attempt 2 → cancel, three wrong passwords, Changed host key (tampered `known_hosts`) accept + remember leaving one corrected line, Changed + reject leaving the file untouched, connect-once not writing, ed25519 key login via *Public key* and *Automatic*, remote `exit 7` → `channelClosed(7)` with no reconnect; run twice |
+| Dialog / bar suite (`tst_sshdialogs`, offscreen) | 44 checks: bar items/order/separator, validation colours, connect button per state, `profileChanged` de-duplication, store rebuild keeping the selection; `HostKeyDialog` per status incl. the checkbox-gated *Replace key*; `AuthPromptDialog` masking / Show / Remember / attempt label / Enter / Esc; `SshProfilesDialog` new / duplicate / delete / validation / forwards / Apply / Connect / Cancel / import / export; `RemoteFileDialog` defaults, `request()`, Start gating, path persistence, retranslate |
+| Existing GUI suites extended | session widget 62 → 72 (SSH mode construction, restore keys, `setSshTarget`, connect without target, upload/download refused while disconnected, `connectionLost`/`connectionRestored` lines unchanged for serial, `notifyTerminalSize`), main window 56 → 65 (new actions and shortcuts, `newSshSession`, action enable rules per tab kind, SSH restore round trip, status bar), dialogs 46 → 48 (Preferences SSH page round trip, Restore Defaults), serial settings and device simulator (Transport facade, signal ordering) |
+| Whole-application flow (`tst_sshsession`, offscreen, real widgets against the in-process server) | see the final table below |
+| Serial regression | every previous serial test unchanged and green; a reviewer diffed `SerialConnection` / `SessionWidget` / `MainWindow` against v0.2.0 line by line (signal order, reconnect timer semantics, counters, texts, DTR/RTS/BREAK, live parameter changes, auto-log, replay guard, actions, tab icons, close confirmation) |
+| Adversarial reviews | 2 passes (core + test server; UI + dialogs), 12 findings, all verified before fixing: a use-after-free on local-forward sockets closed by the local client, a TCP drop reported as a clean exit (found while writing the end-to-end tests), tail loss when an exit status arrives with output still buffered, partial `ssh_channel_write` dropped, forward bind address `localhost` bound on all interfaces, a re-entrancy hole after `connectionLost`, cross-thread `QSignalSpy` in a test, the real `~/.ssh/config` read by the test suite, restored SFTP paths proposing the previous remote file name (overwrite risk), the serial state text losing its Chinese translation, remote home requested too early, stale tab title after a profile rename, SSH auto-log opened before the connection succeeded |
+| GCC 11 (`-Wall -Wextra -Wpedantic -Wshadow -Werror`, WSL Ubuntu 22.04, Qt 6.8.3) | zero warnings/errors; 22/22 suites green on Linux including the SSH suites; Linux tarball check: `libssh.so.4` and `libcrypto.so.3` bundled, `libssh.so` resolves the bundled `libcrypto` through its own `RUNPATH=$ORIGIN` |
+| Windows package | `ssh.dll`, `libcrypto-3-x64.dll`, `Qt6Network.dll`, `Qt6Svg.dll` + `iconengines/qsvgicon.dll` deployed next to the executable by `cmake --install`; CI asserts their presence |
+
+Final full run on Windows (MSVC 2022, Release, fresh configure) and on Linux: recorded in the table
+below once the release build finished.
+
+| Platform | Suites | Result |
+|---|---|---|
+| Windows MSVC 2022 Release, `build\wf-final` | 22 | (pending) |
+| Ubuntu 22.04 WSL GCC 11 `-Werror` | 22 | (pending) |
+
+Known limitations (documented in README / DESIGN): no ssh-agent on Windows (libssh), keep-alive
+detects a dead link only when the TCP write fails (`SSH_MSG_IGNORE` has no reply), a blocking libssh
+phase (connect / key exchange / auth) ends only with the profile's timeout, a refused connect costs the
+full timeout on Windows (libssh's select-based poll), only the first `IdentityFile` of a `~/.ssh/config`
+block is used, SFTP rename does not overwrite (plain v3), remote port forwards are not offered.
+

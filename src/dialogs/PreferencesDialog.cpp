@@ -7,9 +7,12 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDialog>
 #include <QIntValidator>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QSerialPort>
 #include <QStandardPaths>
 
@@ -19,13 +22,33 @@
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
 #include "core/SessionLogger.h"
+#include "ssh/SecretStore.h"
+#include "ssh/SshConnection.h"
 #include "terminal/AnsiParser.h"
 #include "terminal/TerminalTheme.h"
 
 namespace {
 
 // Tab indices as laid out in PreferencesDialog.ui.
-enum Page { PageTerminal = 0, PageInput, PageConnection, PageLogging, PageGeneral };
+enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageLogging, PageGeneral };
+
+const QLatin1String kDefaultSshTerminalType("xterm-256color");
+constexpr int kDefaultSshKeepAlive = 30;
+
+/// The directory a file browser starts in: the file's own directory when it exists, else ~/.ssh
+/// when that exists, else the home directory.
+QString sshBrowseStart(const QString& currentPath)
+{
+    const QString current = currentPath.trimmed();
+    if (!current.isEmpty()) {
+        const QFileInfo info(current);
+        if (info.dir().exists()) {
+            return info.dir().absolutePath();
+        }
+    }
+    const QString sshDir = QDir::homePath() + QStringLiteral("/.ssh");
+    return QDir(sshDir).exists() ? sshDir : QDir::homePath();
+}
 
 /// Select the item whose user data equals `value`; falls back to the first item.
 void selectByData(QComboBox* combo, const QVariant& value)
@@ -71,6 +94,8 @@ PreferencesDialog::PreferencesDialog(QWidget* parent)
 
     connect(ui->fontButton, &QPushButton::clicked, this, &PreferencesDialog::onFontButton);
     connect(ui->logDirBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseLogDir);
+    connect(ui->sshKnownHostsBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseKnownHosts);
+    connect(ui->sshIdentityBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseIdentityFile);
     connect(ui->buttonBox, &QDialogButtonBox::clicked, this, &PreferencesDialog::onButtonClicked);
     connect(ui->autoReconnectCheck, &QCheckBox::toggled, ui->reconnectIntervalSpin, &QWidget::setEnabled);
     connect(ui->defaultFlowCombo, &QComboBox::currentIndexChanged, this, [this](int) {
@@ -149,6 +174,14 @@ void PreferencesDialog::setupPages()
                                   QVariant::fromValue(QSerialPort::SoftwareControl));
     ui->reconnectIntervalSpin->setRange(200, 60000);
 
+    // ---- SSH ------------------------------------------------------------------------
+    ui->sshKnownHostsEdit->setPlaceholderText(QDir::toNativeSeparators(SshConnection::defaultKnownHostsFile()));
+    ui->sshTerminalTypeEdit->setPlaceholderText(kDefaultSshTerminalType);
+    ui->sshKeepAliveSpin->setRange(0, 600);
+    ui->sshKeepAliveSpin->setSuffix(tr(" s"));
+    ui->sshKeepAliveSpin->setSpecialValueText(tr("Off"));
+    ui->sshSecretsNoteLabel->setText(SecretStore::storageDescription());
+
     // ---- Logging --------------------------------------------------------------------
     ui->logFormatCombo->clear();
     ui->logFormatCombo->addItem(tr("Raw bytes (replayable capture)"),
@@ -196,6 +229,12 @@ void PreferencesDialog::loadFromSettings()
     ui->reconnectIntervalSpin->setValue(settings.reconnectIntervalMs());
     ui->reconnectIntervalSpin->setEnabled(settings.autoReconnect());
     ui->showSimulatedPortsCheck->setChecked(settings.showSimulatedPorts());
+
+    // SSH (empty paths stay empty: the placeholder shows what "default" means)
+    ui->sshKnownHostsEdit->setText(QDir::toNativeSeparators(settings.sshKnownHostsFile()));
+    ui->sshIdentityEdit->setText(QDir::toNativeSeparators(settings.sshDefaultIdentityFile()));
+    ui->sshTerminalTypeEdit->setText(settings.sshDefaultTerminalType());
+    ui->sshKeepAliveSpin->setValue(settings.sshDefaultKeepAliveSeconds());
 
     // Logging
     ui->logDirEdit->setText(QDir::toNativeSeparators(settings.logDirectory()));
@@ -253,6 +292,17 @@ void PreferencesDialog::saveToSettings()
         SerialPortEnumerator::instance().refresh();   // add / remove the SIM: entries right away
     }
 
+    // SSH
+    settings.setSshKnownHostsFile(QDir::fromNativeSeparators(ui->sshKnownHostsEdit->text().trimmed()));
+    settings.setSshDefaultIdentityFile(QDir::fromNativeSeparators(ui->sshIdentityEdit->text().trimmed()));
+    QString terminalType = ui->sshTerminalTypeEdit->text().trimmed();
+    if (terminalType.isEmpty()) {
+        terminalType = kDefaultSshTerminalType;
+        ui->sshTerminalTypeEdit->setText(terminalType);
+    }
+    settings.setSshDefaultTerminalType(terminalType);
+    settings.setSshDefaultKeepAliveSeconds(ui->sshKeepAliveSpin->value());
+
     // Logging
     QString logDir = ui->logDirEdit->text().trimmed();
     if (logDir.isEmpty()) {
@@ -298,6 +348,26 @@ void PreferencesDialog::onBrowseLogDir()
     }
 }
 
+void PreferencesDialog::onBrowseKnownHosts()
+{
+    const QString start = sshBrowseStart(ui->sshKnownHostsEdit->text());
+    const QString file = QFileDialog::getOpenFileName(this, tr("Select known_hosts File"), start,
+                                                      tr("known_hosts (known_hosts*);;All files (*)"));
+    if (!file.isEmpty()) {
+        ui->sshKnownHostsEdit->setText(QDir::toNativeSeparators(file));
+    }
+}
+
+void PreferencesDialog::onBrowseIdentityFile()
+{
+    const QString start = sshBrowseStart(ui->sshIdentityEdit->text());
+    const QString file =
+        QFileDialog::getOpenFileName(this, tr("Select Private Key File"), start, tr("All files (*)"));
+    if (!file.isEmpty()) {
+        ui->sshIdentityEdit->setText(QDir::toNativeSeparators(file));
+    }
+}
+
 void PreferencesDialog::onRestoreDefaults()
 {
     switch (ui->tabWidget->currentIndex()) {
@@ -334,6 +404,12 @@ void PreferencesDialog::onRestoreDefaults()
         ui->showSimulatedPortsCheck->setChecked(true);
         break;
     }
+    case PageSsh:
+        ui->sshKnownHostsEdit->clear();
+        ui->sshIdentityEdit->clear();
+        ui->sshTerminalTypeEdit->setText(kDefaultSshTerminalType);
+        ui->sshKeepAliveSpin->setValue(kDefaultSshKeepAlive);
+        break;
     case PageLogging:
         ui->logDirEdit->setText(QDir::toNativeSeparators(AppSettings::defaultLogDirectory()));
         ui->autoLogCheck->setChecked(false);

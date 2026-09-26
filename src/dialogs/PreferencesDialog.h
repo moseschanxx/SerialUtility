@@ -30,11 +30,18 @@ class QAbstractButton;
  *              an out-of-range or unparsable entry is ignored on OK/Apply and the previous
  *              value re-selected), defaultDataBitsCombo, defaultParityCombo,
  *              defaultStopBitsCombo, defaultFlowCombo, dtrCheck, rtsCheck,
- *              autoReconnectCheck, reconnectIntervalSpin (200..60000 ms)
+ *              autoReconnectCheck, reconnectIntervalSpin (200..60000 ms), showSimulatedPortsCheck
+ *  SSH:        sshKnownHostsEdit + sshKnownHostsBrowseButton (AppSettings::sshKnownHostsFile(); empty
+ *              = ~/.ssh/known_hosts, shown as the placeholder), sshIdentityEdit +
+ *              sshIdentityBrowseButton (sshDefaultIdentityFile()), sshTerminalTypeEdit
+ *              (sshDefaultTerminalType(); empty falls back to xterm-256color), sshKeepAliveSpin
+ *              (sshDefaultKeepAliveSeconds(), 0..600 s, 0 shown as "Off"), sshSecretsNoteLabel
+ *              (read-only: SecretStore::storageDescription())
  *  Logging:    logDirEdit + logDirBrowseButton, autoLogCheck,
  *              logFormatCombo (raw/text/hex via SessionLogger::formatToString), logIncludeTxCheck
  *  General:    confirmCloseCheck, restoreSessionsCheck
  *  buttonBox with Ok | Cancel | Apply | RestoreDefaults
+ * Page order (tab indices): Terminal, Input, Connection, SSH, Logging, General.
  */
 class PreferencesDialog : public QDialog
 {
@@ -52,6 +59,8 @@ private slots:
     void saveToSettings();
     void onFontButton();
     void onBrowseLogDir();
+    void onBrowseKnownHosts();
+    void onBrowseIdentityFile();
     void onRestoreDefaults();
     void onButtonClicked(QAbstractButton* button);
 

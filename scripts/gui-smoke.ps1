@@ -14,6 +14,11 @@
       stress   - 7 MB replay at unlimited speed, 21 tabs, 2000-line paste over SIM:loopback, 10 connect cycles
       markmode - mouse-select while SIM:mcu streams telemetry: display pauses, Enter copies + resumes, Esc cancels,
                  right-click copies a selection / pastes the clipboard (cmd.exe QuickEdit)
+      ssh      - New SSH Session (Ctrl+Shift+T) to a real OpenSSH server (-SshTarget user@host[:port], password in
+                 -SshPasswordFile): host-key dialog, password dialog, shell commands, window resize -> stty size,
+                 hex view, Clear, disconnect + reconnect (host already known), "exit" closes the channel.
+                 The app is pointed at a temporary known_hosts file for the run (registry value ssh\knownHostsFile,
+                 restored afterwards) so the user's ~/.ssh/known_hosts is never touched.
     Screenshots land in <OutDir>\<scenario>-NN-<label>.png. Keep the desktop free while it runs:
     keystrokes go to the foreground window (the script refocuses the app before every key group).
 
@@ -21,12 +26,16 @@
     .\scripts\gui-smoke.ps1 -Scenario linux
 .EXAMPLE
     .\scripts\gui-smoke.ps1 -Scenario hardware -HardwarePort COM6
+.EXAMPLE
+    .\scripts\gui-smoke.ps1 -Scenario ssh -SshTarget sshprobe@localhost -SshPasswordFile build\wf-core\probe-credentials.txt
 #>
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode')][string]$Scenario,
+    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode', 'ssh')][string]$Scenario,
     [string]$Exe = '',      # default: <repo>\dist\Release\bin\BuildAI-SerialUtility.exe
     [string]$OutDir = '',   # default: <repo>\build\gui-run
-    [string]$HardwarePort = 'COM6'
+    [string]$HardwarePort = 'COM6',
+    [string]$SshTarget = 'sshprobe@localhost',   # ssh scenario: user@host[:port] of a reachable OpenSSH server
+    [string]$SshPasswordFile = ''                # ssh scenario: text file whose first line is that user's password
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot   # $PSScriptRoot is not usable inside param() defaults on PowerShell 5.1
@@ -257,6 +266,49 @@ switch ($Scenario) {
     $p.Refresh(); Log ("after 10 connect/disconnect cycles: responding={0}, alive={1}" -f $p.Responding, (Alive))
     Keys 'still alive{ENTER}' 800; Shot 'after-cycles-echo'
     CloseApp
+  }
+  'ssh' {
+    # SendKeys treats + ^ % ~ ( ) { } [ ] as control characters: wrap them in braces.
+    function EscapeKeys([string]$s) { return ($s -replace '([+^%~(){}\[\]])', '{$1}') }
+    if (-not $SshPasswordFile -or -not (Test-Path $SshPasswordFile)) { throw "ssh scenario needs -SshPasswordFile <file with the password on its first line>" }
+    $password = (Get-Content $SshPasswordFile -TotalCount 1).Trim()
+    if (-not $password) { throw "empty password in $SshPasswordFile" }
+    # Point the app at a temporary known_hosts so the run is deterministic (the host-key dialog
+    # appears on the first connect) and the user's real ~/.ssh/known_hosts stays untouched.
+    $regKey = 'HKCU:\Software\BuildAI\SerialUtility\ssh'
+    if (-not (Test-Path $regKey)) { New-Item -Path $regKey -Force | Out-Null }
+    $oldKnownHosts = (Get-ItemProperty -Path $regKey -Name knownHostsFile -ErrorAction SilentlyContinue).knownHostsFile
+    $tmpKnownHosts = Join-Path $OutDir 'smoke_known_hosts'
+    Remove-Item $tmpKnownHosts -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regKey -Name knownHostsFile -Value $tmpKnownHosts
+    try {
+      StartApp @()
+      Keys '^+t' 800; Shot 'new-ssh-tab'                                   # focus is in the target field
+      Keys ((EscapeKeys $SshTarget) + '{ENTER}') 2500
+      Shot 'hostkey-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"   # "Host Key Verification", default = Connect and remember
+      Keys '{ENTER}' 1500
+      Shot 'password-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"
+      Keys ((EscapeKeys $password) + '{ENTER}') 3000
+      Shot 'shell'                                                          # remote prompt, status bar "user@host · ssh-ed25519 · password"
+      if (-not (Test-Path $tmpKnownHosts)) { Log 'FAIL: known_hosts was not written' } else { Log ("OK: known_hosts written: " + (Get-Content $tmpKnownHosts | Select-Object -First 1)) }
+      Keys 'echo SMOKE-OK-$((40+2)){ENTER}' 800; Shot 'echo'                # expect SMOKE-OK-42
+      Keys 'uname -a; id{ENTER}' 800; Shot 'uname'
+      Keys 'stty size{ENTER}' 800; Shot 'stty-before'
+      Keys '% x' 1500                                                       # maximise (system menu: Alt+Space, x) -> window-change request
+      Keys 'stty size{ENTER}' 800; Shot 'stty-after-maximise'
+      Keys 'ls --color=always /{ENTER}' 800; Shot 'ls-color'
+      Keys 'seq 1 300{ENTER}' 1200; Shot 'scrolled'
+      Keys '^+h' 800; Shot 'hex-view'; Keys '^+h' 500
+      Keys '^+l' 500; Shot 'cleared'
+      Keys '{F3}' 1500; Shot 'disconnected'                                 # Disconnect (F3)
+      Keys '{F2}' 2500; Shot 'reconnect-password-dialog' -Screen           # host already known: only the password is asked
+      Keys ((EscapeKeys $password) + '{ENTER}') 3000; Shot 'reconnected'
+      Keys 'exit{ENTER}' 2000; Shot 'after-exit'                            # clean exit: "connection closed", no reconnect
+      Keys '^t' 500; Shot 'serial-tab-after-ssh'                            # a serial tab still works next to it
+      CloseApp
+    } finally {
+      if ($null -ne $oldKnownHosts) { Set-ItemProperty -Path $regKey -Name knownHostsFile -Value $oldKnownHosts } else { Remove-ItemProperty -Path $regKey -Name knownHostsFile -ErrorAction SilentlyContinue }
+    }
   }
   default { throw "unknown scenario $Scenario" }
 }

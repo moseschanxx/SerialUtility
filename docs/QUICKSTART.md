@@ -43,18 +43,31 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 - **DTR** / **RTS** in the connection bar drive reset / boot pins; **Send BREAK** holds the line low.
 - Quick commands *MCU > AT*, *AT+GMR*, *reset* and *Control > Ctrl+C / Ctrl+D / ESC* are shipped.
 
-## 4. Everyday features
+## 4. Connect over SSH
+
+**Ctrl+Shift+T** (*File > New SSH Session...*) opens an SSH tab. Type `root@192.168.100.2`
+(or `user@host:port`, an `ssh://` URL, or a `Host` alias from your `~/.ssh/config`) and press
+Enter. Confirm the host key once (*Connect and remember* writes it to `~/.ssh/known_hosts`), enter
+the password or key passphrase, and you are in the same terminal as on the serial port: quick
+commands, logging, mark mode, hex view all work. The gear button (*Edit > SSH Profiles...*) saves
+named targets with a key file, a remembered password, a startup command (`cd /oem && ls`),
+port forwards and more. *Session > Upload File to Remote...* copies a file over SFTP; dropping a
+file on the terminal does the same. A reflashed board shows the "identification has changed"
+warning - tick the box and *Replace key and connect*.
+
+## 5. Everyday features
 
 | Want to... | Do this |
 |---|---|
-| Open another board in parallel | **Ctrl+T** new tab, **Ctrl+Tab** to switch |
+| Open another board in parallel | **Ctrl+T** new tab (**Ctrl+Shift+T** for SSH), **Ctrl+Tab** to switch |
 | Keep a boot log | *File > Start Logging* (or turn on auto-log in *Preferences > Logging*) |
 | Look at a log captured in the field | *File > Replay Log File...* (or `--replay boot.log --speed 1500000`) - rendered like the live session |
 | Paste a script without overrunning the console | *Session > Send File...* (**Ctrl+Shift+O**), text mode, 50 ms per line |
 | Send raw bytes | Command input in **HEX** mode (`AA 55 0D`) or a quick command with the HEX flag |
 | See exactly what goes over the wire | *View > Hex View* (**Ctrl+Shift+H**) |
 | Change baud while connected | Just pick another value - it is applied to the open port |
-| Survive a board reboot | Nothing - auto-reconnect is on by default (amber tab dot while waiting) |
+| Survive a board reboot | Nothing - auto-reconnect is on by default (amber tab dot while waiting); SSH tabs reconnect the same way after a dropped link |
+| Copy a file to the board over SSH | *Session > Upload File to Remote...* (or drop the file on the SSH terminal); *Download File from Remote...* for the other direction |
 | Add your own buttons | *Edit > Quick Commands...* - Add, set name / command / group / line ending, OK |
 | Bigger font | **Ctrl++** / **Ctrl+-**, or pick a monospace font in *Preferences > Terminal* |
 | Copy text | Select with the mouse - the display pauses like the Windows console - then **Enter**, a **right click** or **Ctrl+Shift+C** copies and resumes, **Esc** cancels; plain Ctrl+C goes to the device. Turn the pause off in *View > Pause Output While Selecting* |
@@ -62,18 +75,19 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 | Wipe the terminal | The **Clear** toolbar button / **Ctrl+Shift+L** empties the screen, the scrollback and the hex view (colours and modes stay); *Session > Reset Terminal* is the full VT reset |
 | Report a bug | *Help > Version* -> **Copy**, paste into the ticket together with the System Log |
 
-## 5. Where things live
+## 6. Where things live
 
 | Item | Location |
 |---|---|
 | Settings | Registry (Windows) / `~/.config/BuildAI/SerialUtility.conf` (Linux) |
-| Quick commands, history | `QStandardPaths::AppConfigLocation` -> `quick_commands.json`, `history.txt` |
+| Quick commands, history, SSH profiles | `QStandardPaths::AppConfigLocation` -> `quick_commands.json`, `history.txt`, `ssh_profiles.json` (no secrets; saved passwords go to DPAPI-protected settings) |
+| SSH host keys | `~/.ssh/known_hosts`, shared with the `ssh` command |
 | Logs | `<Documents>/BuildAI/SerialLogs/<port>_<date>.log` (change in Preferences > Logging) |
 | Deployed app | `dist\Release\bin` after `build.ps1 -Deploy` |
 
-## 6. Shortcuts
+## 7. Shortcuts
 
-`Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+Tab`/`Ctrl+Shift+Tab` next/previous tab, `F2`/`F3`
+`Ctrl+T` new tab, `Ctrl+Shift+T` new SSH tab, `Ctrl+W` close, `Ctrl+Tab`/`Ctrl+Shift+Tab` next/previous tab, `F2`/`F3`
 connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear (screen + scrollback + hex view), `Ctrl+Shift+O` send file,
 `Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
 `Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,

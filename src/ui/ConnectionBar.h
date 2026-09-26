@@ -26,7 +26,8 @@ class QLabel;
  *   flow None / RTS-CTS / XON-XOFF.
  * - DTR / RTS are checkable tool buttons (state mirrored from the connection via setPinStates).
  * - Connect button: green dot + "Connect" when disconnected, red dot + "Disconnect" when
- *   connected, amber dot + "Reconnecting..." while reconnecting (still clickable = cancel).
+ *   connected, amber dot + "Reconnecting..." while reconnecting (still clickable = cancel);
+ *   Transport::State::Connecting (never produced by a serial port) is drawn the same way in amber.
  * - While connected the port combo and refresh are disabled; parameter combos remain
  *   enabled and changes emit settingsChanged() so SerialConnection can apply them live.
  * - Compact: uses a QHBoxLayout with small margins; labels hidden when the bar is narrow

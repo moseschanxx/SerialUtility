@@ -39,7 +39,7 @@ if(NOT CMAKE_PREFIX_PATH AND NOT Qt6_DIR)
     endif()
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets SerialPort LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg SerialPort Network LinguistTools)
 if(SU_BUILD_TESTS)
     find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
 endif()
@@ -49,6 +49,79 @@ qt_standard_project_setup()   # AUTOMOC / AUTOUIC, CMAKE_INCLUDE_CURRENT_DIR
 # plain source of the executables (SerialUtility and the GUI tests), so it must be on for
 # :/icons/* to exist at run time.
 set(CMAKE_AUTORCC ON)
+
+# ---------------------------------------------------------------------------
+# libssh 0.11.1 (SSH sessions), vendored via FetchContent, OpenSSL crypto backend.
+# Built as a shared library (ssh.dll / libssh.so.4) that lives next to the application;
+# OpenSSL's libcrypto is its only external runtime dependency and is deployed alongside.
+# ---------------------------------------------------------------------------
+find_package(OpenSSL REQUIRED)
+message(STATUS "OpenSSL ${OPENSSL_VERSION}: ${OPENSSL_CRYPTO_LIBRARY}")
+
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)   # URL downloads: file timestamps = extraction time
+endif()
+set(SU_LIBSSH_VERSION 0.11.1)
+set(SU_LIBSSH_URL "https://www.libssh.org/files/0.11/libssh-${SU_LIBSSH_VERSION}.tar.xz")
+set(SU_LIBSSH_SHA256 14b7dcc72e91e08151c58b981a7b570ab2663f630e7d2837645d5a9c612c1b79)
+# libssh's options are cache variables; FORCE so a reconfigure can never flip them. Our own
+# libraries say STATIC explicitly, so BUILD_SHARED_LIBS only affects libssh.
+set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+set(WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_GSSAPI OFF CACHE BOOL "" FORCE)
+set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+set(WITH_NACL OFF CACHE BOOL "" FORCE)
+set(WITH_PCAP OFF CACHE BOOL "" FORCE)
+set(WITH_SERVER ON CACHE BOOL "" FORCE)     # the in-process test server (tests/support)
+set(WITH_SFTP ON CACHE BOOL "" FORCE)
+set(UNIT_TESTING OFF CACHE BOOL "" FORCE)
+set(WITH_SYMBOL_VERSIONING OFF CACHE BOOL "" FORCE)
+# libssh installs itself under our prefix: keep lib/ (not lib64/ or lib/x86_64-linux-gnu/).
+set(CMAKE_INSTALL_LIBDIR lib CACHE PATH "" FORCE)
+# The installed libssh.so must find the bundled libcrypto next to it (dist/lib): a shared
+# library's own dependencies resolve through *its* RUNPATH, not the executable's.
+set(_su_saved_install_rpath "${CMAKE_INSTALL_RPATH}")
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
+FetchContent_Declare(libssh
+    URL "${SU_LIBSSH_URL}"
+    URL_HASH SHA256=${SU_LIBSSH_SHA256})
+FetchContent_MakeAvailable(libssh)
+set(CMAKE_INSTALL_RPATH "${_su_saved_install_rpath}")
+# qt_standard_project_setup() turned AUTOMOC/AUTOUIC on for the whole tree and we enable AUTORCC
+# below; libssh is a plain C library and must not get an (empty) mocs_compilation.cpp compiled
+# with its C-only flags ("-Wstrict-prototypes is valid for C..." noise under GCC).
+set_target_properties(ssh PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+
+# The OpenSSL DLL to ship on Windows (Shining Light and Qt "OpenSSL Toolkit" layouts).
+set(SU_OPENSSL_CRYPTO_DLL "")
+if(WIN32)
+    get_filename_component(_su_ssl_root "${OPENSSL_INCLUDE_DIR}" DIRECTORY)
+    file(GLOB _su_crypto_dlls
+        "${_su_ssl_root}/bin/libcrypto-3-x64.dll"
+        "${_su_ssl_root}/libcrypto-3-x64.dll"
+        "${_su_ssl_root}/bin/libcrypto*.dll")
+    if(_su_crypto_dlls)
+        list(GET _su_crypto_dlls 0 SU_OPENSSL_CRYPTO_DLL)
+        message(STATUS "libcrypto DLL: ${SU_OPENSSL_CRYPTO_DLL}")
+    else()
+        message(WARNING "libcrypto DLL not found under ${_su_ssl_root}; the application will not start without it")
+    endif()
+endif()
+
+# Windows has no rpath: copy the shared libraries a target needs next to it after linking.
+function(su_copy_runtime_dlls target)
+    if(WIN32)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:ssh> $<TARGET_FILE_DIR:${target}>
+            VERBATIM)
+        if(SU_OPENSSL_CRYPTO_DLL)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SU_OPENSSL_CRYPTO_DLL}" $<TARGET_FILE_DIR:${target}>
+                VERBATIM)
+        endif()
+    endif()
+endfunction()
 
 # ---------------------------------------------------------------------------
 # Version header (git hash + project version)
@@ -138,6 +211,18 @@ set(SU_CORE_SOURCES
     src/core/DeviceSimulator.cpp
     src/core/LogReplayer.h
     src/core/LogReplayer.cpp
+    src/core/Transport.h
+    src/core/Transport.cpp
+
+    src/ssh/LibsshInclude.h
+    src/ssh/SshProfile.h
+    src/ssh/SshProfile.cpp
+    src/ssh/SecretStore.h
+    src/ssh/SecretStore.cpp
+    src/ssh/SshConnection.h
+    src/ssh/SshConnection.cpp
+    src/ssh/SshWorker.h
+    src/ssh/SshWorker.cpp
 
     src/terminal/TerminalTypes.h
     src/terminal/CharWidth.h
@@ -154,7 +239,10 @@ qt_add_library(su_core STATIC ${SU_CORE_SOURCES})
 target_include_directories(su_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${SU_GENERATED_DIR}")
-target_link_libraries(su_core PUBLIC Qt6::Core Qt6::Gui Qt6::SerialPort)
+target_link_libraries(su_core PUBLIC Qt6::Core Qt6::Gui Qt6::SerialPort Qt6::Network ssh)
+if(WIN32)
+    target_link_libraries(su_core PUBLIC crypt32)   # SecretStore: DPAPI
+endif()
 su_set_compile_options(su_core)
 
 # ---------------------------------------------------------------------------
@@ -181,6 +269,21 @@ set(SU_APP_LIB_SOURCES
     src/ui/SystemLogViewer.cpp
     src/ui/HexDumpView.h
     src/ui/HexDumpView.cpp
+    src/ui/SshConnectionBar.h
+    src/ui/SshConnectionBar.cpp
+
+    src/dialogs/HostKeyDialog.h
+    src/dialogs/HostKeyDialog.cpp
+    src/dialogs/HostKeyDialog.ui
+    src/dialogs/AuthPromptDialog.h
+    src/dialogs/AuthPromptDialog.cpp
+    src/dialogs/AuthPromptDialog.ui
+    src/dialogs/SshProfilesDialog.h
+    src/dialogs/SshProfilesDialog.cpp
+    src/dialogs/SshProfilesDialog.ui
+    src/dialogs/RemoteFileDialog.h
+    src/dialogs/RemoteFileDialog.cpp
+    src/dialogs/RemoteFileDialog.ui
 
     src/dialogs/AboutDialog.h
     src/dialogs/AboutDialog.cpp
@@ -200,7 +303,9 @@ set(SU_APP_LIB_SOURCES
 )
 
 qt_add_library(su_app STATIC ${SU_APP_LIB_SOURCES})
-target_link_libraries(su_app PUBLIC su_core Qt6::Widgets)
+# Qt6::Svg: the SVG icon engine (iconengines/qsvgicon) is deployed by windeployqt / the Linux
+# tarball only when the module is linked, and :/icons/ssh.svg needs it to render.
+target_link_libraries(su_app PUBLIC su_core Qt6::Widgets Qt6::Svg)
 su_set_compile_options(su_app)
 
 set(SU_APP_SOURCES
@@ -220,6 +325,7 @@ set_target_properties(SerialUtility PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
 target_link_libraries(SerialUtility PRIVATE su_app)
 su_set_compile_options(SerialUtility)
+su_copy_runtime_dlls(SerialUtility)
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -272,6 +378,16 @@ install(TARGETS SerialUtility
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin)
 install(FILES README.md VERSION.txt DESTINATION .)
+# libssh installs its own ssh.dll / libssh.so.4 (bin/ resp. lib/) through its install rules;
+# ship the OpenSSL crypto library it depends on the same way.
+if(WIN32 AND SU_OPENSSL_CRYPTO_DLL)
+    install(FILES "${SU_OPENSSL_CRYPTO_DLL}" DESTINATION bin)
+elseif(UNIX AND NOT APPLE)
+    file(REAL_PATH "${OPENSSL_CRYPTO_LIBRARY}" _su_crypto_real)
+    get_filename_component(_su_crypto_dir "${_su_crypto_real}" DIRECTORY)
+    file(GLOB _su_crypto_so "${_su_crypto_dir}/libcrypto.so.*")   # libcrypto.so.3
+    install(FILES ${_su_crypto_so} DESTINATION lib)
+endif()
 
 qt_generate_deploy_app_script(
     TARGET SerialUtility

@@ -10,9 +10,7 @@
 
 namespace {
 
-constexpr int kMinReconnectMs = 200;
-constexpr int kMaxReconnectMs = 60000;
-constexpr int kDefaultReconnectMs = 1000;
+constexpr int kDefaultReconnectMs = 1000;   ///< matches Transport's default reconnectIntervalMs()
 
 template <typename Enum>
 Enum enumFromVariant(const QVariant& value, Enum fallback, std::initializer_list<Enum> allowed)
@@ -185,7 +183,7 @@ bool SerialSettings::isSimulatedPort() const
 // ---------------------------------------------------------------------------------------
 
 SerialConnection::SerialConnection(QObject* parent)
-    : QObject(parent)
+    : Transport(parent)
 {
     connect(&m_port, &QSerialPort::readyRead, this, &SerialConnection::onReadyRead);
     connect(&m_port, &QSerialPort::errorOccurred, this, &SerialConnection::onPortError);
@@ -197,7 +195,7 @@ SerialConnection::SerialConnection(QObject* parent)
     // enumerator only emits once MainWindow has started it, so headless/test code is unaffected.
     connect(&SerialPortEnumerator::instance(), &SerialPortEnumerator::portRemoved, this,
             [this](const QString& removed) {
-                if (m_state == State::Connected && !m_simulator && m_port.isOpen() &&
+                if (state() == State::Connected && !m_simulator && m_port.isOpen() &&
                     removed.compare(m_settings.portName, Qt::CaseInsensitive) == 0) {
                     qCWarning(lcSerial) << m_settings.portName << "removed from the port list while connected";
                     handleDeviceVanished();
@@ -303,10 +301,11 @@ void SerialConnection::setSettings(const SerialSettings& settings)
     m_settings = applied;   // portName, dtr and rts are always taken from `settings`
 
     if (!failures.isEmpty()) {
-        m_errorString =
+        const QString message =
             tr("Cannot apply %1 to %2: %3").arg(failures.join(QStringLiteral(", ")), m_settings.portName, reason);
-        qCWarning(lcSerial) << m_errorString;
-        emit errorOccurred(m_errorString);
+        setErrorString(message);
+        qCWarning(lcSerial) << message;
+        emit errorOccurred(message);
     }
     if (old.baudRate != applied.baudRate || old.dataBits != applied.dataBits || old.parity != applied.parity ||
         old.stopBits != applied.stopBits || old.flowControl != applied.flowControl) {
@@ -334,66 +333,49 @@ void SerialConnection::setSettings(const SerialSettings& settings)
     }
 }
 
-SerialConnection::State SerialConnection::state() const
-{
-    return m_state;
-}
-
-bool SerialConnection::isOpen() const
-{
-    return m_state == State::Connected;
-}
-
 QString SerialConnection::portName() const
 {
     return m_settings.portName;
 }
 
-QString SerialConnection::errorString() const
+Transport::Kind SerialConnection::kind() const
 {
-    return m_errorString;
+    return Kind::Serial;
 }
 
-quint64 SerialConnection::bytesReceived() const
+QString SerialConnection::displayName() const
 {
-    return m_rx;
+    return m_settings.portName;
 }
 
-quint64 SerialConnection::bytesSent() const
+QString SerialConnection::summary() const
 {
-    return m_tx;
+    return m_settings.summary();
 }
 
-void SerialConnection::resetCounters()
+QVariantMap SerialConnection::settingsMap() const
 {
-    m_rx = 0;
-    m_tx = 0;
-    emit countersChanged(0, 0);
-}
-
-bool SerialConnection::autoReconnect() const
-{
-    return m_autoReconnect;
+    QVariantMap map = m_settings.toMap();
+    map.insert(QStringLiteral("kind"), QStringLiteral("serial"));
+    return map;
 }
 
 void SerialConnection::setAutoReconnect(bool on)
 {
-    m_autoReconnect = on;
-    if (!on && m_state == State::Reconnecting) {
+    if (!on) {
         m_reconnectTimer.stop();
-        qCInfo(lcSerial) << "auto-reconnect disabled, giving up on" << m_settings.portName;
-        setState(State::Disconnected);
+        if (state() == State::Reconnecting) {
+            qCInfo(lcSerial) << "auto-reconnect disabled, giving up on" << m_settings.portName;
+            changeState(State::Disconnected);
+        }
     }
-}
-
-int SerialConnection::reconnectIntervalMs() const
-{
-    return m_reconnectTimer.interval();
+    Transport::setAutoReconnect(on);   // stores the flag; the state is already Disconnected when it matters
 }
 
 void SerialConnection::setReconnectIntervalMs(int ms)
 {
-    const int clamped = qBound(kMinReconnectMs, ms, kMaxReconnectMs);
+    Transport::setReconnectIntervalMs(ms);   // clamps to 200..60000
+    const int clamped = reconnectIntervalMs();
     if (clamped == m_reconnectTimer.interval()) {
         return;   // QTimer::setInterval() restarts an active timer; a no-op write must not delay a pending reconnect
     }
@@ -415,19 +397,6 @@ qint64 SerialConnection::pendingTxBytes() const
     return (m_simulator || !m_port.isOpen()) ? 0 : m_port.bytesToWrite();
 }
 
-QString SerialConnection::stateText(State state)
-{
-    switch (state) {
-    case State::Connected:
-        return tr("Connected");
-    case State::Reconnecting:
-        return tr("Reconnecting...");
-    case State::Disconnected:
-        break;
-    }
-    return tr("Disconnected");
-}
-
 bool SerialConnection::open()
 {
     return openPort(/*quiet=*/false);
@@ -439,10 +408,10 @@ bool SerialConnection::openPort(bool quiet)
         return true;
     }
     const QString name = m_settings.portName;
-    const bool wasReconnecting = (m_state == State::Reconnecting);
+    const bool wasReconnecting = (state() == State::Reconnecting);
 
     auto reportFailure = [this, quiet](const QString& message) {
-        m_errorString = message;
+        setErrorString(message);
         if (quiet) {
             qCDebug(lcSerial) << "reconnect attempt failed:" << message;
         } else {
@@ -487,16 +456,16 @@ bool SerialConnection::openPort(bool quiet)
                 // re-enumeration still recovers.
                 if (!m_reconnectParamErrorReported) {
                     m_reconnectParamErrorReported = true;
-                    // m_errorString is already "Cannot set X on PORT: reason" (applyParameters()).
-                    const QString msg = tr("Port %1 is back but %2").arg(name, m_errorString);
-                    m_errorString = msg;
+                    // errorString() is already "Cannot set X on PORT: reason" (applyParameters()).
+                    const QString msg = tr("Port %1 is back but %2").arg(name, errorString());
+                    setErrorString(msg);
                     qCWarning(lcSerial) << msg;
                     emit errorOccurred(msg);
                 } else {
-                    qCDebug(lcSerial) << "reconnect attempt failed:" << m_errorString;
+                    qCDebug(lcSerial) << "reconnect attempt failed:" << errorString();
                 }
             } else {
-                reportFailure(m_errorString);
+                reportFailure(errorString());
             }
             return false;
         }
@@ -511,25 +480,26 @@ bool SerialConnection::openPort(bool quiet)
             qCDebug(lcSerial) << name << "clear() failed:" << m_port.errorString();
         }
 
-        m_errorString.clear();
+        setErrorString(QString());
         m_reconnectParamErrorReported = false;
         m_reconnectTimer.stop();
         qCInfo(lcSerial) << "opened" << name << m_settings.summary() << "DTR" << m_settings.dtr << "RTS"
                          << m_settings.rts;
-        setState(State::Connected);
+        changeState(State::Connected);
         emit pinsChanged(m_settings.dtr, m_settings.rts);
     }
 
     if (wasReconnecting) {
         qCInfo(lcSerial) << "reconnected to" << name;
         emit reconnected(name);
+        emit connectionRestored(name);
     }
     return true;
 }
 
 void SerialConnection::close()
 {
-    const bool wasReconnecting = m_reconnectTimer.isActive() || m_state == State::Reconnecting;
+    const bool wasReconnecting = m_reconnectTimer.isActive() || state() == State::Reconnecting;
     m_reconnectTimer.stop();
     m_breakTimer.stop();
     m_reconnectParamErrorReported = false;
@@ -546,7 +516,7 @@ void SerialConnection::close()
     } else if (wasReconnecting) {
         qCInfo(lcSerial) << "reconnect to" << m_settings.portName << "cancelled";
     }
-    setState(State::Disconnected);
+    changeState(State::Disconnected);
 }
 
 qint64 SerialConnection::write(const QByteArray& data)
@@ -559,21 +529,20 @@ qint64 SerialConnection::write(const QByteArray& data)
     }
     if (m_simulator) {
         m_simulator->receive(data);
-        m_tx += static_cast<quint64>(data.size());
         emit dataSent(data);
-        emit countersChanged(m_rx, m_tx);
+        countSent(data.size());   // emits countersChanged()
         return data.size();
     }
     const qint64 written = m_port.write(data);
     if (written < 0) {
-        m_errorString = tr("Write to %1 failed: %2").arg(m_settings.portName, m_port.errorString());
-        qCWarning(lcSerial) << m_errorString;
-        emit errorOccurred(m_errorString);
+        const QString message = tr("Write to %1 failed: %2").arg(m_settings.portName, m_port.errorString());
+        setErrorString(message);
+        qCWarning(lcSerial) << message;
+        emit errorOccurred(message);
         return -1;
     }
-    m_tx += static_cast<quint64>(written);
     emit dataSent(written == data.size() ? data : data.left(written));
-    emit countersChanged(m_rx, m_tx);
+    countSent(written);   // emits countersChanged()
     return written;
 }
 
@@ -584,9 +553,10 @@ void SerialConnection::setDtr(bool on)
         qCDebug(lcSerial) << m_settings.portName << "DTR" << on << "(simulated)";
     } else if (m_port.isOpen()) {
         if (!m_port.setDataTerminalReady(on)) {
-            m_errorString = tr("Cannot set DTR on %1: %2").arg(m_settings.portName, m_port.errorString());
-            qCWarning(lcSerial) << m_errorString;
-            emit errorOccurred(m_errorString);
+            const QString message = tr("Cannot set DTR on %1: %2").arg(m_settings.portName, m_port.errorString());
+            setErrorString(message);
+            qCWarning(lcSerial) << message;
+            emit errorOccurred(message);
         } else {
             qCDebug(lcSerial) << m_settings.portName << "DTR" << on;
         }
@@ -603,9 +573,10 @@ void SerialConnection::setRts(bool on)
         if (m_settings.flowControl == QSerialPort::HardwareControl) {
             qCDebug(lcSerial) << m_settings.portName << "RTS is driven by hardware flow control; stored only";
         } else if (!m_port.setRequestToSend(on)) {
-            m_errorString = tr("Cannot set RTS on %1: %2").arg(m_settings.portName, m_port.errorString());
-            qCWarning(lcSerial) << m_errorString;
-            emit errorOccurred(m_errorString);
+            const QString message = tr("Cannot set RTS on %1: %2").arg(m_settings.portName, m_port.errorString());
+            setErrorString(message);
+            qCWarning(lcSerial) << message;
+            emit errorOccurred(message);
         } else {
             qCDebug(lcSerial) << m_settings.portName << "RTS" << on;
         }
@@ -624,9 +595,10 @@ bool SerialConnection::sendBreak(int durationMs)
         return false;
     }
     if (!m_port.setBreakEnabled(true)) {
-        m_errorString = tr("Cannot send BREAK on %1: %2").arg(m_settings.portName, m_port.errorString());
-        qCWarning(lcSerial) << m_errorString;
-        emit errorOccurred(m_errorString);
+        const QString message = tr("Cannot send BREAK on %1: %2").arg(m_settings.portName, m_port.errorString());
+        setErrorString(message);
+        qCWarning(lcSerial) << message;
+        emit errorOccurred(message);
         return false;
     }
     qCInfo(lcSerial) << m_settings.portName << "BREAK asserted for" << durationMs << "ms";
@@ -654,9 +626,8 @@ void SerialConnection::handleIncoming(const QByteArray& data)
     if (data.isEmpty()) {
         return;
     }
-    m_rx += static_cast<quint64>(data.size());
     emit dataReceived(data);
-    emit countersChanged(m_rx, m_tx);
+    countReceived(data.size());   // emits countersChanged()
 }
 
 void SerialConnection::onPortError(QSerialPort::SerialPortError error)
@@ -666,8 +637,8 @@ void SerialConnection::onPortError(QSerialPort::SerialPortError error)
     }
     // Errors raised while not connected (during open(), during a reconnect attempt, from a
     // setter on a closed port) are reported by the code that triggered them.
-    if (m_state != State::Connected) {
-        qCDebug(lcSerial) << m_settings.portName << "ignored error while" << stateText(m_state) << ":"
+    if (state() != State::Connected) {
+        qCDebug(lcSerial) << m_settings.portName << "ignored error while" << stateText(state()) << ":"
                           << portErrorName(error) << m_port.errorString();
         return;
     }
@@ -696,9 +667,12 @@ void SerialConnection::onPortError(QSerialPort::SerialPortError error)
             handleDeviceVanished();
             break;
         }
-        m_errorString = tr("Port %1: %2").arg(name, m_port.errorString());
-        qCWarning(lcSerial) << m_errorString << "(" << portErrorName(error) << ")";
-        emit errorOccurred(m_errorString);
+        {
+            const QString message = tr("Port %1: %2").arg(name, m_port.errorString());
+            setErrorString(message);
+            qCWarning(lcSerial) << message << "(" << portErrorName(error) << ")";
+            emit errorOccurred(message);
+        }
         break;
     default:
         // OpenError / NotOpenError / UnsupportedOperationError are reported by their callers.
@@ -709,7 +683,7 @@ void SerialConnection::onPortError(QSerialPort::SerialPortError error)
 
 void SerialConnection::tryReconnect()
 {
-    if (m_state != State::Reconnecting) {
+    if (state() != State::Reconnecting) {
         m_reconnectTimer.stop();
         return;
     }
@@ -744,22 +718,22 @@ bool SerialConnection::isPortListed(bool useEnumeratorSnapshot) const
                        [&sameName](const QSerialPortInfo& info) { return sameName(info.portName()); });
 }
 
-void SerialConnection::setState(State state)
+void SerialConnection::changeState(State newState)
 {
-    if (m_state == state) {
+    if (state() == newState) {
         return;
     }
-    m_state = state;
-    qCDebug(lcSerial) << m_settings.portName << "state ->" << stateText(state);
-    emit stateChanged(state);
+    qCDebug(lcSerial) << m_settings.portName << "state ->" << stateText(newState);
+    setState(newState);   // Transport: stores and emits stateChanged()
 }
 
 bool SerialConnection::applyParameters()
 {
     const QString name = m_settings.portName;
     auto fail = [this, &name](const QString& what) {
-        m_errorString = tr("Cannot set %1 on %2: %3").arg(what, name, m_port.errorString());
-        qCWarning(lcSerial) << m_errorString;
+        const QString message = tr("Cannot set %1 on %2: %3").arg(what, name, m_port.errorString());
+        setErrorString(message);
+        qCWarning(lcSerial) << message;
         return false;
     };
     if (!m_port.setBaudRate(m_settings.baudRate)) {
@@ -788,7 +762,7 @@ bool SerialConnection::openSimulator(bool quiet)
 {
     const QString name = m_settings.portName;
     auto fail = [this, quiet](const QString& message) {
-        m_errorString = message;
+        setErrorString(message);
         if (quiet) {
             qCDebug(lcSerial) << "reconnect attempt failed:" << message;
         } else {
@@ -798,8 +772,8 @@ bool SerialConnection::openSimulator(bool quiet)
         return false;
     };
 
-    const std::optional<DeviceSimulator::Kind> kind = DeviceSimulator::kindFromPortName(name);
-    if (!kind) {
+    const std::optional<DeviceSimulator::Kind> simKind = DeviceSimulator::kindFromPortName(name);
+    if (!simKind) {
         return fail(tr("Port %1 not found").arg(name));
     }
     if (quiet) {
@@ -812,7 +786,7 @@ bool SerialConnection::openSimulator(bool quiet)
         DeviceSimulator::markPresent(name);
     }
 
-    m_simulator = new DeviceSimulator(*kind, m_settings.baudRate, this);
+    m_simulator = new DeviceSimulator(*simKind, m_settings.baudRate, this);
     connect(m_simulator, &DeviceSimulator::dataReady, this, &SerialConnection::handleIncoming);
     connect(m_simulator, &DeviceSimulator::vanished, this, [this](int returnsAfterMs) {
         qCWarning(lcSerial) << m_settings.portName << "simulated device went down"
@@ -822,11 +796,11 @@ bool SerialConnection::openSimulator(bool quiet)
         handleDeviceVanished();
     });
 
-    m_errorString.clear();
+    setErrorString(QString());
     m_reconnectParamErrorReported = false;
     m_reconnectTimer.stop();
     qCInfo(lcSerial) << "opened" << name << m_settings.summary() << "(simulated device)";
-    setState(State::Connected);
+    changeState(State::Connected);
     emit pinsChanged(m_settings.dtr, m_settings.rts);
     m_simulator->start();
     return true;
@@ -854,16 +828,19 @@ void SerialConnection::handleDeviceVanished()
         m_port.close();
     }
     // errorOccurred() first (generic, keeps the header contract that every port error is
-    // forwarded), then portDisappeared() so its more specific status message wins in the UI.
-    m_errorString = tr("Port %1 disconnected").arg(name);
-    emit errorOccurred(m_errorString);
+    // forwarded), then portDisappeared() so its more specific status message wins in the UI,
+    // then the transport-generic connectionLost() for kind-agnostic listeners (SessionWidget).
+    const QString message = tr("Port %1 disconnected").arg(name);
+    setErrorString(message);
+    emit errorOccurred(message);
     emit portDisappeared(name);
-    if (m_autoReconnect) {
+    emit connectionLost(name);
+    if (autoReconnect()) {
         m_reconnectParamErrorReported = false;
-        setState(State::Reconnecting);
+        changeState(State::Reconnecting);
         m_reconnectTimer.start();
         qCInfo(lcSerial) << "waiting for" << name << "to come back (every" << m_reconnectTimer.interval() << "ms)";
     } else {
-        setState(State::Disconnected);
+        changeState(State::Disconnected);
     }
 }
