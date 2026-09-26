@@ -115,6 +115,32 @@
          </property>
         </widget>
        </item>
+       <item row="6" column="1">
+        <widget class="QCheckBox" name="pauseWhileSelectingCheck">
+         <property name="toolTip">
+          <string>Like the Windows console: starting a selection freezes the display while incoming bytes queue up. Enter copies the selection and resumes, Esc cancels. Also in View &gt; Pause Output While Selecting.</string>
+         </property>
+         <property name="text">
+          <string>Pause output while selecting text (Enter copies, Esc cancels)</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="1">
+        <widget class="QCheckBox" name="rightClickPastesCheck">
+         <property name="toolTip">
+          <string>Like cmd.exe QuickEdit: a right click pastes the clipboard, or copies the selected text when there is a selection. The context menu opens with Shift+right click, the Menu key or Shift+F10. Also in View &gt; Right Click Pastes.</string>
+         </property>
+         <property name="text">
+          <string>Right click pastes the clipboard / copies the selection (Shift+right click opens the menu)</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
       </layout>
      </widget>
      <widget class="QWidget" name="tabInput">

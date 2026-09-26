@@ -37,7 +37,12 @@ class LogReplayer;
  *  - connection.errorOccurred -> statusMessage(msg, 5000) + qCWarning(lcSerial)
  *  - connection.portDisappeared / reconnected -> status messages; the terminal shows a
  *    dim system line "--- port COM8 disappeared, waiting to reconnect ---" / "--- reconnected ---"
- *    (written via terminal()->parser()->feed() with SGR dim so it is visually distinct).
+ *    (fed through terminal()->feedData() with SGR dim so it is visually distinct and queues like
+ *    device output while the display is paused for a selection).
+ *  - terminal.outputPausedChanged -> statusMessage(persistentStatusMessage(), 0): "Output paused
+ *    while selecting - Enter copies, Esc cancels" on pause, an empty string on resume (MainWindow
+ *    clears the status bar and re-shows the hint after a transient message / on tab change);
+ *    terminal.pauseBufferOverflow -> a 5 s status message with the flushed size.
  *  - terminal.sendData        -> sendBytes()
  *  - input.sendRequested      -> sendBytes(payload) (HEX: verbatim; Esc: text runs transcoded to the
  *                                session encoding, \xHH bytes verbatim; plain: transcoded when not UTF-8)
@@ -95,12 +100,20 @@ public:
     /// Public getter added at integration together with the replay slots below.
     bool isReplaying() const;
 
+    /// The status-bar text for a lasting state of this session - currently the terminal paused
+    /// while selecting ("Output paused while selecting - Enter copies, Esc cancels") - or an empty
+    /// string. statusMessage(text, 0) announces every transition; MainWindow re-reads this when
+    /// the tab becomes current and once a transient message expired, so the hint never outlives a
+    /// tab switch or a close and is not lost behind a 3 s message.
+    QString persistentStatusMessage() const;
+
     /// Pre-select a port (used when restoring sessions / "New Session" with a port).
     void setPortName(const QString& portName);
     QString portName() const;
 
     /// Re-read AppSettings and push font/theme/scrollback/enter/backspace/echo/encoding/
-    /// implicitCr/bell/cursorBlink to the terminal and autoReconnect/interval to the connection.
+    /// implicitCr/bell/cursorBlink/pauseWhileSelecting/rightClickPastes to the terminal and
+    /// autoReconnect/interval to the connection.
     void applyPreferences();
 
 public slots:
@@ -110,7 +123,10 @@ public slots:
     bool connectPort();
     void disconnectPort();
     void toggleConnection();
-    void clearTerminal();          ///< terminal()->clearScreen() and hexView()->clearAll()
+    /// Toolbar / Session > Clear (Ctrl+Shift+L): terminal()->clearAll() - screen *and* scrollback
+    /// gone, cursor home, attributes and modes kept - and hexView()->clearAll(); a paused display
+    /// is cleared first and its queued bytes flushed afterwards. resetTerminal() is the full RIS.
+    void clearTerminal();
     void resetTerminal();
     void startLogging();           ///< QFileDialog::getSaveFileName seeded with suggestFileName(); uses AppSettings format
     void startLoggingTo(const QString& filePath);

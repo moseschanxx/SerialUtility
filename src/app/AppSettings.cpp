@@ -18,6 +18,8 @@ constexpr auto kScrollback = "terminal/scrollback";
 constexpr auto kCursorBlink = "terminal/cursorBlink";
 constexpr auto kBell = "terminal/bell";
 constexpr auto kImplicitCr = "terminal/implicitCr";
+constexpr auto kPauseWhileSelecting = "terminal/pauseWhileSelecting";
+constexpr auto kRightClickPastes = "terminal/rightClickPastes";
 constexpr auto kEnterSends = "input/enterSends";
 constexpr auto kBackspaceDelete = "input/backspaceSendsDelete";
 constexpr auto kLocalEcho = "input/localEcho";
@@ -198,6 +200,26 @@ bool AppSettings::implicitCr() const
 void AppSettings::setImplicitCr(bool on)
 {
     SU_WRITE_SETTING(kImplicitCr, on);
+}
+
+bool AppSettings::pauseWhileSelecting() const
+{
+    return readValue(kPauseWhileSelecting, true).toBool();
+}
+
+void AppSettings::setPauseWhileSelecting(bool on)
+{
+    SU_WRITE_SETTING(kPauseWhileSelecting, on);
+}
+
+bool AppSettings::rightClickPastes() const
+{
+    return readValue(kRightClickPastes, true).toBool();
+}
+
+void AppSettings::setRightClickPastes(bool on)
+{
+    SU_WRITE_SETTING(kRightClickPastes, on);
 }
 
 // ---- Input behaviour -------------------------------------------------------------------

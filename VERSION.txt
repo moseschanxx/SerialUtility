@@ -1,3 +1,9 @@
+V0.2.0
+	Pause output while selecting (cmd.exe mark mode): starting a mouse selection freezes the display while incoming bytes queue up; Enter copies the selection to the clipboard and resumes, Esc cancels; on by default, switchable in View > Pause Output While Selecting and in Preferences > Terminal. Logging and the hex view keep receiving data while the display is paused.
+	cmd.exe-style right click: pastes the clipboard, or copies the selection when text is selected; the context menu moves to Shift+right click and the Menu key. On by default, switchable in View and Preferences.
+	Clear (toolbar / Session menu / Ctrl+Shift+L) now wipes the screen, the scrollback and the hex view; Reset Terminal remains the full VT reset.
+	CI/CD fixes for GCC (warnings as errors), Qt deploy with a relative install prefix, and an environment-independent Linux self-containment check.
+
 V0.1.0
 	Initial release of BuildAI Serial Utility.
 	Multi-tab serial terminal with VT100/ANSI emulation (colours, cursor control, scroll regions, scrollback).

@@ -1,4 +1,4 @@
-# BuildAI Serial Utility — Test Report (v0.1.0, 2026-09-21)
+# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27)
 
 This report records how the first release of BuildAI Serial Utility was verified on
 2026-09-20/21, what was tested at each layer, what was found and fixed, and what could
@@ -137,3 +137,23 @@ ctest --test-dir build\Release -C Release -R tst_terminalwidget --output-on-fail
 .\scripts\gui-smoke.ps1 -Scenario linux            # real window + screenshots (keep the desktop free)
 .\scripts\gui-smoke.ps1 -Scenario hardware -HardwarePort COM6
 ```
+
+## 10. v0.2.0 — cmd.exe-style mark mode, right-click paste, Clear (2026-09-27)
+
+Added in 0.2.0: **Pause output while selecting** (a mouse selection freezes the display while bytes queue
+up; Enter copies + resumes, Esc cancels; badge + status-bar hint; overflow-safe), **right-click pastes /
+copies the selection** (context menu on Shift+right-click or the Menu key), and **Clear wipes screen +
+scrollback + hex view** (Reset Terminal stays the full VT reset). Both mouse behaviours are on by default
+and switchable in View and Preferences > Terminal.
+
+| Layer | Result |
+|---|---|
+| Unit + GUI suites, Windows (MSVC, Release, clean build) | 16/16 suites, 706 checks passed, 2 environment skips (GB18030) |
+| Unit + GUI suites, Ubuntu 22.04 WSL (GCC 11, `-DSU_WARNINGS_AS_ERRORS=ON`) | zero warnings/errors, 16/16 suites |
+| New tests | terminal widget 89 → 120 checks (pause state machine, keys swallowed, overflow, badge painting, right-click copy/paste/Shift-menu, Clear), session widget 55 → 62 (logger/hex view keep flowing while paused, system lines queued, Clear, right-click over SIM:loopback), main window 51 → 56 (actions, two-way sync), dialogs 44 → 46, terminal screen 56 → 57 (clearAll with alternate screen) |
+| Adversarial reviews | 2 passes; fixed: status hint leaking across tabs, Clear not wiping the saved primary screen behind an alternate-screen program, a stale drag state disabling right-click after a popup, stale header contracts |
+| Real window (`gui-smoke.ps1 -Scenario markmode`, SIM:mcu streaming telemetry) | drag-select → badge "Output paused, N bytes waiting" + status hint, lines held; Enter → clipboard = selection, 5 queued lines appear; Esc → resumes, clipboard untouched; right-click on a selection → copied; right-click without selection → clipboard pasted and echoed by the device |
+| Menu tour | View menu shows "Pause Output While Selecting" and "Right Click Pastes (cmd.exe style)", both checked |
+
+Known behaviour choices: a DSR/DA query received while paused is answered when the display resumes (the
+query is not parsed earlier); double-clicking a word while already paused first resumes (as conhost does).

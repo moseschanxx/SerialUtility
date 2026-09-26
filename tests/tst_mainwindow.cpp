@@ -40,8 +40,10 @@
 #include "core/SerialConnection.h"
 #include "dialogs/AboutDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
+#include "ui/HexDumpView.h"
 #include "ui/MainWindow.h"
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
@@ -166,6 +168,8 @@ const ActionSpec kActions[] = {
     {"actionHexView", "Ctrl+Shift+H", true},
     {"actionShowCommandInput", "", true},
     {"actionShowQuickCommands", "", true},
+    {"actionPauseWhileSelecting", "", true},
+    {"actionRightClickPastes", "", true},
     {"actionSystemLog", "", true},
     {"actionZoomIn", "Ctrl++", false},
     {"actionZoomOut", "Ctrl+-", false},
@@ -259,6 +263,11 @@ private slots:
     void showCommandInputToggle();
     void showQuickCommandsToggle();
     void panelVisibilityPersistsAcrossWindows();
+    void pauseWhileSelectingToggle();
+    void pauseStatusMessage();
+    void pauseHintFollowsCurrentTab();
+    void rightClickPastesToggle();
+    void clearActionWipesEverything();
     void systemLogDockToggle();
     void zoomActions();
 
@@ -963,6 +972,296 @@ void Tst_mainwindow::panelVisibilityPersistsAcrossWindows()
     QVERIFY(!action(second, "actionShowQuickCommands")->isChecked());
     QVERIFY(second.currentSession()->commandInput()->isHidden());
     QVERIFY(second.currentSession()->quickCommandBar()->isHidden());
+}
+
+void Tst_mainwindow::pauseWhileSelectingToggle()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession(kMcu);
+    QAction* pause = action(w, "actionPauseWhileSelecting");
+    QVERIFY(pause);
+    QVERIFY(pause->isCheckable());
+    QVERIFY(pause->isChecked());   // AppSettings default: on
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+    QVERIFY(!pause->statusTip().isEmpty());
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(w.sessionAt(i)->terminal()->pauseWhileSelecting());
+    }
+    // View menu, right after Show Quick Commands.
+    auto* view = child<QMenu>(&w, "menuView");
+    QVERIFY(view);
+    const QList<QAction*> viewActions = view->actions();
+    const qsizetype index = viewActions.indexOf(pause);
+    QVERIFY(index > 0);
+    QCOMPARE(viewActions.at(index - 1), action(w, "actionShowQuickCommands"));
+
+    // Toggling writes the setting and reaches every session's terminal.
+    pause->trigger();
+    QVERIFY(!pause->isChecked());
+    QVERIFY(!AppSettings::instance().pauseWhileSelecting());
+    QCOMPARE(QSettings().value(QStringLiteral("terminal/pauseWhileSelecting")).toBool(), false);
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(!w.sessionAt(i)->terminal()->pauseWhileSelecting());
+    }
+    SessionWidget* later = w.newSession();
+    QVERIFY(!later->terminal()->pauseWhileSelecting());
+
+    // A settings write from elsewhere (the Preferences dialog) re-checks the action.
+    AppSettings::instance().setPauseWhileSelecting(true);
+    QVERIFY(pause->isChecked());
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(w.sessionAt(i)->terminal()->pauseWhileSelecting());
+    }
+
+    // Unchecking while a terminal is paused resumes it (the selection is kept).
+    TerminalWidget* terminal = w.currentSession()->terminal();
+    terminal->feedData("hello\r\n");
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    terminal->feedData("queued\r\n");
+    QVERIFY(terminal->screen()->lineText(1).isEmpty());
+    pause->trigger();
+    QVERIFY(!pause->isChecked());
+    QVERIFY(!terminal->isOutputPaused());
+    QVERIFY(terminal->hasSelection());
+    QCOMPARE(terminal->screen()->lineText(1), QStringLiteral("queued"));
+
+    // A window built later starts from the persisted state.
+    MainWindow second;
+    QVERIFY(!action(second, "actionPauseWhileSelecting")->isChecked());
+    QVERIFY(!second.currentSession()->terminal()->pauseWhileSelecting());
+}
+
+void Tst_mainwindow::pauseStatusMessage()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    SessionWidget* session = w.currentSession();
+    TerminalWidget* terminal = session->terminal();
+    terminal->feedData("select me\r\n");
+    w.statusBar()->clearMessage();
+
+    // A persistent hint while the display is frozen ...
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    QVERIFY2(w.statusBar()->currentMessage().contains(QStringLiteral("Output paused")),
+             qPrintable(w.statusBar()->currentMessage()));
+    terminal->feedData("queued\r\n");
+    QTest::qWait(50);
+    QVERIFY(w.statusBar()->currentMessage().contains(QStringLiteral("Output paused")));
+
+    // ... cleared again on resume (an empty session message clears the status bar).
+    session->focusTerminal();
+    QTest::keyClick(terminal, Qt::Key_Escape);
+    QVERIFY(!terminal->isOutputPaused());
+    QVERIFY2(w.statusBar()->currentMessage().isEmpty(), qPrintable(w.statusBar()->currentMessage()));
+    QCOMPARE(terminal->screen()->lineText(1), QStringLiteral("queued"));
+
+    // A background tab's pause does not touch the status bar.
+    w.newSession();
+    QVERIFY(w.currentSession() != session);
+    w.statusBar()->clearMessage();
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    QVERIFY(w.statusBar()->currentMessage().isEmpty());
+    terminal->clearSelection();
+    QVERIFY(!terminal->isOutputPaused());
+}
+
+void Tst_mainwindow::pauseHintFollowsCurrentTab()
+{
+    // The persistent "Output paused" hint belongs to the tab that posted it: it leaves with a tab
+    // switch, comes back with the tab, survives a transient message and dies with the tab.
+    const QString hint = QStringLiteral("Output paused");
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    SessionWidget* first = w.currentSession();
+    TerminalWidget* t1 = first->terminal();
+    t1->feedData("first tab\r\n");
+    w.statusBar()->clearMessage();
+    t1->selectAll();
+    QVERIFY(t1->isOutputPaused());
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));
+    t1->feedData("queued while in the background\r\n");
+
+    // Switching to another tab drops the first tab's hint (the tab itself stays paused) ...
+    SessionWidget* second = w.newSession();
+    QCOMPARE(w.currentSession(), second);
+    QVERIFY2(!w.statusBar()->currentMessage().contains(hint), qPrintable(w.statusBar()->currentMessage()));
+    QVERIFY(t1->isOutputPaused());
+    QCOMPARE(t1->pendingPausedBytes(), qint64(32));
+    // ... and switching back shows it again.
+    tabs(w)->setCurrentIndex(0);
+    QCOMPARE(w.currentSession(), first);
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));
+
+    // A transient message replaces the hint for a moment; the hint returns once it expires.
+    w.statusBar()->showMessage(QStringLiteral("transient"), 100);
+    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("transient"));
+    QTRY_VERIFY_WITH_TIMEOUT(w.statusBar()->currentMessage().contains(hint), 3000);
+    // A session message too ("Not connected", 3 s): a resume in the meantime clears everything
+    // and the expired transient must not bring the hint back.
+    first->sendBytes(QByteArrayLiteral("x"));
+    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("Not connected"));
+    first->focusTerminal();
+    QTest::keyClick(t1, Qt::Key_Escape);
+    QVERIFY(!t1->isOutputPaused());
+    QCOMPARE(t1->screen()->lineText(1), QStringLiteral("queued while in the background"));
+    QVERIFY(!w.statusBar()->currentMessage().contains(hint));
+    QTest::qWait(150);
+    QVERIFY(!w.statusBar()->currentMessage().contains(hint));
+
+    // Both tabs paused: each shows its own hint; resuming one does not clear the other's.
+    TerminalWidget* t2 = second->terminal();
+    t2->feedData("second tab\r\n");
+    t1->selectAll();
+    QVERIFY(t1->isOutputPaused());
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));
+    tabs(w)->setCurrentIndex(1);
+    QVERIFY(!w.statusBar()->currentMessage().contains(hint));
+    t2->selectAll();
+    QVERIFY(t2->isOutputPaused());
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));
+    tabs(w)->setCurrentIndex(0);
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));   // first is still paused
+    t1->clearSelection();
+    QVERIFY(!w.statusBar()->currentMessage().contains(hint));
+    tabs(w)->setCurrentIndex(1);
+    QVERIFY(w.statusBar()->currentMessage().contains(hint));   // second still is
+
+    // Closing the paused tab with a queue: no crash, and its hint leaves with it.
+    t2->feedData(QByteArray(10000, 'q'));
+    QVERIFY(t2->isOutputPaused());
+    action(w, "actionCloseSession")->trigger();
+    QCOMPARE(w.sessionCount(), 1);
+    QCOMPARE(w.currentSession(), first);
+    QVERIFY2(!w.statusBar()->currentMessage().contains(hint), qPrintable(w.statusBar()->currentMessage()));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);   // the widget with the queue is gone now
+    QTest::qWait(150);   // past its badge interval: nothing fires into freed memory
+    QVERIFY(!w.statusBar()->currentMessage().contains(hint));
+    QVERIFY(!t1->isOutputPaused());
+}
+
+void Tst_mainwindow::rightClickPastesToggle()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession(kMcu);
+    QAction* rightClick = action(w, "actionRightClickPastes");
+    QVERIFY(rightClick);
+    QVERIFY(rightClick->isCheckable());
+    QVERIFY(rightClick->isChecked());   // AppSettings default: on
+    QVERIFY(AppSettings::instance().rightClickPastes());
+    QVERIFY(!rightClick->statusTip().isEmpty());
+    QVERIFY(rightClick->text().contains(QStringLiteral("cmd.exe")));
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(w.sessionAt(i)->terminal()->rightClickPastes());
+    }
+    // View menu, right after Pause Output While Selecting.
+    auto* view = child<QMenu>(&w, "menuView");
+    QVERIFY(view);
+    const QList<QAction*> viewActions = view->actions();
+    const qsizetype index = viewActions.indexOf(rightClick);
+    QVERIFY(index > 0);
+    QCOMPARE(viewActions.at(index - 1), action(w, "actionPauseWhileSelecting"));
+
+    // Toggling writes the setting and reaches every session's terminal, current or not.
+    rightClick->trigger();
+    QVERIFY(!rightClick->isChecked());
+    QVERIFY(!AppSettings::instance().rightClickPastes());
+    QCOMPARE(QSettings().value(QStringLiteral("terminal/rightClickPastes")).toBool(), false);
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(!w.sessionAt(i)->terminal()->rightClickPastes());
+    }
+    QVERIFY(!w.currentSession()->terminal()->rightClickPastes());
+    SessionWidget* later = w.newSession();
+    QVERIFY(!later->terminal()->rightClickPastes());
+
+    // A settings write from elsewhere (the Preferences dialog) re-checks the action.
+    AppSettings::instance().setRightClickPastes(true);
+    QVERIFY(rightClick->isChecked());
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        QVERIFY(w.sessionAt(i)->terminal()->rightClickPastes());
+    }
+    QVERIFY(w.currentSession()->terminal()->rightClickPastes());
+
+    // Through the whole stack: a right click on the current (disconnected) session's terminal
+    // copies its selection; the other setting is not touched by this one.
+    TerminalWidget* terminal = w.currentSession()->terminal();
+    terminal->feedData("copy me\r\n");
+    terminal->selectAll();
+    QCOMPARE(terminal->selectedText(), QStringLiteral("copy me"));
+    QApplication::clipboard()->clear();
+    QWidget* vp = terminal->viewport();
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, QPoint(vp->width() / 2, vp->height() / 2));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("copy me"));
+    QVERIFY(!terminal->hasSelection());
+    QVERIFY(action(w, "actionPauseWhileSelecting")->isChecked());
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+
+    // A window built later starts from the persisted state.
+    rightClick->trigger();
+    QVERIFY(!AppSettings::instance().rightClickPastes());
+    MainWindow second;
+    QVERIFY(!action(second, "actionRightClickPastes")->isChecked());
+    QVERIFY(!second.currentSession()->terminal()->rightClickPastes());
+    QVERIFY(action(second, "actionPauseWhileSelecting")->isChecked());
+}
+
+void Tst_mainwindow::clearActionWipesEverything()
+{
+    // Session > Clear / the toolbar button (Ctrl+Shift+L) on the current tab: screen, scrollback
+    // and hex view are emptied; another tab is untouched; Reset Terminal stays the full reset.
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    SessionWidget* first = w.currentSession();
+    TerminalWidget* t1 = first->terminal();
+    QByteArray burst;
+    for (int i = 0; i < t1->visibleRows() + 50; ++i) {
+        burst += "history " + QByteArray::number(i) + "\r\n";
+    }
+    t1->feedData(burst);
+    t1->feedData(QByteArrayLiteral("\x1b[4mstill underlined"));
+    QVERIFY(t1->screen()->scrollbackSize() > 0);
+    first->hexView()->appendReceived(burst);
+    first->hexView()->flushPending();
+    QVERIFY(!first->hexView()->toPlainText().isEmpty());
+    const Terminal::Attributes attributes = t1->screen()->currentAttributes();
+    QVERIFY(attributes != Terminal::Attributes());
+
+    SessionWidget* second = w.newSession();
+    TerminalWidget* t2 = second->terminal();
+    t2->feedData(burst);
+    QVERIFY(t2->screen()->scrollbackSize() > 0);
+    tabs(w)->setCurrentIndex(0);
+    QCOMPARE(w.currentSession(), first);
+
+    QAction* clear = action(w, "actionClear");
+    QVERIFY(clear->isEnabled());
+    QVERIFY(!clear->toolTip().isEmpty());
+    clear->trigger();
+    QCOMPARE(t1->screen()->scrollbackSize(), 0);
+    QCOMPARE(t1->screen()->totalLines(), t1->screen()->rows());
+    for (int r = 0; r < t1->screen()->rows(); ++r) {
+        QVERIFY2(t1->screen()->line(r).text().isEmpty(), qPrintable(QStringLiteral("row %1 not blank").arg(r)));
+    }
+    QCOMPARE(t1->screen()->cursor().row, 0);
+    QCOMPARE(t1->screen()->cursor().col, 0);
+    QVERIFY(first->hexView()->toPlainText().isEmpty());
+    QVERIFY(t1->screen()->currentAttributes() == attributes);   // Clear is not Reset
+    QVERIFY(t2->screen()->scrollbackSize() > 0);                 // the other tab keeps its output
+
+    // The shortcut takes the same path.
+    t1->feedData(burst);
+    QVERIFY(t1->screen()->scrollbackSize() > 0);
+    first->focusTerminal();
+    QTest::keyClick(t1, Qt::Key_L, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(t1->screen()->scrollbackSize(), 0);
+    QVERIFY(t1->screen()->line(0).text().isEmpty());
+
+    action(w, "actionResetTerminal")->trigger();
+    QVERIFY(t1->screen()->currentAttributes() == Terminal::Attributes());
 }
 
 void Tst_mainwindow::systemLogDockToggle()

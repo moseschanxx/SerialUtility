@@ -126,6 +126,8 @@
     <addaction name="separator"/>
     <addaction name="actionShowCommandInput"/>
     <addaction name="actionShowQuickCommands"/>
+    <addaction name="actionPauseWhileSelecting"/>
+    <addaction name="actionRightClickPastes"/>
     <addaction name="actionSystemLog"/>
     <addaction name="separator"/>
     <addaction name="actionZoomIn"/>
@@ -338,7 +340,7 @@
     <string>C&amp;lear</string>
    </property>
    <property name="toolTip">
-    <string>Clear the terminal screen and hex view</string>
+    <string>Clear the terminal screen, the scrollback and the hex view (Reset Terminal also resets the emulator)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+L</string>
@@ -523,6 +525,40 @@
    </property>
    <property name="text">
     <string>Show &amp;Quick Commands</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionPauseWhileSelecting">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Pause Output While &amp;Selecting</string>
+   </property>
+   <property name="statusTip">
+    <string>Freeze the display while text is selected; Enter copies the selection and resumes (cmd.exe mark mode)</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionRightClickPastes">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Right Click &amp;Pastes (cmd.exe style)</string>
+   </property>
+   <property name="statusTip">
+    <string>Right-click pastes the clipboard, or copies the selected text; Shift+right-click opens the context menu</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>

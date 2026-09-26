@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDebug>
 #include <QDir>
@@ -15,6 +16,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -35,6 +37,7 @@
 #include "core/SerialPortEnumerator.h"
 #include "core/SessionLogger.h"
 #include "dialogs/SendFileDialog.h"
+#include "terminal/AnsiParser.h"
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
@@ -196,7 +199,14 @@ private slots:
     void loopbackConnectWithoutPort();
     void loopbackToggleConnection();
     void loopbackClearTerminal();
+    void clearTerminalWipesScrollbackAndHex();
+    void clearTerminalDuringReplay();
+    void rightClickPastesFollowsPreferences();
     void loopbackSendBreak();
+    void loopbackPausedTerminalStillFeedsHexAndLogger();
+    void pauseWhileSelectingFollowsPreferences();
+    void replayWhilePausedQueuesAndFlushes();
+    void reconnectWhilePausedQueuesSystemLines();
 
     // ---- SessionWidget over SIM:linux -----------------------------------------------
     void linuxLoginUnameReboot();
@@ -297,6 +307,8 @@ void Tst_sessionwidget::init()
     app.setLogFormat(QStringLiteral("text"));
     app.setLogIncludeTx(true);
     app.setEncoding(QStringLiteral("UTF-8"));
+    app.setPauseWhileSelecting(true);
+    app.setRightClickPastes(true);
 }
 
 std::unique_ptr<SessionWidget> Tst_sessionwidget::newSession()
@@ -1183,14 +1195,169 @@ void Tst_sessionwidget::loopbackClearTerminal()
     session->clearTerminal();
     QVERIFY(visibleText(terminal).trimmed().isEmpty());
     QVERIFY(session->hexView()->toPlainText().isEmpty());
-    // The cleared screen went into the scrollback, nothing is lost.
-    QVERIFY(allText(terminal).contains(QStringLiteral("keep me")));
+    // Clear wipes everything: the previous text is not in the scrollback either.
+    QVERIFY(!allText(terminal).contains(QStringLiteral("keep me")));
+    QCOMPARE(terminal->screen()->scrollbackSize(), 0);
+    QCOMPARE(terminal->screen()->cursor().row, 0);
+    QCOMPARE(terminal->screen()->cursor().col, 0);
+    QVERIFY(terminal->inputEnabled());   // still connected, still usable
+    session->sendBytes(QByteArrayLiteral("again\r\n"));
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(terminal).contains(QStringLiteral("again")), kSimTimeoutMs);
 
     QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
     session->resetTerminal();
     QCOMPARE(statusSpy.count(), 1);
     QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Terminal reset"));
-    QVERIFY(!allText(terminal).contains(QStringLiteral("keep me"))); // RIS drops the scrollback too
+    QVERIFY(!allText(terminal).contains(QStringLiteral("again"))); // RIS drops everything as well
+}
+
+void Tst_sessionwidget::clearTerminalWipesScrollbackAndHex()
+{
+    // Toolbar / Session > Clear: after output that filled the scrollback nothing of it remains -
+    // not on the screen, not in the scrollback, not in the hex view - while the emulator state
+    // (attributes, modes) survives; a paused display is cleared first and its queue flushed after.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    const TerminalScreen* screen = terminal->screen();
+
+    QByteArray burst;
+    for (int i = 0; i < terminal->visibleRows() + 60; ++i) {
+        burst += "scrollback line " + QByteArray::number(i) + "\r\n";
+    }
+    terminal->feedData(burst);
+    terminal->feedData(QByteArrayLiteral("\x1b[1;32m\x1b[?2004hgreen"));
+    QVERIFY(screen->scrollbackSize() > 0);
+    QVERIFY(allText(terminal).contains(QStringLiteral("scrollback line 0")));
+    const Terminal::Attributes attributes = screen->currentAttributes();
+    QVERIFY(attributes != Terminal::Attributes());
+    QVERIFY(terminal->parser()->bracketedPasteMode());
+    session->hexView()->appendReceived(burst);
+    session->hexView()->flushPending();   // hidden page: render its queue before looking
+    QVERIFY(!session->hexView()->toPlainText().isEmpty());
+
+    session->clearTerminal();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QVERIFY2(allText(terminal).trimmed().isEmpty(), qPrintable(allText(terminal).left(200)));
+    QVERIFY(session->hexView()->toPlainText().isEmpty());
+    QCOMPARE(screen->cursor().row, 0);
+    QCOMPARE(screen->cursor().col, 0);
+    QCOMPARE(terminal->verticalScrollBar()->maximum(), 0);
+    QVERIFY(screen->currentAttributes() == attributes);   // not a reset: attributes and modes stay
+    QVERIFY(terminal->parser()->bracketedPasteMode());
+
+    // Paused with queued bytes: the clear applies, then the queue lands on the empty screen.
+    terminal->feedData("select me\r\n");
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    terminal->feedData("after clear\r\n");
+    QVERIFY(!allText(terminal).contains(QStringLiteral("after clear")));
+    session->clearTerminal();
+    QVERIFY(!terminal->isOutputPaused());
+    QVERIFY(!terminal->hasSelection());
+    QCOMPARE(terminal->pendingPausedBytes(), qint64(0));
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QCOMPARE(screen->lineText(0), QStringLiteral("after clear"));
+    QVERIFY(!allText(terminal).contains(QStringLiteral("select me")));
+    QCOMPARE(screen->cursor().row, 1);
+
+    // Reset Terminal remains the full RIS: attributes and modes go too.
+    session->resetTerminal();
+    QVERIFY(screen->currentAttributes() == Terminal::Attributes());
+    QVERIFY(!terminal->parser()->bracketedPasteMode());
+    QVERIFY(allText(terminal).trimmed().isEmpty());
+}
+
+void Tst_sessionwidget::clearTerminalDuringReplay()
+{
+    // Clear while a replay streams: everything received so far goes (screen, scrollback, hex
+    // view), the replay carries on and the later bytes land on the empty screen. A second Clear
+    // right behind the first is harmless.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    const TerminalScreen* screen = terminal->screen();
+    const QString path = tempPath(QStringLiteral("clear-mid-replay.log"));
+    QByteArray payload;
+    const int earlyLines = terminal->visibleRows() + 30;
+    for (int i = 0; i < earlyLines; ++i) {
+        payload += "early " + QByteArray::number(i) + "\r\n";
+    }
+    payload += QByteArray(2000, 'y');   // about 2 s at 1000 B/s: the clears land while this streams
+    payload += QByteArrayLiteral("\r\nLATE\r\n");
+    QVERIFY(writeFile(path, payload));
+
+    session->replayLogFile(path, 1000);
+    QVERIFY(session->isReplaying());
+    // Wait for the whole "early" block so nothing of it can arrive after the clear.
+    const QString lastEarly = QStringLiteral("early %1").arg(earlyLines - 1);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(lastEarly), kSimTimeoutMs);
+    QVERIFY(screen->scrollbackSize() > 0);
+    QVERIFY(allText(terminal).contains(QStringLiteral("early 0")));
+    session->hexView()->flushPending();
+    QVERIFY(!session->hexView()->toPlainText().isEmpty());
+    QVERIFY(session->isReplaying());
+
+    session->clearTerminal();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("early")));
+    QVERIFY(session->hexView()->toPlainText().isEmpty());
+    QCOMPARE(terminal->verticalScrollBar()->maximum(), 0);
+    session->clearTerminal();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QVERIFY(session->isReplaying());   // the clear does not touch the replay
+
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("LATE")), kSimTimeoutMs);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("early")));
+    QVERIFY(allText(terminal).contains(QStringLiteral("yyyy")));   // what streamed after the clear stayed
+    session->hexView()->flushPending();
+    QVERIFY(session->hexView()->toPlainText().contains(QStringLiteral("LATE")));
+    QTRY_VERIFY_WITH_TIMEOUT(!session->isReplaying(), kSimTimeoutMs);
+}
+
+void Tst_sessionwidget::rightClickPastesFollowsPreferences()
+{
+    // AppSettings::rightClickPastes() reaches the terminal through applyPreferences(); over the
+    // loopback a right click pastes the clipboard (echoed back) or copies the selection.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(AppSettings::instance().rightClickPastes());   // default on
+    QVERIFY(terminal->rightClickPastes());
+    QVERIFY(connectTo(session.get(), kLoopback));
+    QWidget* vp = terminal->viewport();
+    const QPoint inside(vp->width() / 2, vp->height() / 2);
+
+    QApplication::clipboard()->setText(QStringLiteral("pasted"));
+    const quint64 sentBefore = session->connection()->bytesSent();
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, inside);
+    QTRY_COMPARE_WITH_TIMEOUT(session->connection()->bytesSent(), sentBefore + 6, kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(terminal).contains(QStringLiteral("pasted")), kSimTimeoutMs);
+
+    // With a selection the right click copies instead (and finishes the paused selection).
+    terminal->selectAll();
+    QCOMPARE(terminal->selectedText(), QStringLiteral("pasted"));
+    QVERIFY(terminal->isOutputPaused());
+    QApplication::clipboard()->setText(QStringLiteral("other"));
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, inside);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("pasted"));
+    QVERIFY(!terminal->hasSelection());
+    QVERIFY(!terminal->isOutputPaused());
+    QCOMPARE(session->connection()->bytesSent(), sentBefore + 6);   // nothing sent
+
+    // Off (Preferences / View menu write the same key): the right click sends nothing.
+    AppSettings::instance().setRightClickPastes(false);
+    QVERIFY(!terminal->rightClickPastes());
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, inside);
+    QTest::qWait(100);
+    QCOMPARE(session->connection()->bytesSent(), sentBefore + 6);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("pasted"));
+
+    AppSettings::instance().setRightClickPastes(true);
+    QVERIFY(terminal->rightClickPastes());
+    auto later = newSession();
+    QVERIFY(later);
+    QVERIFY(later->terminal()->rightClickPastes());
 }
 
 void Tst_sessionwidget::loopbackSendBreak()
@@ -1217,6 +1384,214 @@ void Tst_sessionwidget::loopbackSendBreak()
     QTest::mouseClick(breakButton, Qt::LeftButton);
     QCOMPARE(statusSpy.count(), 1);
     QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("BREAK sent"));
+}
+
+void Tst_sessionwidget::loopbackPausedTerminalStillFeedsHexAndLogger()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    QVERIFY(connectTo(session.get(), kLoopback));
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(terminal->pauseWhileSelecting());   // AppSettings default, pushed by applyPreferences()
+    const QString logFile = tempPath(QStringLiteral("paused.log"));
+    session->startLoggingTo(logFile);
+    QVERIFY(session->isLogging());
+    QApplication::clipboard()->clear();
+
+    QByteArray received;
+    connect(session->connection(), &SerialConnection::dataReceived, this,
+            [&received](const QByteArray& bytes) { received += bytes; });
+    session->sendBytes(QByteArrayLiteral("hello\r"));
+    QTRY_COMPARE_WITH_TIMEOUT(received, QByteArrayLiteral("hello\r"), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(terminal).contains(QStringLiteral("hello")), kSimTimeoutMs);
+
+    // Selecting the echoed word freezes the terminal and posts the persistent status hint.
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    terminal->selectAll();
+    QCOMPARE(terminal->selectedText(), QStringLiteral("hello"));
+    QVERIFY(terminal->isOutputPaused());
+    QVERIFY(statusSpy.count() >= 1);
+    QVERIFY2(statusSpy.last().at(0).toString().contains(QStringLiteral("Output paused")),
+             qPrintable(statusSpy.last().at(0).toString()));
+    QCOMPARE(statusSpy.last().at(1).toInt(), 0);
+
+    // The echo of the next command reaches the connection, the hex view and the logger, but the
+    // terminal only queues it.
+    session->sendBytes(QByteArrayLiteral("world\r"));
+    QTRY_COMPARE_WITH_TIMEOUT(received, QByteArrayLiteral("hello\rworld\r"), kSimTimeoutMs);
+    QVERIFY(terminal->isOutputPaused());
+    QCOMPARE(terminal->pendingPausedBytes(), qint64(6));
+    QVERIFY(!visibleText(terminal).contains(QStringLiteral("world")));
+    QCOMPARE(terminal->selectedText(), QStringLiteral("hello"));
+
+    session->hexView()->flushPending();   // hidden page: render its queue before looking
+    const QString hex = session->hexView()->toPlainText();
+    QVERIFY2(hex.contains(QStringLiteral("RX 6 bytes")), qPrintable(hex));
+    QVERIFY2(hex.contains(QStringLiteral("77 6F 72 6C 64 0D")), qPrintable(hex));   // "world\r"
+    QVERIFY(session->logger()->isActive());
+    session->stopLogging();
+    const QString logText = QString::fromUtf8(readFile(logFile));
+    QVERIFY2(logText.contains(QStringLiteral("hello")), qPrintable(logText));
+    QVERIFY2(logText.contains(QStringLiteral("world")), qPrintable(logText));
+
+    // Enter copies, resumes and shows the queued echo; the status hint is cleared; the Enter
+    // itself never reached the device.
+    const quint64 sentBefore = session->connection()->bytesSent();
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QVERIFY(!terminal->isOutputPaused());
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+    QVERIFY(!terminal->hasSelection());
+    QVERIFY2(visibleText(terminal).contains(QStringLiteral("world")), qPrintable(visibleText(terminal)));
+    QCOMPARE(statusSpy.last().at(0).toString(), QString());
+    QCOMPARE(statusSpy.last().at(1).toInt(), 0);
+    QCOMPARE(session->connection()->bytesSent(), sentBefore);
+
+    // Overflow through the session: the terminal resumes by itself and the status bar says so.
+    terminal->setPauseBufferLimit(4);
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    session->sendBytes(QByteArrayLiteral("overflow\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(!terminal->isOutputPaused(), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(terminal).contains(QStringLiteral("overflow")), kSimTimeoutMs);
+    QVERIFY(terminal->hasSelection());
+    bool sawOverflowMessage = false;
+    for (const QList<QVariant>& args : statusSpy) {
+        sawOverflowMessage = sawOverflowMessage || args.at(0).toString().contains(QStringLiteral("Output resumed"));
+    }
+    QVERIFY(sawOverflowMessage);
+}
+
+void Tst_sessionwidget::pauseWhileSelectingFollowsPreferences()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+    QVERIFY(terminal->pauseWhileSelecting());
+
+    // AppSettings::changed -> applyPreferences() pushes the flag; a paused terminal resumes.
+    terminal->feedData("hello\r\n");
+    terminal->selectAll();
+    QVERIFY(terminal->isOutputPaused());
+    terminal->feedData("queued\r\n");
+    AppSettings::instance().setPauseWhileSelecting(false);
+    QVERIFY(!terminal->pauseWhileSelecting());
+    QVERIFY(!terminal->isOutputPaused());
+    QVERIFY(visibleText(terminal).contains(QStringLiteral("queued")));
+    QVERIFY(terminal->hasSelection());
+
+    // Off: selecting no longer freezes the display; system lines flow like device output.
+    terminal->clearSelection();
+    terminal->selectAll();
+    QVERIFY(!terminal->isOutputPaused());
+    terminal->feedData("more\r\n");
+    QVERIFY(visibleText(terminal).contains(QStringLiteral("more")));
+
+    AppSettings::instance().setPauseWhileSelecting(true);
+    QVERIFY(terminal->pauseWhileSelecting());
+    QVERIFY(!terminal->isOutputPaused());   // an existing selection does not freeze retroactively
+    auto later = newSession();
+    QVERIFY(later);
+    QVERIFY(later->terminal()->pauseWhileSelecting());
+}
+
+void Tst_sessionwidget::replayWhilePausedQueuesAndFlushes()
+{
+    // A log replay streams through feedData() like device output: while the terminal is paused
+    // the whole file (and the "replaying" / "finished" system lines) queue up, the replay itself
+    // runs to the end and the title follows it; Esc renders everything in order.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    const QString path = tempPath(QStringLiteral("paused-capture.log"));
+    const QByteArray capture = QByteArrayLiteral("replayed one\r\nreplayed two\r\n");
+    QVERIFY(writeFile(path, capture));
+
+    terminal->feedData("before\r\n");
+    terminal->selectAll();
+    QCOMPARE(terminal->selectedText(), QStringLiteral("before"));
+    QVERIFY(terminal->isOutputPaused());
+    QList<bool> replayStates;
+    connect(session.get(), &SessionWidget::replayStateChanged, this,
+            [&replayStates](bool active) { replayStates.append(active); });
+
+    session->replayLogFile(path, 0);
+    QVERIFY(session->isReplaying());
+    QVERIFY2(session->title().contains(QStringLiteral("paused-capture.log")), qPrintable(session->title()));
+    QTRY_COMPARE_WITH_TIMEOUT(replayStates.size(), qsizetype(2), kSimTimeoutMs);
+    QVERIFY(!session->isReplaying());
+    QCOMPARE(session->title(), QStringLiteral("New Session"));
+
+    QVERIFY(terminal->isOutputPaused());
+    QCOMPARE(terminal->selectedText(), QStringLiteral("before"));
+    QVERIFY(terminal->pendingPausedBytes() > capture.size());   // capture + both system lines
+    const QString frozen = allText(terminal);
+    QVERIFY2(!frozen.contains(QStringLiteral("replayed one")), qPrintable(frozen));
+    QVERIFY(!frozen.contains(QStringLiteral("--- replaying")));
+    QVERIFY(!frozen.contains(QStringLiteral("finished")));
+    session->hexView()->flushPending();   // the hex view received the replay regardless
+    QVERIFY(session->hexView()->toPlainText().contains(QStringLiteral("RX")));
+
+    QTest::keyClick(terminal, Qt::Key_Escape);
+    QVERIFY(!terminal->isOutputPaused());
+    QCOMPARE(terminal->pendingPausedBytes(), qint64(0));
+    const QString text = allText(terminal);
+    const qsizetype replaying = text.indexOf(QStringLiteral("--- replaying"));
+    const qsizetype one = text.indexOf(QStringLiteral("replayed one"));
+    const qsizetype two = text.indexOf(QStringLiteral("replayed two"));
+    const qsizetype finished = text.indexOf(QStringLiteral("replay of paused-capture.log finished"));
+    QVERIFY2(replaying >= 0 && one > replaying && two > one && finished > two, qPrintable(text));
+}
+
+void Tst_sessionwidget::reconnectWhilePausedQueuesSystemLines()
+{
+    // The port vanishes and comes back while the terminal is paused: the "disappeared" and
+    // "reconnected" system lines take the feedData() path, so they queue like device output
+    // instead of moving the screen under the selection; Esc shows everything in order.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    QList<int> states;
+    connect(session.get(), &SessionWidget::connectionStateChanged, this,
+            [&states](State state) { states.append(static_cast<int>(state)); });
+
+    QVERIFY(connectTo(session.get(), kLinux));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
+    QTest::keyClicks(terminal, QStringLiteral("root"));
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Password:")), kSimTimeoutMs);
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("[root@rv1106:~]#")), kSimTimeoutMs);
+
+    // Find selects the login prompt and freezes the display; the reboot goes through the
+    // line-mode input because the terminal's keyboard belongs to the selection now.
+    QVERIFY(terminal->findNext(QStringLiteral("rv1106 login")));
+    QVERIFY(terminal->isOutputPaused());
+    states.clear();
+    session->commandInput()->setText(QStringLiteral("reboot"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(states.contains(static_cast<int>(State::Reconnecting)), kSimTimeoutMs);
+    QVERIFY(terminal->isOutputPaused());
+    QVERIFY(!terminal->inputEnabled());
+    QVERIFY(terminal->pendingPausedBytes() > 0);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("going down for reboot")));
+    QVERIFY(!allText(terminal).contains(QStringLiteral("--- port SIM:linux disappeared")));
+
+    QTRY_VERIFY_WITH_TIMEOUT(states.contains(static_cast<int>(State::Connected)), kSimTimeoutMs);
+    QVERIFY(terminal->isOutputPaused());
+    QVERIFY(terminal->inputEnabled());
+    QCOMPARE(terminal->selectedText(), QStringLiteral("rv1106 login"));
+    QVERIFY(!allText(terminal).contains(QStringLiteral("--- reconnected")));
+    // Esc while connected again: reboot notice, both system lines and the new boot log follow.
+    QTest::keyClick(terminal, Qt::Key_Escape);
+    QVERIFY(!terminal->isOutputPaused());
+    const QString text = allText(terminal);
+    const qsizetype reboot = text.indexOf(QStringLiteral("going down for reboot NOW!"));
+    const qsizetype disappeared = text.indexOf(QStringLiteral("--- port SIM:linux disappeared"));
+    const qsizetype reconnected = text.indexOf(QStringLiteral("--- reconnected"));
+    QVERIFY2(reboot >= 0 && disappeared > reboot && reconnected > disappeared, qPrintable(text.right(800)));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).lastIndexOf(QStringLiteral("rv1106 login:")) > reconnected,
+                             kBootTimeoutMs);
 }
 
 // =======================================================================================

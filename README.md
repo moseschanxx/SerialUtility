@@ -21,6 +21,15 @@ speaks bytes.
   scroll regions, 16 / 256 / true colours, alternate screen (`top`, `vi`, `menuconfig`),
   bracketed paste, DSR / DA replies, window title. Chinese and other CJK text occupies two
   cells. Unknown sequences are swallowed, never desynchronise the output.
+- **Copy from a streaming console** - like the Windows console's mark mode: start selecting
+  with the mouse and the display freezes while the incoming bytes queue up (a badge shows how
+  much is waiting); **Enter** copies the selection to the clipboard and lets the output catch up,
+  **Esc** cancels. Logging and the hex view keep receiving meanwhile. On by default, switchable
+  in *View > Pause Output While Selecting*.
+- **cmd.exe-style right click** - a right click pastes the clipboard, or copies the selected
+  text when there is a selection (and lets a paused display continue); the context menu moves to
+  **Shift+right click** and the Menu key. On by default, switchable in *View > Right Click
+  Pastes (cmd.exe style)*.
 - **Built for boot logs** - handles 1.5 Mbaud output (about 150 KB/s) without freezing the UI,
   with plenty of headroom: the RX pipeline renders a coloured boot log at around 10 MB/s on a
   4-core desktop while the window stays responsive. Repaints are coalesced and drawn from a glyph
@@ -310,6 +319,50 @@ while a replay streams stops the replay first; while it streams, the tab is titl
 *View > Hex View* (**Ctrl+Shift+H**) replaces the terminal of the current tab with a timestamped
 RX / TX hex dump. The view is bounded so it stays responsive during long sessions.
 
+### Copying text (pause output while selecting)
+
+Select with the mouse as usual: click-drag, double-click a word, triple-click a line, Shift+click
+to extend, *Edit > Select All*, or *Find* (**Ctrl+Shift+F**). Because a boot log or a telemetry
+stream would keep scrolling under your selection, the terminal behaves like the Windows console
+(cmd.exe QuickEdit / mark mode) by default: the moment a selection appears the display
+**freezes** and every byte that arrives is queued instead of drawn - a translucent badge in the
+top-right corner ("Output paused  12.3 KB waiting  Enter: copy  Esc: cancel") and the status bar
+tell you so. The port, the session log and the hex view are not affected; only the drawing waits.
+
+- **Enter** copies the selection to the clipboard, clears it and resumes: the queued output is
+  rendered at once, exactly as if you had never paused.
+- **Esc** cancels without touching the clipboard.
+- **Ctrl+Shift+C**, **Ctrl+Insert**, **Ctrl+C** (while text is selected) and the context menu's
+  *Copy* copy and resume too; a plain click resumes.
+- A **right click** copies the selection as well (and resumes). With nothing selected it
+  **pastes** the clipboard instead - cmd.exe QuickEdit style, so a boot-log session works like the
+  Windows console: select, right-click to copy, right-click again to paste. The context menu
+  (Copy, Paste, Select All, Clear Screen (keep scrollback), Clear Scrollback, Reset Terminal, Sync
+  Terminal Size, Find...) is on **Shift+right click**, the Menu key or **Shift+F10**. Uncheck
+  *View > Right Click Pastes (cmd.exe style)* (or *Preferences > Terminal*) to get the menu back
+  on a plain right click.
+- Every other key and any paste is ignored while paused (nothing reaches the device), except the
+  application shortcuts (tabs, connect / disconnect, hex view, find, ...). Scrolling with the
+  wheel, the scrollbar or **Shift+PageUp / PageDown** and zooming keep working.
+- The queue holds up to 64 MB; beyond that the display resumes by itself (the selection stays
+  so you can still copy it) and nothing is lost.
+
+Uncheck *View > Pause Output While Selecting* (or *Preferences > Terminal > Pause output while
+selecting text*) to get the classic behaviour: the output keeps flowing under the selection and
+Enter is sent to the device.
+
+### Clearing the terminal
+
+*Clear* (the toolbar button next to Disconnect, *Session > Clear*, **Ctrl+Shift+L**) wipes
+everything: the screen, the scrollback and the hex view. No previous text remains, the cursor
+goes home, and the emulator keeps its state (colours, modes) - *Session > Reset Terminal* is the
+full VT reset that also drops those. Pressed while `top`, `vi` or `menuconfig` is running, Clear
+blanks the program's screen (it redraws itself) and the shell screen hidden behind it, so nothing
+old reappears when the program exits. The terminal's context menu keeps the finer-grained
+*Clear Screen (keep scrollback)* (the screen moves into the scrollback, like Ctrl+L in a shell)
+and *Clear Scrollback* (the history only). While the display is paused for a selection, Clear
+applies first and the queued output then continues on the empty screen.
+
 ### Keyboard shortcuts
 
 | Shortcut | Action |
@@ -318,10 +371,14 @@ RX / TX hex dump. The view is bounded so it stays responsive during long session
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | F2 / F3 | Connect / disconnect |
 | F5 | Refresh port list |
-| Ctrl+Shift+L | Clear screen |
+| Ctrl+Shift+L | Clear (screen, scrollback and hex view) |
 | Ctrl+Shift+O | Send file... |
 | Ctrl+Shift+H | Toggle hex view |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste (plain Ctrl+C / Ctrl+V go to the device) |
+| Enter / Esc while the output is paused | Copy the selection and resume / cancel the selection and resume (see *Copying text*) |
+| Right click | Paste the clipboard, or copy the selection when text is selected (cmd.exe style; *View > Right Click Pastes*) |
+| Shift+right click, Menu key, Shift+F10 | Terminal context menu |
+| Middle click | Paste |
 | Ctrl+Shift+F | Find in scrollback |
 | Ctrl+Shift+R | Replay log file... |
 | Ctrl++ / Ctrl+- / Ctrl+0 | Zoom in / out / reset |

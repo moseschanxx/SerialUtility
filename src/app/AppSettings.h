@@ -22,6 +22,7 @@
  *
  * Key names (for reference / migration):  general/language, terminal/font, terminal/theme,
  * terminal/scrollback, terminal/cursorBlink, terminal/bell, terminal/implicitCr,
+ * terminal/pauseWhileSelecting, terminal/rightClickPastes,
  * input/enterSends, input/backspaceSendsDelete, input/localEcho, input/encoding,
  * connection/default (QVariantMap of SerialSettings), connection/autoReconnect,
  * connection/reconnectIntervalMs, connection/lastPort, connection/showSimulatedPorts,
@@ -51,6 +52,17 @@ public:
     void setBellEnabled(bool on);
     bool implicitCr() const;                  ///< treat LF as CR+LF (bare-\n MCU output); default true
     void setImplicitCr(bool on);
+    /// Freeze the terminal display while text is selected (cmd.exe mark mode): incoming bytes
+    /// queue up, Enter copies the selection and resumes, Esc cancels. Mirrored by the View menu
+    /// action and the Preferences checkbox (TerminalWidget::setPauseWhileSelecting). Default true.
+    bool pauseWhileSelecting() const;
+    void setPauseWhileSelecting(bool on);
+    /// cmd.exe QuickEdit-style right click in the terminal: a plain right click pastes the
+    /// clipboard, or copies the selection when text is selected; the context menu moves to
+    /// Shift+right click (and the Menu key). Mirrored by the View menu action and the Preferences
+    /// checkbox (TerminalWidget::setRightClickPastes). Default true.
+    bool rightClickPastes() const;
+    void setRightClickPastes(bool on);
 
     // ---- Input behaviour ------------------------------------------------------------
     LineEnding::Mode enterSends() const;      ///< bytes sent for Enter in the terminal; default CR

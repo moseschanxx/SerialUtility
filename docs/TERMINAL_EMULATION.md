@@ -259,11 +259,44 @@ terminator); DCS/SOS/PM/APC strings are abandoned after 4096 code points.
 - Ctrl+C with an active selection → copy (and clear the selection); without → `0x03`
 - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 → zoom (font size); emits `fontZoomed()`
 - Text (incl. IME commit) → encoded with the current encoding (`QStringEncoder`)
-- Middle click → paste selection/clipboard; right click → context menu
-  (Copy, Paste, Select All, Clear Scrollback, Reset Terminal, Sync Terminal Size, Find...)
+- Middle click → paste selection/clipboard
+- Right click (*Right Click Pastes (cmd.exe style)*, on by default): copy the selection when one
+  exists (the selection is finished and a paused display resumes, like Enter; nothing is pasted),
+  otherwise paste the clipboard (same path as Ctrl+Shift+V: Enter bytes for newlines, bracketed
+  paste, dropped while disconnected); no menu. Shift+right click, the Menu key and Shift+F10 →
+  context menu (Copy, Paste, Select All, Clear Screen (keep scrollback), Clear Scrollback, Reset
+  Terminal, Sync Terminal Size, Find..., plus a disabled hint line naming the two gestures). With
+  the option off: right click → context menu, as before. A right-button press never starts,
+  extends or drops a left-button selection
 - Paste: newlines are converted to the Enter bytes; in bracketed paste mode wrapped in
   `ESC [ 200 ~` … `ESC [ 201 ~`. Large pastes are sent in one write (pacing is the port's job)
 - Drag & drop: a dropped file emits `fileDropped(path)`; dropped text is pasted
+
+### 11a. Mark mode: keys while the output is paused (`isOutputPaused()`)
+
+With *Pause Output While Selecting* on (the default), a non-empty selection freezes the display
+and queues incoming bytes (`pendingPausedBytes()`). Until the pause ends the keyboard belongs to
+the selection, exactly like the Windows console's mark mode:
+
+| Key | Effect while paused (nothing is sent to the device) |
+|---|---|
+| Enter / Return / keypad Enter | copy the selection to the clipboard, clear it, resume: the queued bytes are parsed in one feed |
+| Esc | clear the selection and resume without touching the clipboard |
+| Ctrl+Shift+C, Ctrl+Insert, Ctrl+C (a selection exists), context-menu Copy | copy, clear, resume |
+| Right click (*Right Click Pastes* on) | copy, clear, resume - the same as Enter; Shift+right click opens the context menu instead |
+| Ctrl+Shift+V, Shift+Insert, middle click, dropped text | ignored (no paste while paused) |
+| Shift+PgUp / Shift+PgDn, mouse wheel, scrollbar, Ctrl+wheel / Ctrl++ / Ctrl+- / Ctrl+0 | scroll / zoom the view as usual; the selection and the queue stay |
+| Ctrl+Shift+<letter>, Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, F2 / F3 / F5 | application shortcuts, handled by the main window as always |
+| anything else (text, Tab, arrows, F-keys, Ctrl+letter, IME commit) | swallowed: no bytes, no local echo, the focus stays in the terminal |
+
+A left click without a drag, `clearSelection()`, `resumeOutput()` (keeps the selection) and
+turning the feature off resume as well; `clearScreen()`, `clearAll()` (the toolbar's Clear:
+screen, scrollback and - with the alternate screen active - the saved primary grid, via
+`TerminalScreen::clearAll()`) and `resetTerminal()` drop the selection, apply their clear first and parse
+the queue afterwards. Bytes received while paused are parsed only on resume,
+so a DSR / DA query that arrives in the meantime is answered when the queue is flushed. The
+queue is bounded (`pauseBufferLimit()`, 64 MiB): when a chunk would exceed it the widget resumes
+by itself, keeps the selection and parses everything (`pauseBufferOverflow()`); no byte is lost.
 
 ## 12. Known limitations
 

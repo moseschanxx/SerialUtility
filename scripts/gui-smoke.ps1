@@ -12,6 +12,8 @@
       menus    - every menu, Preferences / About / Version / Quick Commands dialogs, zh_CN <-> en_US, tabs
       hardware - connect to a real port with a TX-RX loopback jumper and check the echo
       stress   - 7 MB replay at unlimited speed, 21 tabs, 2000-line paste over SIM:loopback, 10 connect cycles
+      markmode - mouse-select while SIM:mcu streams telemetry: display pauses, Enter copies + resumes, Esc cancels,
+                 right-click copies a selection / pastes the clipboard (cmd.exe QuickEdit)
     Screenshots land in <OutDir>\<scenario>-NN-<label>.png. Keep the desktop free while it runs:
     keystrokes go to the foreground window (the script refocuses the app before every key group).
 
@@ -21,7 +23,7 @@
     .\scripts\gui-smoke.ps1 -Scenario hardware -HardwarePort COM6
 #>
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress')][string]$Scenario,
+    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode')][string]$Scenario,
     [string]$Exe = '',      # default: <repo>\dist\Release\bin\BuildAI-SerialUtility.exe
     [string]$OutDir = '',   # default: <repo>\build\gui-run
     [string]$HardwarePort = 'COM6'
@@ -42,6 +44,9 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, IntPtr extra);
+  public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, RIGHTDOWN = 0x0008, RIGHTUP = 0x0010;
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 }
 "@
@@ -92,6 +97,27 @@ function StartApp([string[]]$appArgs) {
     if ($p.MainWindowHandle -eq 0) { throw "main window did not appear" }
     Log "started pid $($p.Id) title '$($p.MainWindowTitle)'"
     Focus
+}
+function Drag($x0, $y0, $x1, $y1) {   # window-relative pixels
+    $h = (Get-Process -Id $script:appPid).MainWindowHandle
+    $r = New-Object Win32+RECT; [Win32]::GetWindowRect($h, [ref]$r) | Out-Null
+    [Win32]::SetCursorPos($r.Left + $x0, $r.Top + $y0) | Out-Null; Start-Sleep -Milliseconds 120
+    [Win32]::mouse_event([Win32]::LEFTDOWN, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 120
+    $steps = 12
+    for ($i = 1; $i -le $steps; $i++) {
+        [Win32]::SetCursorPos($r.Left + $x0 + [int](($x1 - $x0) * $i / $steps), $r.Top + $y0 + [int](($y1 - $y0) * $i / $steps)) | Out-Null
+        Start-Sleep -Milliseconds 25
+    }
+    [Win32]::mouse_event([Win32]::LEFTUP, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 200
+    Log "dragged ($x0,$y0) -> ($x1,$y1) window-relative"
+}
+function RightClick($x, $y) {   # window-relative pixels
+    $h = (Get-Process -Id $script:appPid).MainWindowHandle
+    $r = New-Object Win32+RECT; [Win32]::GetWindowRect($h, [ref]$r) | Out-Null
+    [Win32]::SetCursorPos($r.Left + $x, $r.Top + $y) | Out-Null; Start-Sleep -Milliseconds 120
+    [Win32]::mouse_event([Win32]::RIGHTDOWN, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 80
+    [Win32]::mouse_event([Win32]::RIGHTUP, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 300
+    Log "right-clicked ($x,$y) window-relative"
 }
 function Alive() { try { $p = Get-Process -Id $script:appPid -ErrorAction Stop; return -not $p.HasExited } catch { return $false } }
 function CloseApp() {
@@ -157,6 +183,38 @@ switch ($Scenario) {
     Start-Sleep -Seconds 2; Shot 'connected'
     Keys 'hello loopback 0123456789{ENTER}' 1000; Shot 'echo'
     Keys 'BuildAI Serial Utility{ENTER}' 1000; Shot 'echo2'
+    CloseApp
+  }
+  'markmode' {
+    # cmd.exe-style mark mode: select with the mouse while the device streams; Enter copies + resumes.
+    StartApp @('--connect', 'SIM:mcu')
+    Start-Sleep -Seconds 2
+    Keys 'telemetry on{ENTER}' 500
+    Start-Sleep -Seconds 3; Shot 'streaming'
+    [System.Windows.Forms.Clipboard]::SetText('sentinel-before')
+    Drag 20 160 420 160
+    Start-Sleep -Seconds 5; Shot 'paused-with-selection'       # badge visible, no new telemetry lines
+    Keys '{ENTER}' 800; Shot 'after-enter-resumed'             # copied + resumed: queued lines appear
+    $clip = [System.Windows.Forms.Clipboard]::GetText(); Log "clipboard after Enter: '$clip'"
+    if ($clip -eq 'sentinel-before' -or [string]::IsNullOrWhiteSpace($clip)) { Log 'FAIL: Enter did not copy the selection' } else { Log 'OK: Enter copied the selection' }
+    Start-Sleep -Seconds 2
+    [System.Windows.Forms.Clipboard]::SetText('sentinel-esc')
+    Drag 20 200 300 230
+    Start-Sleep -Seconds 4; Shot 'paused-again'
+    Keys '{ESC}' 800; Shot 'after-esc-resumed'
+    $clip2 = [System.Windows.Forms.Clipboard]::GetText(); Log "clipboard after Esc: '$clip2' (expected sentinel-esc)"
+    if ($clip2 -eq 'sentinel-esc') { Log 'OK: Esc resumed without copying' } else { Log 'FAIL: Esc changed the clipboard' }
+    # right-click with a selection = copy (and resume); right-click without one = paste (the MCU echoes it)
+    [System.Windows.Forms.Clipboard]::SetText('sentinel-rclick')
+    Drag 20 160 200 160
+    Start-Sleep -Seconds 3; Shot 'paused-before-rightclick'
+    RightClick 600 400; Shot 'after-rightclick-copy'
+    $clip3 = [System.Windows.Forms.Clipboard]::GetText(); Log "clipboard after right-click on selection: '$clip3'"
+    if ($clip3 -ne 'sentinel-rclick' -and -not [string]::IsNullOrWhiteSpace($clip3)) { Log 'OK: right-click copied the selection' } else { Log 'FAIL: right-click did not copy' }
+    Keys 'telemetry off{ENTER}' 500; Start-Sleep -Seconds 1
+    [System.Windows.Forms.Clipboard]::SetText('echo PASTED-BY-RIGHT-CLICK')
+    RightClick 600 400; Start-Sleep -Seconds 1; Shot 'after-rightclick-paste'   # expect "> echo PASTED-BY-RIGHT-CLICK" echoed by the MCU
+    Keys '{ENTER}' 800; Shot 'pasted-command-executed'
     CloseApp
   }
   'stress' {

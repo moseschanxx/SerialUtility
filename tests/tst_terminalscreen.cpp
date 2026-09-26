@@ -84,6 +84,7 @@ private slots:
     void dirtyTracking();
     void reset();
     void clearScreenAndScrollback();
+    void clearAllWipesEverythingButState();
     void pushScreenToScrollback();
     void setScrollbackMaxTrims();
     void scrollbackDroppedCounts();
@@ -1471,6 +1472,88 @@ void Tst_terminalscreen::clearScreenAndScrollback()
     s.clearScrollback(); // already empty: no signals
     QCOMPARE(sbChanged.count(), 1);
     QCOMPARE(content.count(), 2);
+}
+
+void Tst_terminalscreen::clearAllWipesEverythingButState()
+{
+    // The toolbar's Clear: grid + scrollback gone in one change, cursor home; attributes, modes,
+    // saved cursor, tabs and title survive (reset() is the RIS).
+    TerminalScreen s(3, 5, 10);
+    fillRows(s, {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c")});
+    s.moveCursorTo(2, 0);
+    s.lineFeed();
+    s.putText(QStringLiteral("d"));
+    QCOMPARE(s.scrollbackSize(), 1);
+    s.setCurrentAttributes(bgAttr(3));
+    s.setInsertMode(true);
+    s.setAutoWrap(false);
+    s.clearAllTabStops();
+    s.setTitle(QStringLiteral("t"));
+    s.moveCursorTo(1, 2);
+    s.saveCursor();
+    s.moveCursorTo(2, 3);
+
+    QSignalSpy content(&s, &TerminalScreen::contentChanged);
+    QSignalSpy sbChanged(&s, &TerminalScreen::scrollbackChanged);
+    QSignalSpy moved(&s, &TerminalScreen::cursorMoved);
+    s.clearAll();
+    QCOMPARE(content.count(), 1);
+    QCOMPARE(sbChanged.count(), 1);
+    QCOMPARE(moved.count(), 1);
+    QCOMPARE(s.scrollbackSize(), 0);
+    for (int r = 0; r < 3; ++r) {
+        QVERIFY(rowText(s, r).isEmpty());
+    }
+    QCOMPARE(s.cursor().row, 0);
+    QCOMPARE(s.cursor().col, 0);
+    QVERIFY(s.allDirty());
+    QCOMPARE(s.currentAttributes(), bgAttr(3));
+    QCOMPARE(s.line(0).cells[0].attr.bg, Color::indexed(3)); // erased with the current background, like ED
+    QVERIFY(s.insertMode());
+    QVERIFY(!s.autoWrap());
+    QCOMPARE(s.title(), QStringLiteral("t"));
+    s.tab();
+    QCOMPARE(s.cursor().col, 4); // no tab stops left: TAB runs to the last column
+    s.restoreCursor();           // DECSC slot survives
+    QCOMPARE(s.cursor().row, 1);
+    QCOMPARE(s.cursor().col, 2);
+
+    // Twice in a row: the empty scrollback stays quiet, the grid is redrawn (tab() and
+    // restoreCursor() above each reported a change of their own).
+    const qsizetype contentBefore = content.count();
+    s.clearAll();
+    QCOMPARE(content.count(), contentBefore + 1);
+    QCOMPARE(sbChanged.count(), 1);
+    QCOMPARE(s.scrollbackSize(), 0);
+
+    // Alternate screen (top / vi): the primary grid saved behind it is wiped as well, so leaving
+    // the alternate screen brings back a blank primary, not the old text.
+    s.resetAttributes();
+    s.setAutoWrap(true);
+    s.setInsertMode(false);
+    fillRows(s, {QStringLiteral("one"), QStringLiteral("two"), QStringLiteral("three")});
+    s.moveCursorTo(2, 0);
+    s.lineFeed();
+    QCOMPARE(s.scrollbackSize(), 1);
+    s.setAlternateScreen(true);   // the cursor stays where it was (row 2): home it explicitly
+    s.moveCursorTo(0, 0);
+    s.putText(QStringLiteral("alt"));
+    QCOMPARE(rowText(s, 0), QStringLiteral("alt"));
+    s.clearAll();
+    QVERIFY(s.alternateScreenActive()); // Clear does not leave the alternate screen: the program owns it
+    QCOMPARE(s.scrollbackSize(), 0);
+    for (int r = 0; r < 3; ++r) {
+        QVERIFY(rowText(s, r).isEmpty());
+    }
+    s.setAlternateScreen(false);
+    QVERIFY(!s.alternateScreenActive());
+    for (int r = 0; r < 3; ++r) {
+        QVERIFY2(rowText(s, r).isEmpty(), qPrintable(QStringLiteral("primary row %1: '%2'").arg(r).arg(rowText(s, r))));
+    }
+    QCOMPARE(s.line(0).length(), 5);   // still a full grid line
+    QCOMPARE(s.scrollbackSize(), 0);
+    s.putText(QStringLiteral("z"));    // fully usable afterwards
+    QCOMPARE(rowText(s, s.cursor().row), QStringLiteral("z"));
 }
 
 void Tst_terminalscreen::pushScreenToScrollback()

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "BuildAI Serial Utility - a serial-port terminal for Rockchip Linux boards and MCU shells"
     HOMEPAGE_URL "https://build.ai"
     LANGUAGES CXX)

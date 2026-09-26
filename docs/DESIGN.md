@@ -131,8 +131,10 @@ may add private members, private slots and helper functions freely, and may add
 
 115200 8N1, no flow, DTR/RTS asserted; Enter → CR; Backspace → DEL (0x7F); UTF-8;
 implicit CR on LF **on**; local echo off; auto-reconnect on (1000 ms); scrollback 10 000;
-theme `dark`; font Consolas 10 (Windows) / Monospace 10; log dir `<Documents>/BuildAI/SerialLogs`;
-log format `text`, include TX; confirm close when connected; restore last ports.
+theme `dark`; font Consolas 10 (Windows) / Monospace 10; pause output while selecting **on**;
+right click pastes (cmd.exe style) **on**;
+log dir `<Documents>/BuildAI/SerialLogs`; log format `text`, include TX; confirm close when
+connected; restore last ports.
 
 ### 4.5 Terminal emulation scope
 
@@ -206,6 +208,52 @@ the selected baud rate. See the header for the exact command set. Unit tests:
   File, Clear, Replay Log and Quit are `Ctrl+Shift+<letter>` (H / F / O / L / R / Q). The
   terminal leaves every `Ctrl+Shift+<letter>` plus `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+,`
   and F2 / F3 / F5 to the application's shortcut map and claims everything else.
+- Pause output while selecting (cmd.exe QuickEdit / mark mode; `AppSettings::pauseWhileSelecting()`,
+  **on** by default, *View > Pause Output While Selecting* and *Preferences > Terminal*): a
+  streaming console cannot be copied from if the text keeps scrolling under the pointer, so as
+  soon as a selection becomes non-empty (drag past the pressed cell, double/triple click,
+  Shift+click, Select All, Find) `TerminalWidget` stops parsing and queues every byte from
+  `feedData()` (`isOutputPaused()`, `pendingPausedBytes()`). Screen, scrollback and selection are
+  frozen; the hex view and the session logger keep receiving because `SessionWidget` feeds them
+  separately. Enter copies the selection and resumes, Esc cancels, any copy (Ctrl+Shift+C,
+  Ctrl+Insert, Ctrl+C with a selection, context menu) copies and resumes, a plain click or
+  `clearSelection()` resumes; every other key press and every paste is swallowed (nothing reaches
+  the device, no local echo) except the application shortcuts above; wheel / scrollbar / zoom keep
+  working. Resuming parses the queue in one feed (one coalesced repaint) and keeps the
+  follow-output state; `clearScreen()` / `clearAll()` / `resetTerminal()` apply first and flush afterwards. A
+  translucent badge in the top-right corner shows the queued size ("Output paused  12.3 KB waiting
+  Enter: copy  Esc: cancel", repainted at most every 100 ms) and `SessionWidget` shows a
+  persistent status-bar hint via `outputPausedChanged()` (`persistentStatusMessage()`; MainWindow
+  swaps it for the new tab's own state on every tab switch or close and brings it back once a
+  transient message expired, so a background tab's hint never stays on screen). The queue is bounded by
+  `pauseBufferLimit()` (64 MiB): exceeding it resumes automatically with the selection kept,
+  flushes everything (`pauseBufferOverflow()`, a status message) and never drops a byte. Turning
+  the feature off while paused resumes too.
+- cmd.exe-style right click (`AppSettings::rightClickPastes()`, **on** by default, *View > Right
+  Click Pastes (cmd.exe style)* and *Preferences > Terminal*; `TerminalWidget::setRightClickPastes()`,
+  pushed by `SessionWidget::applyPreferences()` like the pause flag): a plain right-button press in
+  the terminal copies the selection when one exists (`copySelection()` + `clearSelection()`, i.e.
+  exactly Enter in mark mode - the paused display resumes, nothing is pasted) and pastes the
+  clipboard otherwise (the `paste()` path: CR/LF conversion, bracketed paste, dropped while
+  disconnected); no menu opens. The context menu moves to Shift+right click, the Menu key and
+  Shift+F10: `contextMenuEvent()` swallows a mouse-triggered event without Shift while the feature
+  is on (whatever the platform's trigger, press or release) and appends a disabled hint line
+  "Right click: paste / copy selection - Shift+right click: this menu" so the change is
+  discoverable; with the feature off a plain right click opens the menu as before. A right-button
+  press never starts, extends or drops a left-button selection (a chorded right press during a
+  left drag is ignored). The View action and the Preferences checkbox are kept in step through
+  `AppSettings::changed`, exactly like *Pause Output While Selecting*.
+- Clear (toolbar button next to Disconnect, *Session > Clear*, Ctrl+Shift+L;
+  `SessionWidget::clearTerminal()` → `TerminalWidget::clearAll()` + `HexDumpView::clearAll()`) wipes
+  the screen *and* the scrollback and the hex view, homes the cursor and keeps attributes, modes and
+  the parser state; *Reset Terminal* (`resetTerminal()`) remains the full RIS. While an
+  alternate-screen program (`top`, `vi`, `menuconfig`) is running, `TerminalScreen::clearAll()` also
+  blanks the primary grid saved behind it, so nothing of the old output comes back when the program
+  exits (the program keeps the alternate screen and redraws itself). While paused the
+  clear applies first and the queued bytes are parsed afterwards on the empty screen. The terminal's
+  own context menu keeps the finer-grained *Clear Screen (keep scrollback)* (`clearScreen()`: the
+  screen is pushed into the scrollback, like Ctrl+L in a shell - the label says so because it is
+  not the toolbar's Clear) and *Clear Scrollback* (`clearScrollback()`).
 
 ## 5. Build, run, test
 

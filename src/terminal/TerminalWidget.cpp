@@ -6,15 +6,18 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFocusEvent>
+#include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QGlyphRun>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
+#include <QLocale>
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPen>
 #include <QRegion>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -47,6 +50,11 @@ constexpr int kDefaultRows = 24;
 constexpr int kDefaultCols = 80;
 constexpr int kDefaultScrollback = 10000;
 constexpr int kMinGrid = 2;
+constexpr int kPauseBadgeIntervalMs = 100;   ///< badge repaint coalescing while pending bytes grow
+constexpr int kPauseBadgeMargin = 6;         ///< px from the top / right edge of the viewport
+constexpr int kPauseBadgePadX = 10;
+constexpr int kPauseBadgePadY = 4;
+constexpr int kPauseBadgeRadius = 6;
 
 /// ESC followed by `tail` (avoids "\x1b" hex-escape pitfalls with following hex digits).
 QByteArray esc(const char* tail)
@@ -403,6 +411,9 @@ TerminalWidget::TerminalWidget(QWidget* parent)
     });
     m_dragScrollTimer.setInterval(kDragScrollIntervalMs);
     connect(&m_dragScrollTimer, &QTimer::timeout, this, &TerminalWidget::onDragScrollTimeout);
+    m_pauseBadgeTimer.setSingleShot(true);
+    m_pauseBadgeTimer.setInterval(kPauseBadgeIntervalMs);
+    connect(&m_pauseBadgeTimer, &QTimer::timeout, this, &TerminalWidget::onPauseBadgeTimeout);
 
     connect(m_screen, &TerminalScreen::contentChanged, this, &TerminalWidget::onScreenContentChanged);
     connect(m_screen, &TerminalScreen::sizeChanged, this, &TerminalWidget::onScreenSizeChanged);
@@ -434,6 +445,7 @@ TerminalWidget::~TerminalWidget()
     m_blinkTimer.stop();
     m_bellTimer.stop();
     m_dragScrollTimer.stop();
+    m_pauseBadgeTimer.stop();
     // The parser references the screen: make sure it goes first.
     delete m_parser;
     m_parser = nullptr;
@@ -587,6 +599,49 @@ bool TerminalWidget::inputEnabled() const
     return m_inputEnabled;
 }
 
+void TerminalWidget::setPauseWhileSelecting(bool on)
+{
+    if (m_pauseWhileSelecting == on) {
+        return;
+    }
+    m_pauseWhileSelecting = on;
+    qCDebug(lcUi) << "pause output while selecting" << on;
+    if (!on) {
+        resumeOutput();   // keeps the selection; the display simply flows again
+    }
+    // Turning it on affects the next selection only: a selection that already exists does not
+    // freeze the display retroactively.
+}
+
+bool TerminalWidget::pauseWhileSelecting() const
+{
+    return m_pauseWhileSelecting;
+}
+
+void TerminalWidget::setRightClickPastes(bool on)
+{
+    if (m_rightClickPastes == on) {
+        return;
+    }
+    m_rightClickPastes = on;
+    qCDebug(lcUi) << "right click pastes (cmd.exe style)" << on;
+}
+
+bool TerminalWidget::rightClickPastes() const
+{
+    return m_rightClickPastes;
+}
+
+void TerminalWidget::setPauseBufferLimit(qint64 bytes)
+{
+    m_pauseBufferLimit = qMax<qint64>(0, bytes);
+}
+
+qint64 TerminalWidget::pauseBufferLimit() const
+{
+    return m_pauseBufferLimit;
+}
+
 // ---------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------
@@ -624,6 +679,16 @@ bool TerminalWidget::isAtBottom() const
     return verticalScrollBar()->value() >= verticalScrollBar()->maximum();
 }
 
+bool TerminalWidget::isOutputPaused() const
+{
+    return m_outputPaused;
+}
+
+qint64 TerminalWidget::pendingPausedBytes() const
+{
+    return m_pendingPaused.size();
+}
+
 // ---------------------------------------------------------------------------------------
 // Public slots
 // ---------------------------------------------------------------------------------------
@@ -633,44 +698,91 @@ void TerminalWidget::feedData(const QByteArray& bytes)
     if (bytes.isEmpty()) {
         return;
     }
+    if (m_outputPaused) {
+        // Mark mode: the screen (and with it the selection) must not move. Queue the bytes;
+        // resumeOutput() parses them in one feed.
+        const qint64 total = static_cast<qint64>(m_pendingPaused.size()) + bytes.size();
+        if (total > m_pauseBufferLimit) {
+            // Never lose data: the display flows again, the selection stays copyable.
+            qCInfo(lcUi) << "pause buffer limit" << m_pauseBufferLimit << "exceeded with" << total
+                         << "bytes pending - resuming output";
+            m_pendingPaused += bytes;
+            resumeOutput();
+            emit pauseBufferOverflow(total);
+            return;
+        }
+        m_pendingPaused += bytes;
+        schedulePauseBadgeRepaint();
+        return;
+    }
     m_parser->feed(bytes);
 }
 
 void TerminalWidget::clearScreen()
 {
+    // While paused: drop the selection, clear, and only then let the queued output continue on
+    // the cleared screen (clearSelection() alone would parse it *before* the clear).
+    const bool wasPaused = m_outputPaused;
+    const QByteArray deferred = takePendingOutput();
+    if (wasPaused) {
+        clearSelection();
+    }
     m_screen->pushScreenToScrollback();
     scrollToBottom();
     scheduleRepaint();
+    feedData(deferred);
 }
 
 void TerminalWidget::clearScrollback()
 {
+    const QByteArray deferred = takePendingOutput();
     clearSelection();
     m_screen->clearScrollback();
     updateScrollBar();
     scheduleRepaint();
+    feedData(deferred);
+}
+
+void TerminalWidget::clearAll()
+{
+    // Toolbar "Clear": nothing of the previous output survives - neither on the screen nor in the
+    // scrollback - while attributes, modes and the parser state stay (resetTerminal() is the
+    // RIS). Like clearScreen(): a paused display is cleared first, the queued bytes follow.
+    const QByteArray deferred = takePendingOutput();
+    clearSelection();
+    // Visible grid, scrollback and - while top/vi/menuconfig hold the alternate screen - the
+    // primary grid saved behind it, so nothing comes back on ?1049l; cursor home, attributes kept.
+    m_screen->clearAll();
+    updateScrollBar();
+    scrollToBottom();
+    scheduleRepaint();
+    feedData(deferred);
 }
 
 void TerminalWidget::resetTerminal()
 {
+    const QByteArray deferred = takePendingOutput();
     clearSelection();
     m_parser->reset();
     m_screen->reset();
     updateScrollBar();
     scrollToBottom();
     scheduleRepaint();
+    feedData(deferred);
 }
 
 void TerminalWidget::copySelection()
 {
     const QString text = selectedText();
-    if (text.isEmpty()) {
-        return;
+    if (!text.isEmpty()) {
+        QClipboard* clipboard = QApplication::clipboard();
+        clipboard->setText(text, QClipboard::Clipboard);
+        if (clipboard->supportsSelection()) {
+            clipboard->setText(text, QClipboard::Selection);
+        }
     }
-    QClipboard* clipboard = QApplication::clipboard();
-    clipboard->setText(text, QClipboard::Clipboard);
-    if (clipboard->supportsSelection()) {
-        clipboard->setText(text, QClipboard::Selection);
+    if (m_outputPaused) {
+        clearSelection();   // mark mode: copying finishes the selection and resumes the display
     }
 }
 
@@ -681,8 +793,8 @@ void TerminalWidget::paste()
 
 void TerminalWidget::pasteText(const QString& text)
 {
-    if (text.isEmpty() || !m_inputEnabled) {
-        return;
+    if (text.isEmpty() || !m_inputEnabled || m_outputPaused) {
+        return;   // mark mode swallows pastes like every other input
     }
     QString normalized = text;
     normalized.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
@@ -733,13 +845,24 @@ void TerminalWidget::selectAll()
 void TerminalWidget::clearSelection()
 {
     m_dragScrollTimer.stop();
-    if (!m_selection.active) {
+    if (m_selection.active) {
+        m_selection = Selection();
+        m_selecting = false;
+        emit selectionChanged();
+        viewport()->update();
+    }
+    resumeOutput();   // no selection, nothing to protect: the queued output flows again
+}
+
+void TerminalWidget::resumeOutput()
+{
+    if (!m_outputPaused) {
         return;
     }
-    m_selection = Selection();
-    m_selecting = false;
-    emit selectionChanged();
-    viewport()->update();
+    const QByteArray pending = takePendingOutput();
+    if (!pending.isEmpty()) {
+        m_parser->feed(pending);   // one feed: contentChanged / scrollbar updates fire once, repaint is coalesced
+    }
 }
 
 void TerminalWidget::scrollToBottom()
@@ -884,6 +1007,9 @@ void TerminalWidget::paintEvent(QPaintEvent* event)
         paintLine(painter, m_screen->absoluteLine(absolute), absolute, row * m_cellHeight);
     }
     paintCursor(painter);
+    if (m_outputPaused) {
+        paintPauseBadge(painter);   // last, over the cells and the cursor; never part of the model
+    }
     // The screen's dirty state is consumed by performRepaint() when it posts the update, never
     // here: mutations that land between the two set fresh bits for the next coalesced pass.
 
@@ -1067,6 +1193,108 @@ void TerminalWidget::paintCursor(QPainter& painter)
 QColor TerminalWidget::currentBackground() const
 {
     return m_bellFlash ? blend(m_palette.background, m_palette.foreground, 0.15) : m_palette.background;
+}
+
+// ---------------------------------------------------------------------------------------
+// Pause output while selecting
+// ---------------------------------------------------------------------------------------
+
+void TerminalWidget::pauseForSelection()
+{
+    if (!m_pauseWhileSelecting || m_outputPaused || m_selection.isEmpty()) {
+        return;
+    }
+    setOutputPaused(true);
+}
+
+void TerminalWidget::setOutputPaused(bool paused)
+{
+    if (m_outputPaused == paused) {
+        return;
+    }
+    m_outputPaused = paused;
+    m_pauseBadgeTimer.stop();
+    if (paused) {
+        qCDebug(lcUi) << "output paused while selecting";
+    } else {
+        qCDebug(lcUi) << "output resumed";
+        m_pauseBadgeRect = QRect();
+    }
+    viewport()->update();   // the badge appears / disappears
+    emit outputPausedChanged(paused);
+}
+
+QByteArray TerminalWidget::takePendingOutput()
+{
+    QByteArray pending;
+    pending.swap(m_pendingPaused);
+    setOutputPaused(false);
+    return pending;
+}
+
+QString TerminalWidget::pauseBadgeText() const
+{
+    const QString size = QLocale().formattedDataSize(m_pendingPaused.size(), 1, QLocale::DataSizeTraditionalFormat);
+    return tr("⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel").arg(size);
+}
+
+QFont TerminalWidget::pauseBadgeFont() const
+{
+    QFont font = m_font;
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
+    font.setPointSize(qMax(kMinFontPointSize, m_font.pointSize() - 1));
+    return font;
+}
+
+QRect TerminalWidget::pauseBadgeRect() const
+{
+    const QFontMetrics fm(pauseBadgeFont(), viewport());
+    const int maxTextWidth = qMax(1, viewport()->width() - 2 * kPauseBadgeMargin - 2 * kPauseBadgePadX);
+    const int textWidth = qMin(maxTextWidth, fm.horizontalAdvance(pauseBadgeText()));
+    const int width = textWidth + 2 * kPauseBadgePadX;
+    const int height = fm.height() + 2 * kPauseBadgePadY;
+    return QRect(viewport()->width() - kPauseBadgeMargin - width, kPauseBadgeMargin, width, height);
+}
+
+void TerminalWidget::paintPauseBadge(QPainter& painter)
+{
+    const QFont font = pauseBadgeFont();
+    const QFontMetrics fm(font, viewport());
+    const QRect rect = pauseBadgeRect();
+    m_pauseBadgeRect = rect;
+    const QString text = fm.elidedText(pauseBadgeText(), Qt::ElideRight, rect.width() - 2 * kPauseBadgePadX);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    // Inverse of the terminal colours so the badge reads on every theme: a light pill with dark
+    // text on the dark theme and vice versa, translucent enough to hint at the text underneath.
+    QColor fill = m_palette.foreground;
+    fill.setAlpha(0xE0);
+    QColor border = m_palette.background;
+    border.setAlpha(0x80);
+    painter.setPen(QPen(border, 1.0));
+    painter.setBrush(fill);
+    painter.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), kPauseBadgeRadius, kPauseBadgeRadius);
+    painter.setFont(font);
+    painter.setPen(m_palette.background);
+    painter.drawText(QPointF(rect.x() + kPauseBadgePadX, rect.y() + kPauseBadgePadY + fm.ascent()), text);
+    painter.restore();
+}
+
+void TerminalWidget::schedulePauseBadgeRepaint()
+{
+    if (!m_pauseBadgeTimer.isActive()) {
+        m_pauseBadgeTimer.start();   // one repaint per interval, however many chunks arrive
+    }
+}
+
+void TerminalWidget::onPauseBadgeTimeout()
+{
+    if (!m_outputPaused) {
+        return;
+    }
+    // The pill grows with its number: repaint the old area as well so no stale edge remains.
+    viewport()->update(m_pauseBadgeRect.united(pauseBadgeRect()));
 }
 
 QRect TerminalWidget::cursorRect() const
@@ -1281,6 +1509,7 @@ void TerminalWidget::setSelectionRange(int anchorLine, int anchorCol, int endLin
     emit selectionChanged();
     publishSelection();
     viewport()->update();
+    pauseForSelection();
 }
 
 void TerminalWidget::selectWordAt(int absoluteLine, int col)
@@ -1328,7 +1557,11 @@ bool TerminalWidget::event(QEvent* event)
             if (action == LocalAction::CopyIfSelection && !hasSelection()) {
                 action = LocalAction::None;
             }
-            if (action != LocalAction::None || (m_inputEnabled && wantsKeyAsInput(keyEvent))) {
+            // Mark mode: Enter / Esc finish or cancel the selection even while disconnected.
+            const int key = keyEvent->key();
+            const bool markModeKey =
+                m_outputPaused && (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape);
+            if (action != LocalAction::None || markModeKey || (m_inputEnabled && wantsKeyAsInput(keyEvent))) {
                 keyEvent->accept();
                 return true;
             }
@@ -1380,8 +1613,47 @@ bool TerminalWidget::handleLocalShortcut(QKeyEvent* event)
     return false;
 }
 
+bool TerminalWidget::handlePausedKey(QKeyEvent* event)
+{
+    switch (event->key()) {
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        copySelection();    // copies and, while paused, clears + resumes
+        clearSelection();   // nothing to copy (blank selection): still leave mark mode
+        return true;
+    case Qt::Key_Escape:
+        clearSelection();   // cancel: no clipboard change
+        return true;
+    default:
+        break;
+    }
+    switch (localActionFor(event)) {
+    case LocalAction::Copy:
+    case LocalAction::CopyIfSelection:
+        copySelection();
+        clearSelection();
+        return true;
+    case LocalAction::Paste:
+        return true;   // swallowed: nothing may reach the device in mark mode
+    case LocalAction::ZoomIn:
+    case LocalAction::ZoomOut:
+    case LocalAction::ZoomReset:
+    case LocalAction::ScrollPageUp:
+    case LocalAction::ScrollPageDown:
+        return false;   // view-only shortcuts keep working (handleLocalShortcut())
+    case LocalAction::None:
+        break;
+    }
+    return true;   // every other key: swallowed, no bytes, no local echo
+}
+
 void TerminalWidget::keyPressEvent(QKeyEvent* event)
 {
+    // (0) mark mode: the keyboard finishes or cancels the selection, nothing reaches the device
+    if (m_outputPaused && handlePausedKey(event)) {
+        event->accept();
+        return;
+    }
     // (1) shortcuts that never reach the device
     if (handleLocalShortcut(event)) {
         event->accept();
@@ -1626,7 +1898,7 @@ void TerminalWidget::transmit(const QByteArray& bytes)
 void TerminalWidget::inputMethodEvent(QInputMethodEvent* event)
 {
     const QString commit = event->commitString();
-    if (!commit.isEmpty() && m_inputEnabled) {
+    if (!commit.isEmpty() && m_inputEnabled && !m_outputPaused) {
         scrollToBottom();
         restartBlink();
         transmit(encode(commit));
@@ -1682,6 +1954,7 @@ void TerminalWidget::mousePressEvent(QMouseEvent* event)
             emit selectionChanged();
             publishSelection();
             viewport()->update();
+            pauseForSelection();
         } else {
             // Plain press: drop the old selection and start an empty one at the pressed cell;
             // it becomes visible once the pointer leaves that cell (mouseMoveEvent()).
@@ -1709,6 +1982,31 @@ void TerminalWidget::mousePressEvent(QMouseEvent* event)
             text = clipboard->text(QClipboard::Clipboard);
         }
         pasteText(text);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::RightButton) {
+        // cmd.exe QuickEdit: a plain right click copies the selection (and, like Enter in mark
+        // mode, finishes it - which resumes a paused display) or pastes the clipboard. The
+        // context menu is reached with Shift (contextMenuEvent() suppresses the mouse-triggered
+        // menu while the feature is on). A right press never touches a left-button selection in
+        // progress: a chorded press while the left button is still held is ignored. The button
+        // state of the event is authoritative: when a drag's left release never reached us (a
+        // popup - e.g. the Shift+right-click menu opened mid-drag - took it) the drag is over
+        // and must not keep blocking right clicks; the selection it made stays.
+        const bool leftHeld = event->buttons().testFlag(Qt::LeftButton);
+        if (m_selecting && !leftHeld) {
+            m_selecting = false;
+            m_dragScrollTimer.stop();
+        }
+        if (m_rightClickPastes && !event->modifiers().testFlag(Qt::ShiftModifier) && !leftHeld) {
+            if (hasSelection()) {
+                copySelection();    // while paused this already clears the selection and resumes
+                clearSelection();   // not paused: the selection is finished as well, nothing is pasted
+            } else {
+                paste();            // pasteText(): CR/LF conversion, bracketed paste, dropped while disconnected
+            }
+        }
         event->accept();
         return;
     }
@@ -1756,6 +2054,7 @@ void TerminalWidget::extendDragSelectionTo(const QPoint& viewportPos)
         m_selection.endCol = endCol;
         emit selectionChanged();
         viewport()->update();
+        pauseForSelection();   // the drag left the pressed cell: the selection is real now
     }
 }
 
@@ -1789,13 +2088,19 @@ void TerminalWidget::mouseReleaseEvent(QMouseEvent* event)
         m_dragScrollTimer.stop();
         m_selecting = false;
         if (m_selection.active && m_selection.isEmpty()) {
+            // A click without a drag: the (previous) selection is gone, and with it the pause.
             m_selection.active = false;
             emit selectionChanged();
             viewport()->update();
+            resumeOutput();
         } else if (m_selection.active) {
             publishSelection();
         }
         event->accept();
+        return;
+    }
+    if (event->button() == Qt::RightButton) {
+        event->accept();   // the press did the work (paste / copy / nothing); nothing for the parent
         return;
     }
     QAbstractScrollArea::mouseReleaseEvent(event);
@@ -1840,20 +2145,31 @@ void TerminalWidget::wheelEvent(QWheelEvent* event)
 
 void TerminalWidget::contextMenuEvent(QContextMenuEvent* event)
 {
+    // cmd.exe style: the plain right click already pasted or copied in mousePressEvent(); the
+    // menu is reached with Shift+right click, the Menu key or Shift+F10 (reason Keyboard). With
+    // the feature off a plain right click opens the menu as before.
+    if (m_rightClickPastes && event->reason() == QContextMenuEvent::Mouse &&
+        !event->modifiers().testFlag(Qt::ShiftModifier)) {
+        event->accept();
+        return;
+    }
+
     QMenu menu(this);
     QAction* copyAction = menu.addAction(tr("&Copy"));
     copyAction->setEnabled(hasSelection());
     connect(copyAction, &QAction::triggered, this, &TerminalWidget::copySelection);
 
     QAction* pasteAction = menu.addAction(tr("&Paste"));
-    pasteAction->setEnabled(m_inputEnabled && !QApplication::clipboard()->text().isEmpty());
+    pasteAction->setEnabled(m_inputEnabled && !m_outputPaused && !QApplication::clipboard()->text().isEmpty());
     connect(pasteAction, &QAction::triggered, this, &TerminalWidget::paste);
 
     QAction* selectAllAction = menu.addAction(tr("Select &All"));
     connect(selectAllAction, &QAction::triggered, this, &TerminalWidget::selectAll);
 
     menu.addSeparator();
-    QAction* clearScreenAction = menu.addAction(tr("Clear &Screen"));
+    // Unlike the toolbar's Clear (SessionWidget::clearTerminal(): screen + scrollback + hex view)
+    // this one pushes the screen into the scrollback, hence the explicit label.
+    QAction* clearScreenAction = menu.addAction(tr("Clear &Screen (keep scrollback)"));
     connect(clearScreenAction, &QAction::triggered, this, &TerminalWidget::clearScreen);
     QAction* clearScrollbackAction = menu.addAction(tr("Clear Scroll&back"));
     connect(clearScrollbackAction, &QAction::triggered, this, &TerminalWidget::clearScrollback);
@@ -1869,6 +2185,13 @@ void TerminalWidget::contextMenuEvent(QContextMenuEvent* event)
     QAction* findAction = menu.addAction(tr("&Find..."));
     findAction->setEnabled(m_screen->totalLines() > 0);
     connect(findAction, &QAction::triggered, this, &TerminalWidget::findRequested);
+
+    if (m_rightClickPastes) {
+        // Discoverability: the menu no longer opens on a plain right click, say so at the bottom.
+        menu.addSeparator();
+        QAction* hintAction = menu.addAction(tr("Right click: paste / copy selection - Shift+right click: this menu"));
+        hintAction->setEnabled(false);
+    }
 
     menu.exec(event->globalPos());
     event->accept();

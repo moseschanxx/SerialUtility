@@ -133,6 +133,14 @@ MainWindow::MainWindow(QWidget* parent)
     setupStatusBar();
     setupSystemLogDock();
     setupLanguageMenu();
+    // A transient message ("Not connected", "Reconnected to COM8", ...) replaces the current
+    // session's lasting hint ("Output paused while selecting"); bring the hint back when the
+    // transient one expires or is cleared, for as long as the session still reports it.
+    connect(statusBar(), &QStatusBar::messageChanged, this, [this](const QString& message) {
+        if (message.isEmpty() && !m_sessionHint.isEmpty()) {
+            statusBar()->showMessage(m_sessionHint, 0);
+        }
+    });
 
     // ---- Tabs ----
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onTabChanged);
@@ -170,6 +178,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->actionHexView, &QAction::toggled, this, &MainWindow::onHexViewToggled);
     connect(ui->actionShowCommandInput, &QAction::toggled, this, &MainWindow::onShowCommandInputToggled);
     connect(ui->actionShowQuickCommands, &QAction::toggled, this, &MainWindow::onShowQuickCommandsToggled);
+    connect(ui->actionPauseWhileSelecting, &QAction::toggled, this, &MainWindow::onPauseWhileSelectingToggled);
+    connect(ui->actionRightClickPastes, &QAction::toggled, this, &MainWindow::onRightClickPastesToggled);
+    // The Preferences dialog writes the same settings: keep the menu actions in step with it.
+    connect(&AppSettings::instance(), &AppSettings::changed, this, [this](const QString&) {
+        syncPauseWhileSelectingAction();
+        syncRightClickPastesAction();
+    });
     connect(ui->actionZoomIn, &QAction::triggered, this, &MainWindow::onZoomIn);
     connect(ui->actionZoomOut, &QAction::triggered, this, &MainWindow::onZoomOut);
     connect(ui->actionZoomReset, &QAction::triggered, this, &MainWindow::onZoomReset);
@@ -426,6 +441,7 @@ void MainWindow::changeEvent(QEvent* event)
         for (int i = 0; i < sessionCount(); ++i) {
             updateTabAppearance(sessionAt(i));
         }
+        updateSessionHint();   // the "Output paused" hint, if shown, in the new language
     }
     QMainWindow::changeEvent(event);
 }
@@ -439,8 +455,26 @@ void MainWindow::onTabChanged(int index)
     updateActions();
     updateStatusBar();
     updateWindowTitle();
+    updateSessionHint();
     if (SessionWidget* session = sessionAt(index)) {
         session->focusTerminal();
+    }
+}
+
+void MainWindow::updateSessionHint()
+{
+    // The "Output paused" hint belongs to the session that posted it: it must not outlive a tab
+    // switch or a close, and the new current tab shows its own hint (if it is paused as well).
+    const QString previous = m_sessionHint;
+    SessionWidget* session = currentSession();
+    m_sessionHint = session ? session->persistentStatusMessage() : QString();
+    if (m_sessionHint == previous) {
+        return;
+    }
+    if (!m_sessionHint.isEmpty()) {
+        statusBar()->showMessage(m_sessionHint, 0);
+    } else if (statusBar()->currentMessage() == previous) {
+        statusBar()->clearMessage();
     }
 }
 
@@ -485,7 +519,15 @@ void MainWindow::onSessionStateChanged(SerialConnection::State state)
 void MainWindow::onSessionStatusMessage(const QString& message, int timeoutMs)
 {
     auto* session = qobject_cast<SessionWidget*>(sender());
-    if (session && session == currentSession()) {
+    if (!session || session != currentSession()) {
+        return;
+    }
+    // Whatever arrived, remember the session's lasting hint (empty once a paused terminal
+    // resumed) so the messageChanged handler restores exactly the current state.
+    m_sessionHint = session->persistentStatusMessage();
+    if (message.isEmpty()) {
+        statusBar()->clearMessage();   // e.g. the "Output paused" hint once the terminal resumes
+    } else {
         statusBar()->showMessage(message, timeoutMs);
     }
 }
@@ -719,6 +761,32 @@ void MainWindow::onShowQuickCommandsToggled(bool on)
         }
     }
     QSettings().setValue(kShowQuickCommandsKey, on);
+}
+
+void MainWindow::onPauseWhileSelectingToggled(bool on)
+{
+    // AppSettings::changed -> every SessionWidget::applyPreferences() pushes it to its terminal.
+    AppSettings::instance().setPauseWhileSelecting(on);
+    qCInfo(lcUi) << "pause output while selecting" << (on ? "on" : "off");
+}
+
+void MainWindow::syncPauseWhileSelectingAction()
+{
+    const QSignalBlocker blocker(ui->actionPauseWhileSelecting);
+    ui->actionPauseWhileSelecting->setChecked(AppSettings::instance().pauseWhileSelecting());
+}
+
+void MainWindow::onRightClickPastesToggled(bool on)
+{
+    // AppSettings::changed -> every SessionWidget::applyPreferences() pushes it to its terminal.
+    AppSettings::instance().setRightClickPastes(on);
+    qCInfo(lcUi) << "right click pastes (cmd.exe style)" << (on ? "on" : "off");
+}
+
+void MainWindow::syncRightClickPastesAction()
+{
+    const QSignalBlocker blocker(ui->actionRightClickPastes);
+    ui->actionRightClickPastes->setChecked(AppSettings::instance().rightClickPastes());
 }
 
 void MainWindow::onZoomIn()
@@ -1197,4 +1265,6 @@ void MainWindow::restoreState()
     QSettings qsettings;
     ui->actionShowCommandInput->setChecked(qsettings.value(kShowCommandInputKey, true).toBool());
     ui->actionShowQuickCommands->setChecked(qsettings.value(kShowQuickCommandsKey, true).toBool());
+    syncPauseWhileSelectingAction();   // AppSettings::pauseWhileSelecting(), default on
+    syncRightClickPastesAction();      // AppSettings::rightClickPastes(), default on
 }

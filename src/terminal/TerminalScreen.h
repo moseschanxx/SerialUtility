@@ -171,10 +171,18 @@ public:
 
     // ---- Whole-screen ---------------------------------------------------------------
     void reset();             ///< RIS: clear screen + scrollback, home cursor, default attributes/modes/tabs
-    void clearScreen();       ///< erase all cells, keep scrollback, home cursor (menu "Clear")
+    void clearScreen();       ///< erase all cells of the current grid, keep scrollback, home cursor
     void clearScrollback();
+    /// The toolbar's Clear (TerminalWidget::clearAll()): erase the visible grid *and* the
+    /// scrollback and, while the alternate screen is active, the primary grid saved behind it
+    /// (so nothing of the previous output comes back when the program leaves the alternate
+    /// screen); home the cursor. Attributes, modes, tabs, the saved cursors and the title are
+    /// kept - reset() is the RIS. Emits contentChanged() once (plus scrollbackChanged() when the
+    /// scrollback was not empty).
+    void clearAll();
     /// Move the visible screen contents into the scrollback and clear the screen (like
-    /// pressing Ctrl+L in a shell would appear); used by "Clear" so nothing is lost.
+    /// pressing Ctrl+L in a shell would appear); the terminal context menu's "Clear Screen
+    /// (keep scrollback)" (TerminalWidget::clearScreen()) uses it so nothing is lost.
     void pushScreenToScrollback();
 
 signals:

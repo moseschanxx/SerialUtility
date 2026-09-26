@@ -1266,6 +1266,33 @@ void TerminalScreen::clearScrollback()
     notifyChanged(m_cursor);
 }
 
+void TerminalScreen::clearAll()
+{
+    const Cursor before = m_cursor;
+    for (int r = 0; r < m_rows; ++r) {
+        m_screen[r] = blankLine();
+    }
+    if (m_alternate) {
+        // The primary grid comes back verbatim on ?1049l / ?47l: blank it too, with default
+        // attributes (the current background belongs to the alternate-screen program).
+        Cell plain;
+        plain.ch = U' ';
+        for (Line& l : m_savedScreen) {
+            l.cells.fill(plain, l.cells.size());
+            l.wrapped = false;
+        }
+    }
+    if (!m_scrollback.isEmpty()) {
+        m_scrollback.clear();
+        m_scrollbackDirty = true;
+    }
+    m_cursor.row = m_originMode ? m_scrollTop : 0;
+    m_cursor.col = 0;
+    m_pendingWrap = false;
+    markAllDirty();
+    notifyChanged(before);
+}
+
 void TerminalScreen::pushScreenToScrollback()
 {
     const Cursor before = m_cursor;

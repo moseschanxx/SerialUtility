@@ -173,6 +173,8 @@ struct PrefControls
     QCheckBox* logIncludeTx = nullptr;
     QCheckBox* confirmClose = nullptr;
     QCheckBox* restoreSessions = nullptr;
+    QCheckBox* pauseWhileSelecting = nullptr;
+    QCheckBox* rightClickPastes = nullptr;
     QTabWidget* tabs = nullptr;
     QDialogButtonBox* buttons = nullptr;
 
@@ -181,7 +183,8 @@ struct PrefControls
         return fontPreview && fontButton && theme && scrollback && cursorBlink && bell && implicitCr && enterSends &&
                backspaceDelete && localEcho && encoding && baud && dataBits && parity && stopBits && flow && dtr &&
                rts && autoReconnect && reconnectInterval && showSimulated && logDir && logDirBrowse && autoLog &&
-               logFormat && logIncludeTx && confirmClose && restoreSessions && tabs && buttons;
+               logFormat && logIncludeTx && confirmClose && restoreSessions && pauseWhileSelecting &&
+               rightClickPastes && tabs && buttons;
     }
 };
 
@@ -195,6 +198,8 @@ PrefControls controlsOf(const PreferencesDialog& dialog)
     c.cursorBlink = child<QCheckBox>(&dialog, "cursorBlinkCheck");
     c.bell = child<QCheckBox>(&dialog, "bellCheck");
     c.implicitCr = child<QCheckBox>(&dialog, "implicitCrCheck");
+    c.pauseWhileSelecting = child<QCheckBox>(&dialog, "pauseWhileSelectingCheck");
+    c.rightClickPastes = child<QCheckBox>(&dialog, "rightClickPastesCheck");
     c.enterSends = child<QComboBox>(&dialog, "enterSendsCombo");
     c.backspaceDelete = child<QCheckBox>(&dialog, "backspaceDeleteCheck");
     c.localEcho = child<QCheckBox>(&dialog, "localEchoCheck");
@@ -271,6 +276,8 @@ private slots:
     void preferencesRestoreDefaultsLogging();
     void preferencesRestoreDefaultsGeneral();
     void preferencesShowSimulatedPortsRoundTrip();
+    void preferencesPauseWhileSelectingRoundTrip();
+    void preferencesRightClickPastesRoundTrip();
     void preferencesDependentControls();
     void preferencesEmptyLogDirFallsBack();
     void preferencesInvalidBaudIgnored();
@@ -366,6 +373,8 @@ void Tst_dialogs::setNonDefaultSettings()
     s.setCursorBlink(false);
     s.setBellEnabled(false);
     s.setImplicitCr(false);
+    s.setPauseWhileSelecting(false);
+    s.setRightClickPastes(false);
     s.setEnterSends(LineEnding::Mode::LF);
     s.setBackspaceSendsDelete(false);
     s.setLocalEcho(true);
@@ -424,6 +433,8 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QVERIFY(!c.cursorBlink->isChecked());
     QVERIFY(!c.bell->isChecked());
     QVERIFY(!c.implicitCr->isChecked());
+    QVERIFY(!c.pauseWhileSelecting->isChecked());
+    QVERIFY(!c.rightClickPastes->isChecked());
 
     // Input
     QCOMPARE(c.enterSends->currentData().toInt(), static_cast<int>(LineEnding::Mode::LF));
@@ -485,6 +496,8 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     c.cursorBlink->setChecked(false);
     c.bell->setChecked(false);
     c.implicitCr->setChecked(false);
+    c.pauseWhileSelecting->setChecked(false);
+    c.rightClickPastes->setChecked(false);
     // Input
     QVERIFY(selectData(c.enterSends, static_cast<int>(LineEnding::Mode::CRLF)));
     c.backspaceDelete->setChecked(false);
@@ -522,6 +535,8 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!s.cursorBlink());
     QVERIFY(!s.bellEnabled());
     QVERIFY(!s.implicitCr());
+    QVERIFY(!s.pauseWhileSelecting());
+    QVERIFY(!s.rightClickPastes());
     QCOMPARE(static_cast<int>(s.enterSends()), static_cast<int>(LineEnding::Mode::CRLF));
     QVERIFY(!s.backspaceSendsDelete());
     QVERIFY(s.localEcho());
@@ -557,6 +572,8 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!c2.rts->isEnabled());
     QCOMPARE(c2.logDir->text(), QDir::toNativeSeparators(logDir));
     QVERIFY(!c2.showSimulated->isChecked());
+    QVERIFY(!c2.pauseWhileSelecting->isChecked());
+    QVERIFY(!c2.rightClickPastes->isChecked());
 }
 
 void Tst_dialogs::preferencesOkAcceptsAndWrites()
@@ -616,16 +633,22 @@ void Tst_dialogs::preferencesRestoreDefaultsTerminal()
     QVERIFY(c.cursorBlink->isChecked());
     QVERIFY(c.bell->isChecked());
     QVERIFY(c.implicitCr->isChecked());
+    QVERIFY(c.pauseWhileSelecting->isChecked());
+    QVERIFY(c.rightClickPastes->isChecked());
 
     // Other pages are untouched and nothing is written until Apply.
     QCOMPARE(c.enterSends->currentData().toInt(), static_cast<int>(LineEnding::Mode::LF));
     QVERIFY(!c.autoReconnect->isChecked());
     QCOMPARE(AppSettings::instance().scrollbackLines(), 5000);
     QCOMPARE(AppSettings::instance().themeName(), TerminalTheme::names().at(1));
+    QVERIFY(!AppSettings::instance().pauseWhileSelecting());
+    QVERIFY(!AppSettings::instance().rightClickPastes());
 
     c.buttons->button(QDialogButtonBox::Apply)->click();
     QCOMPARE(AppSettings::instance().scrollbackLines(), 10000);
     QCOMPARE(AppSettings::instance().themeName(), QStringLiteral("dark"));
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+    QVERIFY(AppSettings::instance().rightClickPastes());
     QCOMPARE(AppSettings::instance().terminalFont().family(), defaultFontFamily());
     QCOMPARE(AppSettings::instance().terminalFont().pointSize(), 10);
     // The Input page was not reset.
@@ -762,6 +785,107 @@ void Tst_dialogs::preferencesShowSimulatedPortsRoundTrip()
 
     PreferencesDialog again;
     QVERIFY(controlsOf(again).showSimulated->isChecked());
+}
+
+void Tst_dialogs::preferencesPauseWhileSelectingRoundTrip()
+{
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());   // default on
+    QSignalSpy changed(&AppSettings::instance(), &AppSettings::changed);
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    QVERIFY(c.pauseWhileSelecting->isChecked());
+    QVERIFY(!c.pauseWhileSelecting->text().isEmpty());
+    QVERIFY(!c.pauseWhileSelecting->toolTip().isEmpty());
+    // It lives on the Terminal page.
+    QVERIFY(c.tabs->widget(PageTerminal)->isAncestorOf(c.pauseWhileSelecting));
+
+    // Uncheck + Apply writes the key that SessionWidget / MainWindow listen for.
+    c.pauseWhileSelecting->setChecked(false);
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(!AppSettings::instance().pauseWhileSelecting());
+    QCOMPARE(QSettings().value(QStringLiteral("terminal/pauseWhileSelecting")).toBool(), false);
+    bool sawKey = false;
+    for (const QList<QVariant>& args : changed) {
+        sawKey = sawKey || args.at(0).toString() == QStringLiteral("terminal/pauseWhileSelecting");
+    }
+    QVERIFY(sawKey);
+
+    // A second dialog shows it unchecked; Restore Defaults on the Terminal page re-checks it
+    // without writing until OK.
+    PreferencesDialog again;
+    QVERIFY(expose(&again));
+    const PrefControls c2 = controlsOf(again);
+    QVERIFY(c2.complete());
+    QVERIFY(!c2.pauseWhileSelecting->isChecked());
+    c2.tabs->setCurrentIndex(PageTerminal);
+    c2.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QVERIFY(c2.pauseWhileSelecting->isChecked());
+    QVERIFY(!AppSettings::instance().pauseWhileSelecting());
+    c2.buttons->button(QDialogButtonBox::Ok)->click();
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+
+    // Cancel discards.
+    PreferencesDialog third;
+    QVERIFY(expose(&third));
+    const PrefControls c3 = controlsOf(third);
+    c3.pauseWhileSelecting->setChecked(false);
+    c3.buttons->button(QDialogButtonBox::Cancel)->click();
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+}
+
+void Tst_dialogs::preferencesRightClickPastesRoundTrip()
+{
+    QVERIFY(AppSettings::instance().rightClickPastes());   // default on
+    QSignalSpy changed(&AppSettings::instance(), &AppSettings::changed);
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    QVERIFY(c.rightClickPastes->isChecked());
+    QVERIFY(!c.rightClickPastes->text().isEmpty());
+    QVERIFY(c.rightClickPastes->text().contains(QStringLiteral("Shift")));
+    QVERIFY(!c.rightClickPastes->toolTip().isEmpty());
+    // It lives on the Terminal page, next to the pause checkbox.
+    QVERIFY(c.tabs->widget(PageTerminal)->isAncestorOf(c.rightClickPastes));
+
+    // Uncheck + Apply writes the key that SessionWidget / MainWindow listen for; the pause
+    // setting next to it is left alone.
+    c.rightClickPastes->setChecked(false);
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(!AppSettings::instance().rightClickPastes());
+    QVERIFY(AppSettings::instance().pauseWhileSelecting());
+    QCOMPARE(QSettings().value(QStringLiteral("terminal/rightClickPastes")).toBool(), false);
+    bool sawKey = false;
+    for (const QList<QVariant>& args : changed) {
+        sawKey = sawKey || args.at(0).toString() == QStringLiteral("terminal/rightClickPastes");
+    }
+    QVERIFY(sawKey);
+
+    // A second dialog shows it unchecked; Restore Defaults on the Terminal page re-checks it
+    // without writing until OK.
+    PreferencesDialog again;
+    QVERIFY(expose(&again));
+    const PrefControls c2 = controlsOf(again);
+    QVERIFY(c2.complete());
+    QVERIFY(!c2.rightClickPastes->isChecked());
+    c2.tabs->setCurrentIndex(PageTerminal);
+    c2.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QVERIFY(c2.rightClickPastes->isChecked());
+    QVERIFY(!AppSettings::instance().rightClickPastes());
+    c2.buttons->button(QDialogButtonBox::Ok)->click();
+    QVERIFY(AppSettings::instance().rightClickPastes());
+
+    // Cancel discards.
+    PreferencesDialog third;
+    QVERIFY(expose(&third));
+    const PrefControls c3 = controlsOf(third);
+    c3.rightClickPastes->setChecked(false);
+    c3.buttons->button(QDialogButtonBox::Cancel)->click();
+    QVERIFY(AppSettings::instance().rightClickPastes());
 }
 
 void Tst_dialogs::preferencesDependentControls()

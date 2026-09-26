@@ -57,7 +57,9 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 | Survive a board reboot | Nothing - auto-reconnect is on by default (amber tab dot while waiting) |
 | Add your own buttons | *Edit > Quick Commands...* - Add, set name / command / group / line ending, OK |
 | Bigger font | **Ctrl++** / **Ctrl+-**, or pick a monospace font in *Preferences > Terminal* |
-| Copy text | Select with the mouse, **Ctrl+Shift+C** (plain Ctrl+C goes to the device) |
+| Copy text | Select with the mouse - the display pauses like the Windows console - then **Enter**, a **right click** or **Ctrl+Shift+C** copies and resumes, **Esc** cancels; plain Ctrl+C goes to the device. Turn the pause off in *View > Pause Output While Selecting* |
+| Paste | **Right click** with nothing selected (cmd.exe style; *View > Right Click Pastes*), **Ctrl+Shift+V**, **Shift+Insert** or a middle click; plain Ctrl+V goes to the device. The terminal's context menu is on **Shift+right click** (or the Menu key) |
+| Wipe the terminal | The **Clear** toolbar button / **Ctrl+Shift+L** empties the screen, the scrollback and the hex view (colours and modes stay); *Session > Reset Terminal* is the full VT reset |
 | Report a bug | *Help > Version* -> **Copy**, paste into the ticket together with the System Log |
 
 ## 5. Where things live
@@ -72,7 +74,7 @@ staircase, enable *Preferences > Terminal > Implicit carriage return on line fee
 ## 6. Shortcuts
 
 `Ctrl+T` new tab, `Ctrl+W` close, `Ctrl+Tab`/`Ctrl+Shift+Tab` next/previous tab, `F2`/`F3`
-connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear, `Ctrl+Shift+O` send file,
+connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear (screen + scrollback + hex view), `Ctrl+Shift+O` send file,
 `Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
 `Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,
 `Ctrl+Shift+Q` quit.

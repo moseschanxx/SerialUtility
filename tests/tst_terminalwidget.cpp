@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -18,7 +19,9 @@
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QSettings>
@@ -28,6 +31,7 @@
 #include <QTemporaryDir>
 #include <QTextBlock>
 #include <QTextDocument>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -128,6 +132,73 @@ protected:
     }
 };
 
+/// The terminal's context menu runs QMenu::exec(), a nested event loop. Timers keep firing inside
+/// it, so this closes the popup as soon as it shows and records what it offered: a test can send
+/// the real QContextMenuEvent without blocking. count() == 0 afterwards means no menu appeared.
+class PopupCloser : public QObject
+{
+public:
+    explicit PopupCloser(QObject* parent = nullptr)
+        : QObject(parent)
+    {
+        m_timer.setInterval(10);
+        connect(&m_timer, &QTimer::timeout, this, &PopupCloser::poll);
+        m_timer.start();
+    }
+
+    int count() const { return m_count; }
+    QStringList actionTexts() const { return m_texts; }   ///< of the last menu, separators skipped
+    QList<bool> actionEnabled() const { return m_enabled; }
+
+private:
+    void poll()
+    {
+        QWidget* popup = QApplication::activePopupWidget();
+        if (!popup) {
+            // Belt and braces: a shown QMenu is a Qt::Popup top-level window whatever the platform.
+            const QList<QWidget*> tops = QApplication::topLevelWidgets();
+            for (QWidget* top : tops) {
+                if (qobject_cast<QMenu*>(top) && top->isVisible()) {
+                    popup = top;
+                    break;
+                }
+            }
+        }
+        if (!popup) {
+            return;
+        }
+        ++m_count;
+        m_texts.clear();
+        m_enabled.clear();
+        if (auto* menu = qobject_cast<QMenu*>(popup)) {
+            const QList<QAction*> actions = menu->actions();
+            for (const QAction* entry : actions) {
+                if (!entry->isSeparator()) {
+                    m_texts.append(entry->text());
+                    m_enabled.append(entry->isEnabled());
+                }
+            }
+        }
+        popup->close();   // QMenu::hideEvent() quits the exec() loop
+    }
+
+    QTimer m_timer;
+    int m_count = 0;
+    QStringList m_texts;
+    QList<bool> m_enabled;
+};
+
+/// What the platform window generates for a right click (reason Mouse) or for the Menu key /
+/// Shift+F10 (reason Keyboard). QTest::mouseClick() delivers the QMouseEvent alone, never this,
+/// so the two halves of a right click are exercised separately. Returns whether it was accepted.
+bool sendContextMenu(QWidget* viewport, QContextMenuEvent::Reason reason, const QPoint& pos,
+                     Qt::KeyboardModifiers mods = Qt::NoModifier)
+{
+    QContextMenuEvent event(reason, pos, viewport->mapToGlobal(pos), mods);
+    QApplication::sendEvent(viewport, &event);
+    return event.isAccepted();
+}
+
 /// show() + exposure + activation, so that key events and focus behave like in the app.
 bool showAndActivate(QWidget* widget)
 {
@@ -221,6 +292,40 @@ private slots:
     void pasteIgnoredWhenInputDisabled();
     void clearSelectionEmitsSignal();
 
+    // ---- Pause output while selecting (cmd.exe mark mode) ------------------------------
+    void pauseDefaultsAndApi();
+    void dragSelectionPausesAndEnterCopiesResumes();
+    void escapeResumesWithoutCopying();
+    void copyShortcutsCopyAndResume();
+    void clickWithoutDragResumes();
+    void everySelectionKindPauses();
+    void keysAndPastesSwallowedWhilePaused();
+    void viewScrollingWorksWhilePaused();
+    void pauseFeatureOff();
+    void pauseBufferOverflowResumes();
+    void clearAndResetFlushPendingAfterwards();
+    void resumeOutputKeepsSelection();
+    void newSelectionWhilePausedReplacesOld();
+    void dsrReplyDeferredWhilePaused();
+    void pauseBadgeIsPainted();
+    void pauseBadgeRepaintIsCoalesced();
+    void pauseSurvivesResize();
+    void pauseBufferLimitBoundaries();
+    void selectAllThenEnterCopiesEverything();
+    void findWhilePausedReplacesSelection();
+    void pauseBadgeInTinyViewportAndFeatureOff();
+    void destroyedWhilePaused();
+
+    // ---- cmd.exe right click: paste / copy selection, Shift+right click = menu ----------
+    void rightClickDefaultsAndApi();
+    void rightClickPastesClipboard();
+    void rightClickCopiesSelection();
+    void shiftRightClickOpensMenuNotPaste();
+    void rightClickSettingOff();
+    void rightClickWhileInputDisabled();
+    void rightClickNeverTouchesLeftSelection();
+    void rightClickAfterLostLeftRelease();
+
     // ---- Model / rendering ------------------------------------------------------------
     void colouredBootLog();
     void burstFillsScrollback();
@@ -232,6 +337,7 @@ private slots:
     void gridSizeChangedOnResize();
     void clearScreenKeepsScrollback();
     void clearScrollbackResetsScrollBar();
+    void clearAllWipesScreenAndScrollback();
     void resetTerminalClearsEverything();
     void localEchoShowsTypedText();
     void dsrReply();
@@ -782,6 +888,8 @@ void Tst_terminalwidget::shortcutOverrideWhileDisconnected()
     term->setFocus();
     QTRY_VERIFY(term->hasFocus());
     QVERIFY(!term->inputEnabled());
+    // Mark mode is covered by its own tests: with it on, Ctrl+Insert would also end the selection.
+    term->setPauseWhileSelecting(false);
     term->feedData("some text\r\n");
     QSignalSpy send(term, &TerminalWidget::sendData);
 
@@ -856,6 +964,9 @@ void Tst_terminalwidget::cellMetricsMatchGrid()
 
 void Tst_terminalwidget::dragSelectionAndCtrlShiftCCopies()
 {
+    // The legacy copy semantics (the selection survives Ctrl+Shift+C) apply while the display is
+    // not paused; copyShortcutsCopyAndResume() covers the mark-mode variant.
+    m_term->setPauseWhileSelecting(false);
     m_term->feedData("hello world\r\n");
     QSignalSpy selectionSpy(m_term, &TerminalWidget::selectionChanged);
     QVERIFY(!m_term->hasSelection());
@@ -1036,6 +1147,9 @@ void Tst_terminalwidget::middleClickPastes()
 
 void Tst_terminalwidget::selectionSurvivesScrollbackGrowth()
 {
+    // With mark mode on the output would simply queue up; this test is about the absolute anchors
+    // when the screen keeps moving under a selection (feature off, or after an overflow resume).
+    m_term->setPauseWhileSelecting(false);
     m_term->feedData("anchor text\r\n");
     dragSelect(0, 0, 0, 5);
     QCOMPARE(m_term->selectedText(), QStringLiteral("anchor"));
@@ -1180,6 +1294,1261 @@ void Tst_terminalwidget::clearSelectionEmitsSignal()
 }
 
 // -------------------------------------------------------------------------------------------
+// Pause output while selecting (cmd.exe QuickEdit / mark mode; header "Pause output while
+// selecting", DESIGN.md 4.7, TERMINAL_EMULATION.md §11)
+// -------------------------------------------------------------------------------------------
+
+void Tst_terminalwidget::pauseDefaultsAndApi()
+{
+    QVERIFY(m_term->pauseWhileSelecting());   // on by default
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(m_term->pauseBufferLimit(), qint64(64) * 1024 * 1024);
+
+    m_term->setPauseBufferLimit(100);
+    QCOMPARE(m_term->pauseBufferLimit(), qint64(100));
+    m_term->setPauseBufferLimit(-5);
+    QCOMPARE(m_term->pauseBufferLimit(), qint64(0));   // clamped, never negative
+
+    // resumeOutput() is a public slot (SessionWidget / MainWindow may wire it) and a no-op when
+    // nothing is paused: no transition signal.
+    QVERIFY(TerminalWidget::staticMetaObject.indexOfSlot("resumeOutput()") >= 0);
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+    m_term->resumeOutput();
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+    QVERIFY(!m_term->isOutputPaused());
+}
+
+void Tst_terminalwidget::dragSelectionPausesAndEnterCopiesResumes()
+{
+    m_term->feedData("hello world\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+    QSignalSpy sendSpy(m_term, &TerminalWidget::sendData);
+
+    // Press, drag to another cell, release: the selection becomes non-empty -> paused.
+    dragSelect(0, 0, 0, 4);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(pausedSpy.count(), qsizetype(1));
+    QVERIFY(pausedSpy.at(0).at(0).toBool());
+
+    // Incoming bytes are queued: screen, cursor and selection do not move.
+    m_term->feedData("NEW LINE\r\n");
+    QVERIFY(screen->lineText(1).isEmpty());
+    QCOMPARE(screen->cursor().row, 1);
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(10));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QCOMPARE(pausedSpy.count(), qsizetype(1));   // emitted once per transition, not per chunk
+
+    // Enter: clipboard, selection cleared, display resumes with the queued output.
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(screen->lineText(1), QStringLiteral("NEW LINE"));
+    QCOMPARE(screen->cursor().row, 2);
+    QCOMPARE(pausedSpy.count(), qsizetype(2));
+    QVERIFY(!pausedSpy.at(1).at(0).toBool());
+    QCOMPARE(sendSpy.count(), qsizetype(0));   // the Enter never reached the device
+
+    // Keypad Enter behaves the same.
+    dragSelect(0, 6, 0, 10);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("world"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("more\r\n");
+    QVERIFY(screen->lineText(2).isEmpty());
+    QTest::keyClick(m_term, Qt::Key_Enter, Qt::KeypadModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("world"));
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(2), QStringLiteral("more"));
+    QCOMPARE(sendSpy.count(), qsizetype(0));
+    QCOMPARE(pausedSpy.count(), qsizetype(4));
+}
+
+void Tst_terminalwidget::escapeResumesWithoutCopying()
+{
+    m_term->feedData("keep\r\n");
+    QApplication::clipboard()->setText(QStringLiteral("untouched"));
+    QSignalSpy sendSpy(m_term, &TerminalWidget::sendData);
+
+    dragSelect(0, 0, 0, 3);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("later\r\n");
+    QVERIFY(m_term->screen()->lineText(1).isEmpty());
+
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("untouched"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("later"));
+    QCOMPARE(sendSpy.count(), qsizetype(0));   // no ESC byte either
+}
+
+void Tst_terminalwidget::copyShortcutsCopyAndResume()
+{
+    m_term->feedData("hello world\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy sendSpy(m_term, &TerminalWidget::sendData);
+
+    // Ctrl+Shift+C
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("one\r\n");
+    QTest::keyClick(m_term, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(1), QStringLiteral("one"));
+
+    // Ctrl+C with a selection copies instead of sending ETX, and resumes.
+    dragSelect(1, 0, 1, 2);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("one"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("two\r\n");
+    QTest::keyClick(m_term, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(sendSpy.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("one"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(2), QStringLiteral("two"));
+
+    // Ctrl+Insert
+    dragSelect(2, 0, 2, 2);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("three\r\n");
+    QTest::keyClick(m_term, Qt::Key_Insert, Qt::ControlModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("two"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(3), QStringLiteral("three"));
+
+    // copySelection() itself (Edit > Copy, the context menu's Copy) finishes the mark mode too.
+    dragSelect(3, 0, 3, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("four\r\n");
+    m_term->copySelection();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("three"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(4), QStringLiteral("four"));
+    QCOMPARE(sendSpy.count(), qsizetype(0));
+
+    // Not paused (feature off): copying keeps the selection, as it always did.
+    m_term->setPauseWhileSelecting(false);
+    dragSelect(4, 0, 4, 3);
+    QVERIFY(!m_term->isOutputPaused());
+    m_term->copySelection();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("four"));
+    QVERIFY(m_term->hasSelection());
+    QTest::keyClick(m_term, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(m_term->hasSelection());
+    QTest::keyClick(m_term, Qt::Key_Insert, Qt::ControlModifier);
+    QVERIFY(m_term->hasSelection());
+}
+
+void Tst_terminalwidget::clickWithoutDragResumes()
+{
+    m_term->feedData("click\r\n");
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("x\r\n");
+    QVERIFY(m_term->screen()->lineText(1).isEmpty());
+
+    QTest::mouseClick(m_term->viewport(), Qt::LeftButton, Qt::NoModifier, cellCenter(5, 5));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("x"));
+
+    // clearSelection() from any caller resumes as well.
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("y\r\n");
+    m_term->clearSelection();
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->screen()->lineText(2), QStringLiteral("y"));
+}
+
+void Tst_terminalwidget::everySelectionKindPauses()
+{
+    m_term->feedData("foo bar-baz qux\r\nsecond line\r\n");
+    QWidget* vp = m_term->viewport();
+    // One byte queued per kind; Esc flushes it onto the cursor line.
+    auto pausedHolds = [this]() {
+        const qint64 before = m_term->pendingPausedBytes();
+        m_term->feedData("z");
+        return m_term->isOutputPaused() && m_term->pendingPausedBytes() == before + 1;
+    };
+
+    // Double-click: word.
+    QTest::mouseDClick(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 5));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 5));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("bar-baz"));
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+
+    // Triple-click: line (Press Release Press DblClick Release Press Release).
+    const QPoint p = cellCenter(0, 1);
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mouseDClick(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, p);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("foo bar-baz qux"));
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+
+    // selectAll()
+    m_term->selectAll();
+    QVERIFY(m_term->hasSelection());
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+
+    // findNext() / findPrevious() select their match.
+    QVERIFY(m_term->findNext(QStringLiteral("second")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("second"));
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    QVERIFY(m_term->findPrevious(QStringLiteral("foo")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("foo"));
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+
+    // Shift+click extending a selection (made with the feature off, so the extension itself is
+    // the first freeze; enabling the feature does not freeze an existing selection retroactively).
+    m_term->setPauseWhileSelecting(false);
+    dragSelect(1, 0, 1, 2);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("sec"));
+    QVERIFY(!m_term->isOutputPaused());
+    m_term->setPauseWhileSelecting(true);
+    QVERIFY(!m_term->isOutputPaused());
+    QTest::mousePress(vp, Qt::LeftButton, Qt::ShiftModifier, cellCenter(1, 10));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::ShiftModifier, cellCenter(1, 10));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("second line"));
+    QVERIFY(pausedHolds());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+
+    // Every flushed byte landed on the cursor line, in order.
+    QCOMPARE(m_term->screen()->lineText(2), QStringLiteral("zzzzzz"));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+}
+
+void Tst_terminalwidget::keysAndPastesSwallowedWhilePaused()
+{
+    m_term->feedData("text\r\n");
+    m_term->setLocalEcho(true);
+    dragSelect(0, 0, 0, 3);
+    QVERIFY(m_term->isOutputPaused());
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+
+    // Ordinary keys: nothing is sent, nothing is echoed, the focus stays (Tab included).
+    QTest::keyClicks(m_term, QStringLiteral("abc"));
+    QTest::keyClick(m_term, Qt::Key_Tab);
+    QCOMPARE(QApplication::focusWidget(), m_term);
+    QTest::keyClick(m_term, Qt::Key_F1);
+    QTest::keyClick(m_term, Qt::Key_Up);
+    QTest::keyClick(m_term, Qt::Key_Home);
+    QTest::keyClick(m_term, Qt::Key_Backspace);
+    QTest::keyClick(m_term, Qt::Key_Delete);
+    QTest::keyClick(m_term, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(m_term, Qt::Key_Space, Qt::ControlModifier);
+    QTest::keyClick(m_term, Qt::Key_X, Qt::AltModifier);
+    QTest::keyClick(m_term, Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier);   // no action owns it
+    QCOMPARE(send.count(), qsizetype(0));
+    QVERIFY(m_term->screen()->lineText(1).isEmpty());   // no local echo
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));  // ... not even a queued one
+    QVERIFY(m_term->isOutputPaused());
+
+    // IME commit
+    QInputMethodEvent ime;
+    ime.setCommitString(QStringLiteral("好"));
+    QApplication::sendEvent(m_term, &ime);
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // Pastes: keyboard, middle click, programmatic and drop.
+    QApplication::clipboard()->setText(QStringLiteral("paste"));
+    QTest::keyClick(m_term, Qt::Key_V, Qt::ControlModifier | Qt::ShiftModifier);
+    QTest::keyClick(m_term, Qt::Key_Insert, Qt::ShiftModifier);
+    QTest::mouseClick(m_term->viewport(), Qt::MiddleButton, Qt::NoModifier, cellCenter(3, 3));
+    m_term->paste();
+    m_term->pasteText(QStringLiteral("y"));
+    QMimeData mime;
+    mime.setText(QStringLiteral("dropped"));
+    QDragEnterEvent enter(QPoint(10, 10), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(m_term->viewport(), &enter);
+    QDropEvent drop(QPointF(10, 10), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(m_term->viewport(), &drop);
+    QCOMPARE(send.count(), qsizetype(0));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("text"));
+
+    // Application shortcuts still pass through to the window's actions.
+    QAction* hexView = addWindowAction(m_term, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
+    QSignalSpy hexSpy(hexView, &QAction::triggered);
+    QTest::keyClick(m_term, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(hexSpy.count(), qsizetype(1));
+    QAction* refresh = addWindowAction(m_term, Qt::Key_F5);
+    QSignalSpy refreshSpy(refresh, &QAction::triggered);
+    QTest::keyClick(m_term, Qt::Key_F5);
+    QCOMPARE(refreshSpy.count(), qsizetype(1));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // Esc ends the mark mode; typing reaches the device (and the local echo) again.
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    QTest::keyClicks(m_term, QStringLiteral("ok"));
+    QCOMPARE(sentBytes(send), QByteArray("ok"));
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("ok"));
+}
+
+void Tst_terminalwidget::viewScrollingWorksWhilePaused()
+{
+    m_term->feedData(numberedLines(200));
+    QScrollBar* bar = m_term->verticalScrollBar();
+    const int max = bar->maximum();
+    const int rows = m_term->visibleRows();
+    QVERIFY(max > 3 * rows);
+
+    dragSelect(5, 0, 5, 3);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("line"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(numberedLines(10, "more "));
+    QCOMPARE(bar->maximum(), max);   // nothing parsed
+
+    // Wheel, Shift+PgUp/PgDn and the scrollbar keep working; the selection stays put.
+    sendWheel(120, Qt::NoModifier);
+    QCOMPARE(bar->value(), max - 3);
+    QVERIFY(m_term->isOutputPaused());
+    QTest::keyClick(m_term, Qt::Key_PageUp, Qt::ShiftModifier);
+    QCOMPARE(bar->value(), max - 3 - rows);
+    QTest::keyClick(m_term, Qt::Key_PageDown, Qt::ShiftModifier);
+    QCOMPARE(bar->value(), max - 3);
+    bar->setValue(0);
+    QCOMPARE(bar->value(), 0);
+    m_term->scrollLines(7);
+    QCOMPARE(bar->value(), 7);
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("line"));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(numberedLines(10, "more ").size()));
+
+    // Resume while following: the view follows the flushed output.
+    m_term->scrollToBottom();
+    QVERIFY(m_term->isAtBottom());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(bar->maximum(), max + 10);
+    QVERIFY(m_term->isAtBottom());
+
+    // Resume while scrolled up: the frozen view stays where it is.
+    dragSelect(3, 0, 3, 3);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(numberedLines(5, "tail "));
+    m_term->scrollLines(-10);
+    const int frozen = bar->value();
+    QVERIFY(!m_term->isAtBottom());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(bar->maximum(), max + 15);
+    QCOMPARE(bar->value(), frozen);
+    QVERIFY(!m_term->isAtBottom());
+
+    // Zoom is a view operation too (Ctrl+wheel and the keys stay usable while paused).
+    m_term->scrollToBottom();
+    dragSelect(2, 0, 2, 3);
+    QVERIFY(m_term->isOutputPaused());
+    const int pointSize = m_term->terminalFont().pointSize();
+    sendWheel(120, Qt::ControlModifier);
+    QCOMPARE(m_term->terminalFont().pointSize(), pointSize + 1);
+    QVERIFY(m_term->isOutputPaused());
+    QTest::keyClick(m_term, Qt::Key_Minus, Qt::ControlModifier);
+    QCOMPARE(m_term->terminalFont().pointSize(), pointSize);
+    QVERIFY(m_term->isOutputPaused());
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+}
+
+void Tst_terminalwidget::pauseFeatureOff()
+{
+    m_term->setPauseWhileSelecting(false);
+    QVERIFY(!m_term->pauseWhileSelecting());
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+    QSignalSpy sendSpy(m_term, &TerminalWidget::sendData);
+
+    m_term->feedData("hello\r\n");
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(!m_term->isOutputPaused());
+    m_term->feedData("world\r\n");
+    QCOMPARE(screen->lineText(1), QStringLiteral("world"));   // rendered immediately
+    QVERIFY(m_term->hasSelection());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+
+    // Enter is a plain key again: sent to the device, the selection is untouched.
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QCOMPARE(sentBytes(sendSpy), QByteArray("\r"));
+    QVERIFY(m_term->hasSelection());
+    QVERIFY(QApplication::clipboard()->text().isEmpty());
+
+    // On again: the existing selection does not freeze the display; the next one does.
+    m_term->setPauseWhileSelecting(true);
+    QVERIFY(!m_term->isOutputPaused());
+    m_term->feedData("x\r\n");
+    QCOMPARE(screen->lineText(2), QStringLiteral("x"));
+    dragSelect(1, 0, 1, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("y\r\n");
+    QVERIFY(screen->lineText(3).isEmpty());
+
+    // Off while paused: resumes and keeps the selection.
+    m_term->setPauseWhileSelecting(false);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(3), QStringLiteral("y"));
+    QVERIFY(m_term->hasSelection());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("world"));
+    QCOMPARE(pausedSpy.count(), qsizetype(2));
+    QVERIFY(!pausedSpy.last().at(0).toBool());
+}
+
+void Tst_terminalwidget::pauseBufferOverflowResumes()
+{
+    m_term->setPauseBufferLimit(100);
+    m_term->feedData("hello\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy overflow(m_term, &TerminalWidget::pauseBufferOverflow);
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+
+    QByteArray first;
+    for (int i = 0; i < 6; ++i) {
+        first += "abcdefgh\r\n";   // 60 bytes
+    }
+    QByteArray second;
+    for (int i = 0; i < 9; ++i) {
+        second += "ijklmnop\r\n";   // 90 bytes
+    }
+
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(first);
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(60));
+    QCOMPARE(overflow.count(), qsizetype(0));
+
+    // 60 + 90 > 100: everything is flushed, the display flows again, the selection survives.
+    m_term->feedData(second);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(overflow.count(), qsizetype(1));
+    QCOMPARE(overflow.at(0).at(0).toLongLong(), qint64(150));
+    QCOMPARE(screen->lineText(1), QStringLiteral("abcdefgh"));
+    QCOMPARE(screen->lineText(6), QStringLiteral("abcdefgh"));
+    QCOMPARE(screen->lineText(7), QStringLiteral("ijklmnop"));
+    QCOMPARE(screen->lineText(15), QStringLiteral("ijklmnop"));
+    QCOMPARE(screen->cursor().row, 16);
+    QVERIFY(m_term->hasSelection());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QCOMPARE(pausedSpy.count(), qsizetype(2));
+    QVERIFY(pausedSpy.at(0).at(0).toBool());
+    QVERIFY(!pausedSpy.at(1).at(0).toBool());
+
+    // Not paused any more: output renders immediately, the kept selection is still copyable.
+    m_term->feedData("after\r\n");
+    QCOMPARE(screen->lineText(16), QStringLiteral("after"));
+    QTest::keyClick(m_term, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+
+    // A single chunk larger than the limit overflows at once.
+    dragSelect(1, 0, 1, 7);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(first + second);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(overflow.count(), qsizetype(2));
+    QCOMPARE(overflow.at(1).at(0).toLongLong(), qint64(150));
+    QCOMPARE(screen->lineText(17), QStringLiteral("abcdefgh"));
+    QCOMPARE(screen->lineText(31), QStringLiteral("ijklmnop"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("abcdefgh"));
+}
+
+void Tst_terminalwidget::clearAndResetFlushPendingAfterwards()
+{
+    TerminalScreen* screen = m_term->screen();
+
+    // clearScreen(): selection dropped, screen pushed into the scrollback, *then* the queued
+    // output continues on the cleared screen.
+    m_term->feedData("old\r\n");
+    dragSelect(0, 0, 0, 2);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("new\r\n");
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(5));
+    m_term->clearScreen();
+    QVERIFY(!m_term->isOutputPaused());
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QVERIFY(screen->scrollbackSize() >= 1);
+    QCOMPARE(screen->scrollbackLine(0).text(), QStringLiteral("old"));
+    QCOMPARE(screen->line(0).text(), QStringLiteral("new"));
+    QCOMPARE(screen->cursor().row, 1);
+
+    // resetTerminal(): everything gone, the queued output starts on the blank screen.
+    dragSelect(0, 0, 0, 2);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("new"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("after\r\n");
+    m_term->resetTerminal();
+    QVERIFY(!m_term->isOutputPaused());
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QCOMPARE(screen->line(0).text(), QStringLiteral("after"));
+    QCOMPARE(screen->cursor().row, 1);
+
+    // clearScrollback(): the history goes, the visible screen and the queued output stay.
+    m_term->feedData(numberedLines(m_term->visibleRows() + 5));
+    QVERIFY(screen->scrollbackSize() > 0);
+    dragSelect(0, 0, 0, 3);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("tail\r\n");
+    m_term->clearScrollback();
+    QVERIFY(!m_term->isOutputPaused());
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(screen->scrollbackSize() <= 1);   // "tail" may have scrolled one line out
+    QCOMPARE(screen->lineText(screen->scrollbackSize() + screen->cursor().row - 1), QStringLiteral("tail"));
+}
+
+void Tst_terminalwidget::resumeOutputKeepsSelection()
+{
+    m_term->feedData("abc def\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    dragSelect(0, 0, 0, 2);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("ghi\r\n");
+
+    m_term->resumeOutput();
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QVERIFY(m_term->hasSelection());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("abc"));
+    QCOMPARE(screen->lineText(1), QStringLiteral("ghi"));
+
+    // No new selection: the display keeps flowing ...
+    m_term->feedData("jkl\r\n");
+    QCOMPARE(screen->lineText(2), QStringLiteral("jkl"));
+    QVERIFY(!m_term->isOutputPaused());
+    // ... the kept selection copies with the legacy semantics (not in mark mode: it survives) ...
+    QTest::keyClick(m_term, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("abc"));
+    QVERIFY(m_term->hasSelection());
+    // ... and a fresh selection pauses again.
+    dragSelect(1, 0, 1, 2);
+    QVERIFY(m_term->isOutputPaused());
+}
+
+void Tst_terminalwidget::newSelectionWhilePausedReplacesOld()
+{
+    m_term->feedData("hello world\r\n");
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("queued\r\n");
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(8));
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+
+    dragSelect(0, 6, 0, 10);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("world"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(8));
+    QCOMPARE(pausedSpy.count(), qsizetype(0));   // no transition: still paused
+
+    QWidget* vp = m_term->viewport();
+    QTest::mouseDClick(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 1));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 1));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(8));
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("queued"));
+    QCOMPARE(pausedSpy.count(), qsizetype(1));
+}
+
+void Tst_terminalwidget::dsrReplyDeferredWhilePaused()
+{
+    // Replies are produced when the bytes are parsed: queued with the query, sent on resume.
+    m_term->feedData("xy\r\n");
+    dragSelect(0, 0, 0, 1);
+    QVERIFY(m_term->isOutputPaused());
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    m_term->feedData(esc("[6n"));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(4));
+
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QCOMPARE(send.count(), qsizetype(1));
+    QCOMPARE(sentBytes(send), esc("[2;1R"));
+}
+
+void Tst_terminalwidget::pauseBadgeIsPainted()
+{
+    const QColor background = m_term->colorPalette().background;
+    m_term->feedData("badge test\r\n" + esc("[?25l"));   // no cursor: the corner is pure background
+    QWidget* vp = m_term->viewport();
+    // Inside the pill (right-aligned, 6 px margin) and the background just above it.
+    const QRect corner(vp->width() - 60, 4, 50, 14);
+    const QImage before = vp->grab().toImage();
+    QVERIFY(isUniform(before.copy(corner), background));
+
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    const QImage paused = vp->grab().toImage();
+    QVERIFY(!isUniform(paused.copy(corner), background));
+    QVERIFY(paused.copy(corner) != before.copy(corner));
+    // The badge lives in the paint path only: not in the model, not in the copied text.
+    QCOMPARE(m_term->screen()->lineText(0), QStringLiteral("badge test"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("badge"));
+
+    // The pending size is part of the badge: once the (coalesced) repaint ran, the pixels differ.
+    m_term->feedData(QByteArray(1500, 'q'));
+    QTest::qWait(150);
+    const QImage grown = vp->grab().toImage();
+    QVERIFY(!isUniform(grown.copy(corner), background));
+    QVERIFY(grown != paused);
+    QCOMPARE(m_term->screen()->lineText(0), QStringLiteral("badge test"));
+
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    const QImage after = vp->grab().toImage();
+    QVERIFY(isUniform(after.copy(corner), background));
+}
+
+void Tst_terminalwidget::pauseBadgeRepaintIsCoalesced()
+{
+    m_term->feedData("coalesce\r\n");
+    dragSelect(0, 0, 0, 3);
+    QVERIFY(m_term->isOutputPaused());
+    QTest::qWait(150);   // the pause transition's own repaint
+
+    PaintCounter counter;
+    QWidget* vp = m_term->viewport();
+    vp->installEventFilter(&counter);
+    QElapsedTimer t;
+    t.start();
+    for (int i = 0; i < 100; ++i) {
+        m_term->feedData("chunk\r\n");
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+    }
+    // One badge repaint per 100 ms window, however many chunks arrived in it. Wait for that
+    // repaint (generously: a loaded machine may delay the coarse timer and the paint) and then
+    // through one more window, and bound the count by the wall time rather than by the chunks.
+    QTRY_VERIFY_WITH_TIMEOUT(counter.paints >= 1, 5000);
+    QTest::qWait(150);
+    const qint64 elapsed = t.elapsed();
+    vp->removeEventFilter(&counter);
+
+    qInfo("pauseBadgeRepaintIsCoalesced: %d paints for 100 chunks in %lld ms", counter.paints,
+          static_cast<long long>(elapsed));
+    QVERIFY2(counter.paints <= static_cast<int>(elapsed / 100) + 2,
+             qPrintable(QStringLiteral("%1 paints in %2 ms").arg(counter.paints).arg(elapsed)));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(700));
+    QVERIFY(m_term->screen()->lineText(1).isEmpty());
+}
+
+void Tst_terminalwidget::pauseSurvivesResize()
+{
+    // A resize while paused (fewer rows: lines above the cursor move into the scrollback; more
+    // columns) must neither parse the queue nor move the selection off its text, and the flush
+    // afterwards continues on the resized grid right where the frozen cursor was.
+    const int rows = m_term->visibleRows();
+    const int cols = m_term->columns();
+    QVERIFY(rows > 8);
+    m_term->feedData(numberedLines(rows - 2));   // the cursor sits on row rows-2, nothing scrolled yet
+    const TerminalScreen* screen = m_term->screen();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QCOMPARE(screen->cursor().row, rows - 2);
+
+    dragSelect(3, 0, 3, 5);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("line 3"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("after resize\r\n");
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(14));
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+
+    // Six rows fewer, ten columns more.
+    m_term->resize(m_term->width() + 10 * m_cellW, m_term->height() - 6 * m_cellH);
+    QTRY_COMPARE(m_term->visibleRows(), rows - 6);
+    QCOMPARE(m_term->columns(), cols + 10);
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(14));
+    // Five lines moved above the cursor into the scrollback; absolute anchors keep the same text.
+    QCOMPARE(screen->scrollbackSize(), 5);
+    QCOMPARE(screen->cursor().row, rows - 7);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("line 3"));
+    QVERIFY(screen->lineText(rows - 2).isEmpty());   // the frozen cursor line: nothing parsed
+
+    // Rows back up by three: lines return from the scrollback, still paused, still "line 3".
+    m_term->resize(m_term->width(), m_term->height() + 3 * m_cellH);
+    QTRY_COMPARE(m_term->visibleRows(), rows - 3);
+    QCOMPARE(screen->scrollbackSize(), 2);
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("line 3"));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(14));
+
+    // Enter: the selection is copied, the queue lands on the (old) cursor line of the new grid.
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("line 3"));
+    QCOMPARE(screen->lineText(rows - 2), QStringLiteral("after resize"));
+    QCOMPARE(screen->lineText(3), QStringLiteral("line 3"));
+    QCOMPARE(screen->totalLines(), rows - 3 + screen->scrollbackSize());
+    QCOMPARE(screen->cursor().col, 0);
+    QCOMPARE(screen->scrollbackSize() + screen->cursor().row, rows - 1);   // one line below the flushed text
+}
+
+void Tst_terminalwidget::pauseBufferLimitBoundaries()
+{
+    m_term->setPauseBufferLimit(100);
+    m_term->feedData("hello\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy overflow(m_term, &TerminalWidget::pauseBufferOverflow);
+    // The rows the flushed runs land on, joined (a run may wrap over several rows).
+    auto rowsText = [screen](int from, int to) {
+        QString text;
+        for (int i = from; i <= to; ++i) {
+            text += screen->lineText(i);
+        }
+        return text;
+    };
+
+    // Exactly the limit still fits ...
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(QByteArray(100, 'a'));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(100));
+    QCOMPARE(overflow.count(), qsizetype(0));
+    QVERIFY(screen->lineText(1).isEmpty());
+    // ... one byte more overflows: all 101 bytes are parsed in order, the selection survives.
+    m_term->feedData("b");
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(overflow.count(), qsizetype(1));
+    QCOMPARE(overflow.at(0).at(0).toLongLong(), qint64(101));
+    const int wrappedRows = (101 + m_term->columns() - 1) / m_term->columns();
+    QCOMPARE(rowsText(1, wrappedRows), QString(100, QLatin1Char('a')) + QLatin1Char('b'));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    m_term->feedData("\r\n");
+    const int next = 1 + wrappedRows;   // first free row
+
+    // A single chunk of exactly the limit does not overflow; one of limit + 1 does at once.
+    m_term->clearSelection();
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(QByteArray(100, 'c'));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(100));
+    QCOMPARE(overflow.count(), qsizetype(1));
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QCOMPARE(rowsText(next, next + wrappedRows), QString(100, QLatin1Char('c')));
+    m_term->feedData("\r\n");
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData(QByteArray(101, 'd'));
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(overflow.count(), qsizetype(2));
+    QCOMPARE(overflow.at(1).at(0).toLongLong(), qint64(101));
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QVERIFY(m_term->hasSelection());
+    m_term->feedData("\r\n");
+
+    // Limit 0: the very first byte overflows (the display never freezes, nothing is lost).
+    m_term->setPauseBufferLimit(0);
+    m_term->clearSelection();
+    dragSelect(0, 0, 0, 4);
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("e");
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(overflow.count(), qsizetype(3));
+    QCOMPARE(overflow.at(2).at(0).toLongLong(), qint64(1));
+    QVERIFY(screen->lineText(screen->scrollbackSize() + screen->cursor().row).endsWith(QLatin1Char('e')));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+}
+
+void Tst_terminalwidget::selectAllThenEnterCopiesEverything()
+{
+    m_term->feedData("alpha\r\nbeta\r\ngamma\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+
+    // Edit > Select All (or the context menu) pauses like a mouse selection ...
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("alpha\nbeta\ngamma"));
+    m_term->feedData("delta\r\n");
+    QVERIFY(screen->lineText(3).isEmpty());
+    // ... bare Ctrl+A is swallowed in mark mode (it is 0x01 for the device otherwise) ...
+    QTest::keyClick(m_term, Qt::Key_A, Qt::ControlModifier);
+    QCOMPARE(send.count(), qsizetype(0));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("alpha\nbeta\ngamma"));
+    // ... and Enter copies the whole buffer, then lets the queued line through.
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("alpha\nbeta\ngamma"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(3), QStringLiteral("delta"));
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // Select All again now includes the flushed line.
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    QTest::keyClick(m_term, Qt::Key_Return);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("alpha\nbeta\ngamma\ndelta"));
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+void Tst_terminalwidget::findWhilePausedReplacesSelection()
+{
+    m_term->feedData("one two\r\nthree two\r\n");
+    const TerminalScreen* screen = m_term->screen();
+    dragSelect(0, 0, 0, 2);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("one"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("two again\r\n");
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(11));
+    QSignalSpy pausedSpy(m_term, &TerminalWidget::outputPausedChanged);
+
+    // Each match replaces the selection; the widget stays paused, the queue untouched.
+    QVERIFY(m_term->findNext(QStringLiteral("two")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("two"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+    QVERIFY(m_term->findNext(QStringLiteral("two")));   // the second line's match
+    QCOMPARE(m_term->selectedText(), QStringLiteral("two"));
+    QVERIFY(m_term->isOutputPaused());
+    // The queued "two again" is not on the screen yet, so it is not found: the search wraps to the
+    // first match instead.
+    QVERIFY(!m_term->findNext(QStringLiteral("again")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("two"));
+    QVERIFY(m_term->findPrevious(QStringLiteral("one")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("one"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(11));
+    QCOMPARE(pausedSpy.count(), qsizetype(0));
+    QVERIFY(screen->lineText(2).isEmpty());
+
+    // Esc resumes; the flushed line is searchable and a find pauses again.
+    QTest::keyClick(m_term, Qt::Key_Escape);
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(screen->lineText(2), QStringLiteral("two again"));
+    QVERIFY(m_term->findNext(QStringLiteral("again")));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("again"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(pausedSpy.count(), qsizetype(2));
+}
+
+void Tst_terminalwidget::pauseBadgeInTinyViewportAndFeatureOff()
+{
+    // A viewport narrower than the badge text: the pill is shrunk and its text elided (never
+    // wider than the viewport, never a crash) and it still shows; turning the feature off from
+    // Preferences while it is on screen removes it with the pause.
+    const QColor background = m_term->colorPalette().background;
+    m_term->feedData("ab\r\n" + esc("[?25l"));
+    m_term->resize(60, 80);
+    QTRY_VERIFY(m_term->viewport()->width() < 60);
+    QVERIFY(m_term->viewport()->width() < 120);   // far narrower than "Output paused ..."
+    QWidget* vp = m_term->viewport();
+    // Row 1 is blank and unselected: inside the badge (top margin 6 px) but below the selection.
+    const QRect probe(8, m_cellH + 1, qMax(1, vp->width() - 16), 3);
+    QVERIFY(isUniform(vp->grab().toImage().copy(probe), background));
+
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(m_term->selectedText(), QStringLiteral("ab"));
+    m_term->feedData(QByteArray(200, '\r'));   // grows the queue without ever printing anything
+    QTest::qWait(150);
+    const QImage paused = vp->grab().toImage();   // paints the elided badge
+    QVERIFY(!isUniform(paused.copy(probe), background));
+
+    // The minimum grid (2 x 2 cells) with a viewport smaller than the badge's padding.
+    m_term->resize(24, 24);
+    QTest::qWait(20);
+    QVERIFY(!vp->grab().isNull());
+    QVERIFY(m_term->isOutputPaused());
+    m_term->resize(60, 80);
+    QTest::qWait(20);
+
+    m_term->setPauseWhileSelecting(false);
+    QVERIFY(!m_term->isOutputPaused());
+    QVERIFY(m_term->hasSelection());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    const QImage resumed = vp->grab().toImage();
+    QVERIFY(isUniform(resumed.copy(probe), background));
+}
+
+void Tst_terminalwidget::destroyedWhilePaused()
+{
+    // A tab closed while its terminal is paused: the queue and the armed badge timer go with
+    // the widget, no flush, no signal, no crash - for a direct delete and for deleteLater().
+    for (const bool viaDeleteLater : {false, true}) {
+        auto* term = new TerminalWidget;
+        term->resize(400, 240);
+        term->show();
+        QVERIFY(QTest::qWaitForWindowExposed(term));
+        term->feedData("gone\r\n");
+        term->selectAll();
+        QVERIFY(term->isOutputPaused());
+        term->feedData(QByteArray(5000, 'x'));   // pending bytes + the 100 ms badge timer running
+        QCOMPARE(term->pendingPausedBytes(), qint64(5000));
+        QSignalSpy pausedSpy(term, &TerminalWidget::outputPausedChanged);
+        if (viaDeleteLater) {
+            term->deleteLater();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        } else {
+            delete term;
+        }
+        QTest::qWait(150);   // past the badge interval: nothing may fire into freed memory
+        QCOMPARE(pausedSpy.count(), qsizetype(0));
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// cmd.exe right click (header "Right click", DESIGN.md 4.7, TERMINAL_EMULATION.md §11): a plain
+// right click copies the selection or pastes the clipboard, the menu moves to Shift+right click.
+// -------------------------------------------------------------------------------------------
+
+void Tst_terminalwidget::rightClickDefaultsAndApi()
+{
+    QVERIFY(m_term->rightClickPastes());   // on by default (AppSettings::rightClickPastes())
+    m_term->setRightClickPastes(false);
+    QVERIFY(!m_term->rightClickPastes());
+    m_term->setRightClickPastes(true);
+    QVERIFY(m_term->rightClickPastes());
+}
+
+void Tst_terminalwidget::rightClickPastesClipboard()
+{
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QSignalSpy selectionSpy(m_term, &TerminalWidget::selectionChanged);
+    QApplication::clipboard()->setText(QStringLiteral("abc\n"));
+
+    // No selection: the clipboard goes out through the paste() path (newline -> Enter bytes, CR).
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(2, 3));
+    QCOMPARE(send.count(), qsizetype(1));
+    QCOMPARE(sentBytes(send), QByteArray("abc\r"));
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(selectionSpy.count(), qsizetype(0));   // a right press never starts a selection
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("abc\n"));   // and never writes the clipboard
+
+    // Enter mode and bracketed paste are honoured exactly like Ctrl+Shift+V.
+    send.clear();
+    m_term->setEnterSends(LineEnding::Mode::LF);
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 0));
+    QCOMPARE(sentBytes(send), QByteArray("abc\n"));
+    send.clear();
+    m_term->setEnterSends(LineEnding::Mode::CR);
+    m_term->feedData(esc("[?2004h"));
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 0));
+    QCOMPARE(sentBytes(send), esc("[200~") + "abc\r" + esc("[201~"));
+    m_term->feedData(esc("[?2004l"));
+
+    // A right-button drag selects nothing either; the press pasted once.
+    send.clear();
+    QTest::mousePress(vp, Qt::RightButton, Qt::NoModifier, cellCenter(1, 1));
+    QTest::mouseMove(vp, cellCenter(3, 8));
+    QTest::mouseRelease(vp, Qt::RightButton, Qt::NoModifier, cellCenter(3, 8));
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(selectionSpy.count(), qsizetype(0));
+    QCOMPARE(sentBytes(send), QByteArray("abc\r"));
+
+    // The context-menu event the platform generates for that click is swallowed: no menu.
+    {
+        PopupCloser popups;
+        QVERIFY(sendContextMenu(vp, QContextMenuEvent::Mouse, cellCenter(0, 0)));
+        QTest::qWait(40);
+        QCOMPARE(popups.count(), 0);
+    }
+
+    // An empty clipboard: nothing is sent.
+    send.clear();
+    QApplication::clipboard()->clear();
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 0));
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+void Tst_terminalwidget::rightClickCopiesSelection()
+{
+    m_term->feedData("hello world\r\n");
+    QWidget* vp = m_term->viewport();
+    const TerminalScreen* screen = m_term->screen();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard"));
+
+    // Mark mode: the selection froze the display. The right click copies it, clears it and
+    // resumes (the queued bytes are flushed) - exactly Enter - and pastes nothing.
+    dragSelect(0, 0, 0, 4);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("hello"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("queued\r\n");
+    QVERIFY(screen->lineText(1).isEmpty());
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(5, 5));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(screen->lineText(1), QStringLiteral("queued"));
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // The next right click (no selection any more) pastes what was just copied.
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(5, 5));
+    QCOMPARE(sentBytes(send), QByteArray("hello"));
+
+    // Pause feature off: a selection is still copied and finished, never pasted over.
+    send.clear();
+    m_term->setPauseWhileSelecting(false);
+    dragSelect(0, 6, 0, 10);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("world"));
+    QVERIFY(!m_term->isOutputPaused());
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("world"));
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // A Select All selection is copied the same way (multi-line text, then resumes).
+    m_term->setPauseWhileSelecting(true);
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("hello world\nqueued"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+void Tst_terminalwidget::shiftRightClickOpensMenuNotPaste()
+{
+    m_term->feedData("menu please\r\n");
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clip"));
+    dragSelect(0, 0, 0, 3);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("menu"));
+    QVERIFY(m_term->isOutputPaused());
+
+    // QTest delivers the QMouseEvent only (never a QContextMenuEvent), so the press is checked
+    // on its own: with Shift it is not consumed by the paste / copy path.
+    QTest::mouseClick(vp, Qt::RightButton, Qt::ShiftModifier, cellCenter(3, 3));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("menu"));   // kept, still paused
+    QVERIFY(m_term->isOutputPaused());
+
+    // The context-menu event that follows such a click opens the real menu. QMenu::exec() runs a
+    // nested event loop, so PopupCloser closes the popup as soon as it appears and records its
+    // entries: the usual commands, and the hint line at the very end.
+    {
+        PopupCloser popups;
+        QVERIFY(sendContextMenu(vp, QContextMenuEvent::Mouse, cellCenter(3, 3), Qt::ShiftModifier));
+        QCOMPARE(popups.count(), 1);
+        const QStringList texts = popups.actionTexts();
+        QVERIFY2(texts.size() >= 8, qPrintable(texts.join(QStringLiteral(" | "))));
+        QCOMPARE(texts.first(), QStringLiteral("&Copy"));
+        QCOMPARE(texts.at(1), QStringLiteral("&Paste"));
+        QVERIFY(texts.contains(QStringLiteral("Select &All")));
+        QVERIFY(texts.contains(QStringLiteral("Clear &Screen (keep scrollback)")));
+        QVERIFY(texts.contains(QStringLiteral("Clear Scroll&back")));
+        QVERIFY(texts.contains(QStringLiteral("&Reset Terminal")));
+        QVERIFY(texts.contains(QStringLiteral("&Find...")));
+        QCOMPARE(texts.last(), QStringLiteral("Right click: paste / copy selection - Shift+right click: this menu"));
+        QVERIFY(!popups.actionEnabled().last());   // a hint, not a command
+        QVERIFY(popups.actionEnabled().first());   // Copy: there is a selection
+        QVERIFY(!popups.actionEnabled().at(1));    // Paste: disabled while paused
+    }
+    // Opening the menu changed nothing.
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("menu"));
+    QVERIFY(m_term->isOutputPaused());
+
+    // The Menu key / Shift+F10 (reason Keyboard, no Shift needed) open it as well ...
+    {
+        PopupCloser popups;
+        QVERIFY(sendContextMenu(vp, QContextMenuEvent::Keyboard, cellCenter(0, 0)));
+        QCOMPARE(popups.count(), 1);
+        QVERIFY(popups.actionTexts().contains(QStringLiteral("&Copy")));
+        QCOMPARE(popups.actionTexts().last(),
+                 QStringLiteral("Right click: paste / copy selection - Shift+right click: this menu"));
+    }
+    // ... while the plain mouse-triggered one is swallowed: no menu at all.
+    {
+        PopupCloser popups;
+        QVERIFY(sendContextMenu(vp, QContextMenuEvent::Mouse, cellCenter(0, 0)));
+        QTest::qWait(40);
+        QCOMPARE(popups.count(), 0);
+    }
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("menu"));
+    QVERIFY(m_term->isOutputPaused());
+}
+
+void Tst_terminalwidget::rightClickSettingOff()
+{
+    m_term->setRightClickPastes(false);
+    m_term->feedData("legacy\r\n");
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clip"));
+
+    // Without a selection nothing is pasted ...
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(2, 2));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    QVERIFY(!m_term->hasSelection());
+    // ... with one nothing is copied and the selection stays (still paused).
+    dragSelect(0, 0, 0, 5);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("legacy"));
+    QVERIFY(m_term->isOutputPaused());
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(2, 2));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("legacy"));
+    QVERIFY(m_term->isOutputPaused());
+
+    // The plain right click opens the context menu as before, without the hint line.
+    PopupCloser popups;
+    QVERIFY(sendContextMenu(vp, QContextMenuEvent::Mouse, cellCenter(2, 2)));
+    QCOMPARE(popups.count(), 1);
+    const QStringList texts = popups.actionTexts();
+    QCOMPARE(texts.first(), QStringLiteral("&Copy"));
+    QCOMPARE(texts.last(), QStringLiteral("&Find..."));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("legacy"));
+}
+
+void Tst_terminalwidget::rightClickWhileInputDisabled()
+{
+    m_term->setInputEnabled(false);
+    m_term->feedData("offline\r\n");
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clip"));
+
+    // Disconnected: the paste is dropped (nothing may be sent), the clipboard is untouched ...
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(3, 3));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    // ... but copying a selection needs no connection: copied, cleared, resumed.
+    dragSelect(0, 0, 0, 6);
+    QCOMPARE(m_term->selectedText(), QStringLiteral("offline"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("later\r\n");
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(3, 3));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("offline"));
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("later"));
+    QCOMPARE(send.count(), qsizetype(0));
+    // Still nothing to paste while disconnected, even with the copied text on the clipboard.
+    QTest::mouseClick(vp, Qt::RightButton, Qt::NoModifier, cellCenter(3, 3));
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+void Tst_terminalwidget::rightClickNeverTouchesLeftSelection()
+{
+    // A right press while the left button is held (a chorded click during a drag) neither
+    // finishes the drag nor pastes; the drag goes on and ends as usual.
+    m_term->feedData("chord test\r\n");
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clip"));
+
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 0));
+    QTest::mouseMove(vp, cellCenter(0, 4));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("chord"));
+    QVERIFY(m_term->isOutputPaused());
+    QTest::mousePress(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 4));
+    QTest::mouseRelease(vp, Qt::RightButton, Qt::NoModifier, cellCenter(0, 4));
+    QCOMPARE(send.count(), qsizetype(0));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clip"));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("chord"));
+    QVERIFY(m_term->isOutputPaused());
+    QTest::mouseMove(vp, cellCenter(0, 9));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("chord test"));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 9));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("chord test"));
+    QVERIFY(m_term->isOutputPaused());
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+void Tst_terminalwidget::rightClickAfterLostLeftRelease()
+{
+    // A popup can swallow a drag's left release (the Shift+right-click menu opened mid-drag,
+    // dismissed with Esc): the widget would still believe the drag is in progress. The next
+    // right press reports no left button - that is authoritative: the stale drag ends, the
+    // selection it made stays, and the right click acts on it instead of being ignored until a
+    // left click drops the selection.
+    m_term->feedData("lost release\r\n");
+    QWidget* vp = m_term->viewport();
+    QSignalSpy send(m_term, &TerminalWidget::sendData);
+    QApplication::clipboard()->setText(QStringLiteral("clip"));
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 0));
+    QTest::mouseMove(vp, cellCenter(0, 3));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("lost"));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("queued\r\n");
+
+    // No left release ever arrives; the right press carries only the right button.
+    const QPoint pos = cellCenter(4, 4);
+    QMouseEvent press(QEvent::MouseButtonPress, pos, vp->mapToGlobal(pos), Qt::RightButton, Qt::RightButton,
+                      Qt::NoModifier);
+    QApplication::sendEvent(vp, &press);
+    QVERIFY(press.isAccepted());
+    QMouseEvent release(QEvent::MouseButtonRelease, pos, vp->mapToGlobal(pos), Qt::RightButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(vp, &release);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("lost"));   // copied, not ignored
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QCOMPARE(m_term->screen()->lineText(1), QStringLiteral("queued"));
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // The pointer moving afterwards extends nothing; a late left release is harmless.
+    QTest::mouseMove(vp, cellCenter(0, 9));
+    QVERIFY(!m_term->hasSelection());
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(0, 9));
+    QVERIFY(!m_term->hasSelection());
+    QCOMPARE(send.count(), qsizetype(0));
+
+    // A genuine chord (left really held) is still ignored and the drag goes on.
+    QTest::mousePress(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(1, 0));
+    QTest::mouseMove(vp, cellCenter(1, 5));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("queued"));
+    QTest::mousePress(vp, Qt::RightButton, Qt::NoModifier, cellCenter(1, 5));
+    QTest::mouseRelease(vp, Qt::RightButton, Qt::NoModifier, cellCenter(1, 5));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("queued"));
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("lost"));
+    QTest::mouseRelease(vp, Qt::LeftButton, Qt::NoModifier, cellCenter(1, 5));
+    QCOMPARE(m_term->selectedText(), QStringLiteral("queued"));
+    QCOMPARE(send.count(), qsizetype(0));
+}
+
+// -------------------------------------------------------------------------------------------
 // Model / rendering
 // -------------------------------------------------------------------------------------------
 
@@ -1257,6 +2626,7 @@ void Tst_terminalwidget::scrollingUpFreezesView()
 
 void Tst_terminalwidget::fullScrollbackKeepsFrozenViewAndSelection()
 {
+    m_term->setPauseWhileSelecting(false);   // the selection must be shifted by real scrollback drops here
     m_term->setScrollbackMax(100);
     m_term->feedData(numberedLines(300)); // the scrollback is full: every new line drops the oldest
     const TerminalScreen* screen = m_term->screen();
@@ -1471,6 +2841,84 @@ void Tst_terminalwidget::clearScrollbackResetsScrollBar()
     QVERIFY(!m_term->hasSelection()); // a selection into vanished lines is dropped
     // The visible screen is untouched.
     QCOMPARE(screen->lineText(screen->cursor().row - 1), QStringLiteral("line 199"));
+}
+
+void Tst_terminalwidget::clearAllWipesScreenAndScrollback()
+{
+    // The toolbar's Clear (SessionWidget::clearTerminal()): screen and scrollback gone, cursor
+    // home, attributes / modes / parser state untouched - resetTerminal() is the RIS. While
+    // paused the clear applies first and the queue continues on the empty screen.
+    m_term->feedData(numberedLines(m_term->visibleRows() + 40));
+    m_term->feedData(esc("[1;31m") + esc("[?1h") + esc("[?2004h") + "red");
+    TerminalScreen* screen = m_term->screen();
+    QVERIFY(screen->scrollbackSize() > 0);
+    const Terminal::Attributes attributes = screen->currentAttributes();
+    QVERIFY(attributes != Terminal::Attributes());
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    m_term->feedData("after\r\n");
+
+    m_term->clearAll();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QCOMPARE(screen->totalLines(), screen->rows());
+    QCOMPARE(screen->lineText(0), QStringLiteral("after"));   // the queue landed on the empty screen
+    for (int r = 1; r < screen->rows(); ++r) {
+        QVERIFY2(screen->line(r).text().isEmpty(), qPrintable(QStringLiteral("row %1 not blank").arg(r)));
+    }
+    QCOMPARE(screen->cursor().row, 1);
+    QCOMPARE(screen->cursor().col, 0);
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    QCOMPARE(m_term->pendingPausedBytes(), qint64(0));
+    QVERIFY(screen->currentAttributes() == attributes);     // bold red still active
+    QVERIFY(m_term->parser()->cursorKeyApplicationMode());   // DECCKM kept
+    QVERIFY(m_term->parser()->bracketedPasteMode());         // bracketed paste kept
+    QCOMPARE(m_term->verticalScrollBar()->maximum(), 0);
+    QVERIFY(m_term->isAtBottom());
+
+    // Not paused: a plain wipe, cursor home, nothing in the scrollback, fully usable afterwards.
+    m_term->feedData(numberedLines(m_term->visibleRows() + 5));
+    QVERIFY(screen->scrollbackSize() > 0);
+    m_term->clearAll();
+    QCOMPARE(screen->scrollbackSize(), 0);
+    QCOMPARE(screen->cursor().row, 0);
+    QCOMPARE(screen->cursor().col, 0);
+    for (int r = 0; r < screen->rows(); ++r) {
+        QVERIFY(screen->line(r).text().isEmpty());
+    }
+    QCOMPARE(m_term->verticalScrollBar()->maximum(), 0);
+    m_term->feedData("back");
+    QCOMPARE(screen->lineText(0), QStringLiteral("back"));
+    QVERIFY(screen->line(0).cells.at(0).attr == attributes);   // printed with the kept attributes
+
+    // Alternate screen (top / vi / menuconfig): the visible grid is wiped and so is the primary
+    // grid saved behind it - leaving the alternate screen brings back a blank primary, not
+    // "back". Clear itself never leaves the alternate screen (the program owns it) and a second
+    // Clear right away is harmless.
+    m_term->feedData(esc("[?1049h") + esc("[H") + "inside top");   // ?1049 keeps the cursor: home it
+    QVERIFY(screen->alternateScreenActive());
+    QCOMPARE(screen->lineText(0), QStringLiteral("inside top"));
+    m_term->selectAll();
+    QVERIFY(m_term->isOutputPaused());
+    m_term->clearAll();
+    m_term->clearAll();
+    QVERIFY(screen->alternateScreenActive());
+    QVERIFY(!m_term->hasSelection());
+    QVERIFY(!m_term->isOutputPaused());
+    for (int r = 0; r < screen->rows(); ++r) {
+        QVERIFY(screen->line(r).text().isEmpty());
+    }
+    QCOMPARE(screen->cursor().row, 0);
+    QCOMPARE(screen->cursor().col, 0);
+    QCOMPARE(m_term->verticalScrollBar()->maximum(), 0);
+    m_term->feedData(esc("[?1049l"));
+    QVERIFY(!screen->alternateScreenActive());
+    QCOMPARE(screen->scrollbackSize(), 0);
+    for (int r = 0; r < screen->rows(); ++r) {
+        QVERIFY2(screen->line(r).text().isEmpty(), qPrintable(QStringLiteral("primary row %1 not blank").arg(r)));
+    }
+    m_term->feedData("\r\nprompt$ ");
+    QVERIFY(screen->lineText(screen->cursor().row).startsWith(QStringLiteral("prompt$")));
 }
 
 void Tst_terminalwidget::resetTerminalClearsEverything()
@@ -1688,6 +3136,7 @@ void Tst_terminalwidget::paintingProducesNonUniformImage()
 
 void Tst_terminalwidget::paintWideCharsAndAllAttributes()
 {
+    m_term->setPauseWhileSelecting(false);   // the cursor is moved onto a wide char *while* everything is selected
     m_term->feedData(QStringLiteral("你好世界 wide\r\n").toUtf8());
     m_term->feedData(esc("[1mbold ") + esc("[0m") + esc("[2mdim ") + esc("[0m") + esc("[3mitalic ") + esc("[0m") +
                      esc("[4munder ") + esc("[0m") + esc("[5mblink ") + esc("[0m") + esc("[7minverse ") + esc("[0m") +
@@ -1866,24 +3315,23 @@ void Tst_terminalwidget::repaintsAreCoalescedWhileFollowing()
 
 void Tst_terminalwidget::partialRepaintConsumesDirtyState()
 {
-    // Baseline: the initial all-dirty paint has happened.
+    // Baseline: the initial all-dirty paint has happened. The coalescing window is at least as
+    // long as the previous paint took, so on a loaded machine a fixed 40 ms wait is not enough:
+    // poll for the state instead (the checks below are the same).
     m_term->feedData("x");
-    QTest::qWait(40);
-    QVERIFY(!m_term->screen()->isDirty());
+    QTRY_VERIFY_WITH_TIMEOUT(!m_term->screen()->isDirty(), 2000);
 
     // A single-row change is painted partially and still consumes the dirty state.
     m_term->feedData("y");
     QVERIFY(m_term->screen()->isDirty());
     QVERIFY(!m_term->screen()->allDirty());
-    QTest::qWait(40);
-    QVERIFY(!m_term->screen()->isDirty());
+    QTRY_VERIFY_WITH_TIMEOUT(!m_term->screen()->isDirty(), 2000);
 
     // Two mutations before the timer fires: both rows are painted, nothing is left dirty.
     m_term->feedData("a");
     m_term->feedData(esc("[10;1Hb"));
     QVERIFY(m_term->screen()->isDirty());
-    QTest::qWait(40);
-    QVERIFY(!m_term->screen()->isDirty());
+    QTRY_VERIFY_WITH_TIMEOUT(!m_term->screen()->isDirty(), 2000);
     const TerminalScreen* screen = m_term->screen();
     QCOMPARE(screen->lineText(screen->scrollbackSize() + 9).trimmed(), QStringLiteral("b"));
     QCOMPARE(screen->lineText(screen->scrollbackSize()).trimmed(), QStringLiteral("xya"));

@@ -173,6 +173,8 @@ void PreferencesDialog::loadFromSettings()
     ui->cursorBlinkCheck->setChecked(settings.cursorBlink());
     ui->bellCheck->setChecked(settings.bellEnabled());
     ui->implicitCrCheck->setChecked(settings.implicitCr());
+    ui->pauseWhileSelectingCheck->setChecked(settings.pauseWhileSelecting());
+    ui->rightClickPastesCheck->setChecked(settings.rightClickPastes());
 
     // Input
     selectByData(ui->enterSendsCombo, static_cast<int>(settings.enterSends()));
@@ -217,6 +219,8 @@ void PreferencesDialog::saveToSettings()
     settings.setCursorBlink(ui->cursorBlinkCheck->isChecked());
     settings.setBellEnabled(ui->bellCheck->isChecked());
     settings.setImplicitCr(ui->implicitCrCheck->isChecked());
+    settings.setPauseWhileSelecting(ui->pauseWhileSelectingCheck->isChecked());
+    settings.setRightClickPastes(ui->rightClickPastesCheck->isChecked());
 
     // Input
     settings.setEnterSends(static_cast<LineEnding::Mode>(ui->enterSendsCombo->currentData().toInt()));
@@ -305,6 +309,8 @@ void PreferencesDialog::onRestoreDefaults()
         ui->cursorBlinkCheck->setChecked(true);
         ui->bellCheck->setChecked(true);
         ui->implicitCrCheck->setChecked(true);
+        ui->pauseWhileSelectingCheck->setChecked(true);
+        ui->rightClickPastesCheck->setChecked(true);
         break;
     case PageInput:
         selectByData(ui->enterSendsCombo, static_cast<int>(LineEnding::Mode::CR));

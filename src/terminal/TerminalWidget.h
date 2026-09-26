@@ -69,8 +69,18 @@ class AnsiParser;
  *  - Ctrl+C with an active selection -> copy (and clear selection); without -> 0x03
  *  - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 -> zoom (font size) ; emits fontZoomed()
  *  - Text (incl. IME commit) -> encoded with the current encoding (QStringEncoder)
- *  - Middle click -> paste selection/clipboard ; right click -> context menu
- *    (Copy, Paste, Select All, Clear Scrollback, Reset Terminal, Sync Terminal Size, Find...)
+ *  - Middle click -> paste selection/clipboard
+ *  - Right click (cmd.exe QuickEdit; setRightClickPastes(), on by default,
+ *    AppSettings::rightClickPastes()): a plain right-button press copies the selection when one
+ *    exists (copySelection() + clearSelection(), which also resumes a paused display; nothing is
+ *    pasted) and pastes the clipboard otherwise (the paste() path: CR/LF conversion, bracketed
+ *    paste, ignored while disconnected); no menu. Shift+right click, the Menu key and Shift+F10
+ *    (a QContextMenuEvent with reason Keyboard) open the context menu: Copy, Paste, Select All,
+ *    Clear Screen (keep scrollback), Clear Scrollback, Reset Terminal, Sync Terminal Size,
+ *    Find..., plus a disabled hint line ("Right click: paste / copy selection - Shift+right
+ *    click: this menu") while the feature is on. With the feature off a plain right click opens
+ *    the menu as before. A right-button press never starts, extends or drops a left-button
+ *    selection in progress: a chorded right press while the left button is held is ignored.
  *  - Paste: newlines are converted to the Enter bytes; in bracketed paste mode wrapped in
  *    ESC[200~ ... ESC[201~. Large pastes are sent in one write (pacing is the port's job).
  *  - Drag & drop: a dropped file emits fileDropped(path); dropped text is pasted.
@@ -81,6 +91,35 @@ class AnsiParser;
  * Dragging past the top/bottom edge of the viewport auto-scrolls one line per 50 ms (no
  * acceleration) and keeps extending the selection until the pointer returns or the button is
  * released.
+ *
+ * Pause output while selecting (cmd.exe QuickEdit / mark mode; setPauseWhileSelecting(), on by
+ * default, AppSettings::pauseWhileSelecting()):
+ *  - As soon as a selection becomes non-empty (drag past the pressed cell, double/triple click,
+ *    Shift+click, selectAll(), findNext()/findPrevious()) the widget enters the *paused* state:
+ *    feedData() appends to a pending buffer instead of parsing, so the screen, the scrollback and
+ *    the selection stay exactly as they are. Local-echo bytes are queued the same way; DSR/DA
+ *    replies are produced when the pending bytes are parsed. isOutputPaused(),
+ *    pendingPausedBytes(), outputPausedChanged(). The hex view and the session logger are fed
+ *    separately by SessionWidget and are never affected.
+ *  - Resuming parses the pending bytes in one feed (coalesced repaint) and keeps the follow-output
+ *    state: Enter / Return (also keypad Enter) copies the selection to the clipboard, clears it and
+ *    resumes; Esc clears and resumes without copying; Ctrl+Shift+C, Ctrl+Insert, Ctrl+C with a
+ *    selection, the context menu's Copy and copySelection() itself copy, clear and resume (while
+ *    not paused, copySelection() keeps the selection as before); a left click without a drag,
+ *    clearSelection() from any caller, turning the feature off and resumeOutput() (which keeps the
+ *    selection) resume too. clearScreen() / clearScrollback() / resetTerminal() clear the
+ *    selection, apply the clear / reset and only then parse the pending bytes. A new selection
+ *    while paused replaces the old one and stays paused.
+ *  - While paused every other key press (and IME commit) is swallowed - accepted, nothing sent,
+ *    no local echo - except the application shortcuts that pass through ShortcutOverride; pastes
+ *    (Ctrl+Shift+V, Shift+Insert, middle click, pasteText()) are ignored; wheel / scrollbar /
+ *    Shift+PgUp/PgDn scrolling and zooming keep working.
+ *  - pauseBufferLimit() (default 64 MiB) bounds the pending buffer: a chunk that would exceed it
+ *    resumes the widget automatically (the selection is kept so it can still be copied), flushes
+ *    everything and emits pauseBufferOverflow(pendingBytes); no byte is ever dropped.
+ *  - Feedback: a translucent badge in the top-right corner of the viewport ("Output paused
+ *    <N> waiting  Enter: copy  Esc: cancel"), painted last and repainted at most every 100 ms as
+ *    the pending size grows; it is neither part of the screen model nor of the copied text.
  *
  * Optional (nice to have if time permits): incremental find in scrollback via
  * findNext()/findPrevious() with highlighted matches.
@@ -119,6 +158,18 @@ public:
     /// shortcuts, pastes are dropped and DSR/DA replies are not sent; the cursor is drawn hollow.
     void setInputEnabled(bool on);
     bool inputEnabled() const;
+    /// Freeze the display while text is selected (see the class comment). Turning it off while
+    /// paused resumes (the selection is kept). Default true.
+    void setPauseWhileSelecting(bool on);
+    bool pauseWhileSelecting() const;
+    /// cmd.exe-style right click: copy the selection or paste the clipboard instead of opening
+    /// the context menu, which moves to Shift+right click (see the class comment). Default true.
+    void setRightClickPastes(bool on);
+    bool rightClickPastes() const;
+    /// Upper bound for the bytes queued while paused; exceeding it resumes automatically and
+    /// emits pauseBufferOverflow(). Default 64 MiB; never below 0.
+    void setPauseBufferLimit(qint64 bytes);
+    qint64 pauseBufferLimit() const;
 
     // ---- State ----------------------------------------------------------------------
     int columns() const;
@@ -126,12 +177,21 @@ public:
     bool hasSelection() const;
     QString selectedText() const;
     bool isAtBottom() const;                 ///< view follows output
+    bool isOutputPaused() const;             ///< feedData() is queuing (selection in progress)
+    qint64 pendingPausedBytes() const;       ///< bytes queued while paused (0 when not paused)
 
 public slots:
     /// Feed bytes received from the device. Safe to call at high rates.
     void feedData(const QByteArray& data);
-    void clearScreen();        ///< keeps scrollback (pushes screen into it)
+    void clearScreen();        ///< keeps scrollback (pushes screen into it); context menu "Clear Screen"
     void clearScrollback();
+    /// The toolbar / Session menu "Clear": wipes the screen *and* the scrollback (and, while an
+    /// alternate-screen program such as top or vi is running, the primary screen saved behind
+    /// it - TerminalScreen::clearAll()) so no previous text remains or comes back, and homes the
+    /// cursor; attributes, modes and the parser state are untouched (resetTerminal() is the full
+    /// RIS). While paused the clear applies first and the queued bytes are parsed afterwards on
+    /// the empty screen, like clearScreen().
+    void clearAll();
     void resetTerminal();      ///< RIS + parser reset
     void copySelection();
     void paste();
@@ -140,7 +200,11 @@ public slots:
     /// left out so the copied text never ends in a run of empty lines. Clears the selection when
     /// the whole buffer is blank.
     void selectAll();
+    /// Drops the selection; also resumes a paused output (pending bytes are parsed).
     void clearSelection();
+    /// Leave the paused state: parse the pending bytes in one feed and repaint. The selection is
+    /// kept. No-op when not paused.
+    void resumeOutput();
     void scrollToBottom();
     void scrollLines(int delta);
     void scrollPages(int delta);
@@ -165,6 +229,11 @@ signals:
     void syncSizeRequested();
     /// Context-menu "Find..." chosen; the owner (MainWindow) shows the find prompt and calls findNext().
     void findRequested();
+    /// The paused state was entered (true) or left (false); SessionWidget shows a status message.
+    void outputPausedChanged(bool paused);
+    /// The pending buffer would have exceeded pauseBufferLimit(): the widget resumed by itself and
+    /// parsed `flushedBytes` (everything queued so far plus the chunk that overflowed).
+    void pauseBufferOverflow(qint64 flushedBytes);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -195,6 +264,7 @@ private slots:
     void onDragScrollTimeout();
     void scheduleRepaint();
     void performRepaint();
+    void onPauseBadgeTimeout();               ///< coalesced repaint of the badge as pending bytes grow
 
 private:
     struct Selection
@@ -240,6 +310,17 @@ private:
     bool handleLocalShortcut(QKeyEvent* event);   ///< copy/paste/zoom/scroll keys that never reach the device
     void scheduleFullRepaint();               ///< coalesced repaint of every row (view scrolled, no dirty rows)
     void extendDragSelectionTo(const QPoint& viewportPos);   ///< drag in progress: selection from the press cell
+
+    // ---- Pause output while selecting (private; see the class comment) -------------------
+    void pauseForSelection();                 ///< pause if the feature is on and the selection is non-empty
+    void setOutputPaused(bool paused);        ///< state transition + badge repaint + outputPausedChanged(); no flush
+    QByteArray takePendingOutput();           ///< pending bytes, emptied; the paused state is left without parsing
+    bool handlePausedKey(QKeyEvent* event);   ///< mark-mode keys: Enter copies + resumes, Esc cancels, rest swallowed
+    QString pauseBadgeText() const;
+    QFont pauseBadgeFont() const;             ///< the terminal font one point smaller
+    QRect pauseBadgeRect() const;             ///< viewport rect of the badge for the current pending size
+    void paintPauseBadge(QPainter& painter);
+    void schedulePauseBadgeRepaint();         ///< at most one badge repaint per kPauseBadgeIntervalMs
 
     TerminalScreen* m_screen;
     AnsiParser* m_parser;
@@ -293,4 +374,13 @@ private:
     QPoint m_lastClickCell;
     bool m_selecting = false;                 ///< left button held: drag extends the selection
     int m_wheelAccumulator = 0;               ///< sub-notch wheel deltas (touchpads)
+
+    // ---- Pause output while selecting ------------------------------------------------------
+    bool m_pauseWhileSelecting = true;
+    bool m_rightClickPastes = true;           ///< cmd.exe right click (paste / copy) instead of the context menu
+    bool m_outputPaused = false;
+    QByteArray m_pendingPaused;               ///< bytes received while paused, in arrival order
+    qint64 m_pauseBufferLimit = 64 * 1024 * 1024;
+    QTimer m_pauseBadgeTimer;                 ///< single-shot: coalesces badge repaints while pending bytes grow
+    QRect m_pauseBadgeRect;                   ///< badge rect as last painted (a grown badge repaints the old area too)
 };

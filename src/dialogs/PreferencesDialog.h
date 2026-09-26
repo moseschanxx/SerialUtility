@@ -19,7 +19,10 @@ class QAbstractButton;
  *  Terminal:   fontButton (opens QFontDialog, monospace-only filter) + fontPreviewLabel,
  *              themeCombo (TerminalTheme::names() with displayName; a stored name not in the
  *              list is appended so it round-trips), scrollbackSpin (100..1000000),
- *              cursorBlinkCheck, bellCheck, implicitCrCheck
+ *              cursorBlinkCheck, bellCheck, implicitCrCheck, pauseWhileSelectingCheck
+ *              (AppSettings::pauseWhileSelecting(); the View menu action mirrors the same setting),
+ *              rightClickPastesCheck (AppSettings::rightClickPastes(); mirrored by View > Right
+ *              Click Pastes the same way)
  *  Input:      enterSendsCombo (LineEnding::allModes()), backspaceDeleteCheck,
  *              localEchoCheck, encodingCombo (AnsiParser::availableEncodings(), plus the stored
  *              encoding when it is not in that list)

@@ -232,12 +232,12 @@
         <translation>Send BREAK (250 ms)</translation>
     </message>
     <message>
-        <location line="+89"/>
+        <location line="+90"/>
         <source>%1 is not currently available</source>
         <translation>%1 is not currently available</translation>
     </message>
     <message>
-        <location line="+52"/>
+        <location line="+54"/>
         <source>Disconnect</source>
         <translation>Disconnect</translation>
     </message>
@@ -341,7 +341,7 @@
 <context>
     <name>HexDumpView</name>
     <message numerus="yes">
-        <location filename="../src/ui/HexDumpView.cpp" line="+124"/>
+        <location filename="../src/ui/HexDumpView.cpp" line="+162"/>
         <source>%n bytes</source>
         <translation>
             <numerusform>%n byte</numerusform>
@@ -352,7 +352,7 @@
 <context>
     <name>LogReplayer</name>
     <message>
-        <location filename="../src/core/LogReplayer.cpp" line="+55"/>
+        <location filename="../src/core/LogReplayer.cpp" line="+57"/>
         <source>A replay is already running</source>
         <translation>A replay is already running</translation>
     </message>
@@ -415,7 +415,7 @@
         <translation>&amp;View</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+19"/>
         <source>&amp;Language</source>
         <translation>&amp;Language</translation>
     </message>
@@ -540,7 +540,12 @@
         <translation>Ctrl+Shift+Q</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+39"/>
+        <source>Clear the terminal screen, the scrollback and the hex view (Reset Terminal also resets the emulator)</source>
+        <translation>Clear the terminal screen, the scrollback and the hex view (Reset Terminal also resets the emulator)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Ctrl+Shift+L</source>
         <translation>Ctrl+Shift+L</translation>
     </message>
@@ -595,12 +600,7 @@
         <translation>C&amp;lear</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Clear the terminal screen and hex view</source>
-        <translation>Clear the terminal screen and hex view</translation>
-    </message>
-    <message>
-        <location line="+11"/>
+        <location line="+14"/>
         <source>&amp;Reset Terminal</source>
         <translation>&amp;Reset Terminal</translation>
     </message>
@@ -745,6 +745,26 @@
         <translation>Show &amp;Quick Commands</translation>
     </message>
     <message>
+        <location line="+14"/>
+        <source>Pause Output While &amp;Selecting</source>
+        <translation>Pause Output While &amp;Selecting</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Freeze the display while text is selected; Enter copies the selection and resumes (cmd.exe mark mode)</source>
+        <translation>Freeze the display while text is selected; Enter copies the selection and resumes (cmd.exe mark mode)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Right Click &amp;Pastes (cmd.exe style)</source>
+        <translation>Right Click &amp;Pastes (cmd.exe style)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Right-click pastes the clipboard, or copies the selected text; Shift+right-click opens the context menu</source>
+        <translation>Right-click pastes the clipboard, or copies the selected text; Shift+right-click opens the context menu</translation>
+    </message>
+    <message>
         <location line="+11"/>
         <source>System &amp;Log</source>
         <translation>System &amp;Log</translation>
@@ -831,7 +851,7 @@
     </message>
     <message>
         <location filename="../src/ui/MainWindow.cpp" line="+100"/>
-        <location line="+322"/>
+        <location line="+337"/>
         <source>New Session (Ctrl+T)</source>
         <translation>New Session (Ctrl+T)</translation>
     </message>
@@ -886,19 +906,19 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+48"/>
-        <location line="+709"/>
+        <location line="+762"/>
         <source>System Log</source>
         <translation>System Log</translation>
     </message>
     <message>
-        <location line="-631"/>
-        <location line="+587"/>
+        <location line="-657"/>
+        <location line="+613"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-522"/>
+        <location line="-548"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>%n serial port found</numerusform>
@@ -912,12 +932,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+288"/>
+        <location line="+314"/>
         <source>Cannot open %1</source>
         <translation>Cannot open %1</translation>
     </message>
     <message>
-        <location line="-245"/>
+        <location line="-271"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
@@ -937,7 +957,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Not found</translation>
     </message>
     <message>
-        <location line="+276"/>
+        <location line="+302"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
@@ -1031,7 +1051,27 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Implicit carriage return on line feed</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+7"/>
+        <source>Like the Windows console: starting a selection freezes the display while incoming bytes queue up. Enter copies the selection and resumes, Esc cancels. Also in View &gt; Pause Output While Selecting.</source>
+        <translation>Like the Windows console: starting a selection freezes the display while incoming bytes queue up. Enter copies the selection and resumes, Esc cancels. Also in View &gt; Pause Output While Selecting.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pause output while selecting text (Enter copies, Esc cancels)</source>
+        <translation>Pause output while selecting text (Enter copies, Esc cancels)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Like cmd.exe QuickEdit: a right click pastes the clipboard, or copies the selected text when there is a selection. The context menu opens with Shift+right click, the Menu key or Shift+F10. Also in View &gt; Right Click Pastes.</source>
+        <translation>Like cmd.exe QuickEdit: a right click pastes the clipboard, or copies the selected text when there is a selection. The context menu opens with Shift+right click, the Menu key or Shift+F10. Also in View &gt; Right Click Pastes.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Right click pastes the clipboard / copies the selection (Shift+right click opens the menu)</source>
+        <translation>Right click pastes the clipboard / copies the selection (Shift+right click opens the menu)</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Input</source>
         <translation>Input</translation>
     </message>
@@ -1216,7 +1256,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Hex dump</translation>
     </message>
     <message>
-        <location line="+117"/>
+        <location line="+121"/>
         <source>Terminal Font</source>
         <translation>Terminal Font</translation>
     </message>
@@ -1998,7 +2038,17 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+98"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+750"/>
+        <source>Output paused while selecting - Enter copies, Esc cancels</source>
+        <translation>Output paused while selecting - Enter copies, Esc cancels</translation>
+    </message>
+    <message>
+        <location line="-665"/>
+        <source>Output resumed: %1 arrived while the display was paused</source>
+        <translation>Output resumed: %1 arrived while the display was paused</translation>
+    </message>
+    <message>
+        <location line="+25"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
@@ -2008,7 +2058,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Log closed: %1 (%2 bytes)</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+115"/>
         <source>Replay: %1</source>
         <translation>Replay: %1</translation>
     </message>
@@ -2018,7 +2068,7 @@ Nothing is saved until you press OK.</translation>
         <translation>New Session</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+109"/>
         <source>Select a serial port first</source>
         <translation>Select a serial port first</translation>
     </message>
@@ -2043,7 +2093,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Disconnected from %1</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+26"/>
         <source>Terminal reset</source>
         <translation>Terminal reset</translation>
     </message>
@@ -2054,12 +2104,12 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+320"/>
+        <location line="+330"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>Log files (*.log *.txt);;All files (*)</translation>
     </message>
     <message>
-        <location line="-298"/>
+        <location line="-308"/>
         <source>(no port)</source>
         <translation>(no port)</translation>
     </message>
@@ -2120,7 +2170,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Reconnected to %1</translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+116"/>
         <source>Disconnect from %1 before replaying a log file</source>
         <translation>Disconnect from %1 before replaying a log file</translation>
     </message>
@@ -2277,7 +2327,12 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1765"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1238"/>
+        <source>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</source>
+        <translation>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</translation>
+    </message>
+    <message>
+        <location line="+920"/>
         <source>&amp;Copy</source>
         <translation>&amp;Copy</translation>
     </message>
@@ -2292,12 +2347,17 @@ Nothing is saved until you press OK.</translation>
         <translation>Select &amp;All</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Clear &amp;Screen</source>
-        <translation>Clear &amp;Screen</translation>
+        <location line="+6"/>
+        <source>Clear &amp;Screen (keep scrollback)</source>
+        <translation>Clear &amp;Screen (keep scrollback)</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+20"/>
+        <source>Right click: paste / copy selection - Shift+right click: this menu</source>
+        <translation>Right click: paste / copy selection - Shift+right click: this menu</translation>
+    </message>
+    <message>
+        <location line="-18"/>
         <source>Clear Scroll&amp;back</source>
         <translation>Clear Scroll&amp;back</translation>
     </message>

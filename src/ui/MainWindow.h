@@ -33,7 +33,11 @@ class SystemLogViewer;
  *            connected), actionSelectAll, actionFind (Ctrl+Shift+F), actionQuickCommands,
  *            actionPreferences (Ctrl+,)
  *   View:    actionHexView (checkable, Ctrl+Shift+H), actionShowCommandInput (checkable),
- *            actionShowQuickCommands (checkable), actionSystemLog (checkable),
+ *            actionShowQuickCommands (checkable), actionPauseWhileSelecting (checkable, mirrors
+ *            AppSettings::pauseWhileSelecting() both ways: toggling writes the setting, a settings
+ *            change - e.g. from Preferences - re-checks the action), actionRightClickPastes
+ *            (checkable, mirrors AppSettings::rightClickPastes() the same way: cmd.exe-style
+ *            right click pastes / copies, Shift+right click opens the menu), actionSystemLog (checkable),
  *            actionZoomIn (Ctrl++), actionZoomOut (Ctrl+-), actionZoomReset (Ctrl+0),
  *            actionNextTab (Ctrl+Tab), actionPreviousTab (Ctrl+Shift+Tab)
  *   Language: actionLanguageEnglish, actionLanguageChinese (checkable, exclusive)
@@ -55,7 +59,11 @@ class SystemLogViewer;
  *  - Status bar permanent widgets (right side): connection state + settings summary
  *    ("COM8 · 115200 8N1"), RX/TX counters ("RX 12.3 KB  TX 456 B"), grid size ("120x40"),
  *    encoding, logging indicator ("● LOG" when active, tooltip = path).
- *    Left side: transient statusMessage() from the active session.
+ *    Left side: transient statusMessage() from the active session; an empty message clears it
+ *    (the session uses that when a paused terminal resumes). The active session's
+ *    persistentStatusMessage() (the "Output paused" hint) is re-shown whenever a transient message
+ *    expires and swapped for the new tab's own hint on every tab change, so a background or
+ *    closed tab's hint never stays on screen.
  *  - Session/Edit/View actions act on currentSession(); enabled state is refreshed by
  *    updateActions() on tab change and connection state change.
  *  - Closing a connected tab, or the window with connected tabs, asks for confirmation when
@@ -117,6 +125,11 @@ private slots:
     void onHexViewToggled(bool on);
     void onShowCommandInputToggled(bool on);
     void onShowQuickCommandsToggled(bool on);
+    void onPauseWhileSelectingToggled(bool on);   ///< View > Pause Output While Selecting -> AppSettings
+    void syncPauseWhileSelectingAction();          ///< AppSettings::changed -> action checked state
+    void onRightClickPastesToggled(bool on);       ///< View > Right Click Pastes -> AppSettings
+    void syncRightClickPastesAction();             ///< AppSettings::changed -> action checked state
+    void updateSessionHint();                      ///< tab change: current session's persistentStatusMessage()
     void onZoomIn();
     void onZoomOut();
     void onZoomReset();
@@ -169,4 +182,5 @@ private:
 
     // ---- Implementation state (private; added by the ui-main package) ------------------
     QString m_lastFindText;   ///< seed for the next Find dialog
+    QString m_sessionHint;    ///< the current tab's persistentStatusMessage(); re-shown after transient messages
 };

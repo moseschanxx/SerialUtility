@@ -232,12 +232,12 @@
         <translation>发送 BREAK 信号（250 ms）</translation>
     </message>
     <message>
-        <location line="+89"/>
+        <location line="+90"/>
         <source>%1 is not currently available</source>
         <translation>%1 当前不可用</translation>
     </message>
     <message>
-        <location line="+52"/>
+        <location line="+54"/>
         <source>Disconnect</source>
         <translation>断开</translation>
     </message>
@@ -340,7 +340,7 @@
 <context>
     <name>HexDumpView</name>
     <message numerus="yes">
-        <location filename="../src/ui/HexDumpView.cpp" line="+124"/>
+        <location filename="../src/ui/HexDumpView.cpp" line="+162"/>
         <source>%n bytes</source>
         <translation>
             <numerusform>%n 字节</numerusform>
@@ -350,7 +350,7 @@
 <context>
     <name>LogReplayer</name>
     <message>
-        <location filename="../src/core/LogReplayer.cpp" line="+55"/>
+        <location filename="../src/core/LogReplayer.cpp" line="+57"/>
         <source>A replay is already running</source>
         <translation>已有回放正在进行</translation>
     </message>
@@ -413,7 +413,7 @@
         <translation>视图(&amp;V)</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+19"/>
         <source>&amp;Language</source>
         <translation>语言(&amp;L)</translation>
     </message>
@@ -538,7 +538,12 @@
         <translation>Ctrl+Shift+Q</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+39"/>
+        <source>Clear the terminal screen, the scrollback and the hex view (Reset Terminal also resets the emulator)</source>
+        <translation>清除终端屏幕、回滚缓冲区和十六进制视图（“重置终端”还会重置终端仿真状态）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Ctrl+Shift+L</source>
         <translation>Ctrl+Shift+L</translation>
     </message>
@@ -593,12 +598,7 @@
         <translation>清屏(&amp;L)</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Clear the terminal screen and hex view</source>
-        <translation>清除终端屏幕和十六进制视图</translation>
-    </message>
-    <message>
-        <location line="+11"/>
+        <location line="+14"/>
         <source>&amp;Reset Terminal</source>
         <translation>重置终端(&amp;R)</translation>
     </message>
@@ -743,6 +743,26 @@
         <translation>显示快捷命令栏(&amp;Q)</translation>
     </message>
     <message>
+        <location line="+14"/>
+        <source>Pause Output While &amp;Selecting</source>
+        <translation>选择文本时暂停输出(&amp;S)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Freeze the display while text is selected; Enter copies the selection and resumes (cmd.exe mark mode)</source>
+        <translation>选中文本时冻结显示；按 Enter 复制所选内容并恢复输出（类似 cmd.exe 的标记模式）</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Right Click &amp;Pastes (cmd.exe style)</source>
+        <translation>右键粘贴（cmd.exe 风格）(&amp;P)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Right-click pastes the clipboard, or copies the selected text; Shift+right-click opens the context menu</source>
+        <translation>右键单击粘贴剪贴板内容，若有选中文本则复制所选内容；Shift+右键打开上下文菜单</translation>
+    </message>
+    <message>
         <location line="+11"/>
         <source>System &amp;Log</source>
         <translation>系统日志(&amp;L)</translation>
@@ -829,7 +849,7 @@
     </message>
     <message>
         <location filename="../src/ui/MainWindow.cpp" line="+100"/>
-        <location line="+322"/>
+        <location line="+337"/>
         <source>New Session (Ctrl+T)</source>
         <translation>新建会话 (Ctrl+T)</translation>
     </message>
@@ -880,19 +900,19 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+48"/>
-        <location line="+709"/>
+        <location line="+762"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-631"/>
-        <location line="+587"/>
+        <location line="-657"/>
+        <location line="+613"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-522"/>
+        <location line="-548"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -905,12 +925,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+288"/>
+        <location line="+314"/>
         <source>Cannot open %1</source>
         <translation>无法打开 %1</translation>
     </message>
     <message>
-        <location line="-245"/>
+        <location line="-271"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
@@ -930,7 +950,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>未找到</translation>
     </message>
     <message>
-        <location line="+276"/>
+        <location line="+302"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -1024,7 +1044,27 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>换行时隐含回车</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+7"/>
+        <source>Like the Windows console: starting a selection freezes the display while incoming bytes queue up. Enter copies the selection and resumes, Esc cancels. Also in View &gt; Pause Output While Selecting.</source>
+        <translation>与 Windows 控制台相同：开始选择后显示会冻结，期间收到的数据先排队等待。按 Enter 复制所选内容并恢复输出，按 Esc 取消。也可在“视图 &gt; 选择文本时暂停输出”中设置。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pause output while selecting text (Enter copies, Esc cancels)</source>
+        <translation>选择文本时暂停输出（按 Enter 复制，Esc 取消）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Like cmd.exe QuickEdit: a right click pastes the clipboard, or copies the selected text when there is a selection. The context menu opens with Shift+right click, the Menu key or Shift+F10. Also in View &gt; Right Click Pastes.</source>
+        <translation>与 cmd.exe 的快速编辑模式相同：右键单击粘贴剪贴板内容，若有选中文本则复制所选内容。上下文菜单通过 Shift+右键、菜单键或 Shift+F10 打开。也可在“视图 &gt; 右键粘贴”中设置。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Right click pastes the clipboard / copies the selection (Shift+right click opens the menu)</source>
+        <translation>右键单击粘贴剪贴板内容 / 复制所选内容（Shift+右键打开菜单）</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Input</source>
         <translation>输入</translation>
     </message>
@@ -1209,7 +1249,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>十六进制转储</translation>
     </message>
     <message>
-        <location line="+117"/>
+        <location line="+121"/>
         <source>Terminal Font</source>
         <translation>终端字体</translation>
     </message>
@@ -1988,7 +2028,17 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+98"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+750"/>
+        <source>Output paused while selecting - Enter copies, Esc cancels</source>
+        <translation>选择文本时已暂停输出 - 按 Enter 复制，Esc 取消</translation>
+    </message>
+    <message>
+        <location line="-665"/>
+        <source>Output resumed: %1 arrived while the display was paused</source>
+        <translation>输出已恢复：暂停期间收到了 %1 数据</translation>
+    </message>
+    <message>
+        <location line="+25"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -1998,7 +2048,7 @@ Nothing is saved until you press OK.</source>
         <translation>日志已关闭：%1（%2 字节）</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+115"/>
         <source>Replay: %1</source>
         <translation>回放：%1</translation>
     </message>
@@ -2008,7 +2058,7 @@ Nothing is saved until you press OK.</source>
         <translation>新建会话</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+109"/>
         <source>Select a serial port first</source>
         <translation>请先选择串口</translation>
     </message>
@@ -2033,7 +2083,7 @@ Nothing is saved until you press OK.</source>
         <translation>已断开与 %1 的连接</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+26"/>
         <source>Terminal reset</source>
         <translation>终端已重置</translation>
     </message>
@@ -2044,12 +2094,12 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+320"/>
+        <location line="+330"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>日志文件 (*.log *.txt);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="-298"/>
+        <location line="-308"/>
         <source>(no port)</source>
         <translation>（无端口）</translation>
     </message>
@@ -2110,7 +2160,7 @@ Nothing is saved until you press OK.</source>
         <translation>已重新连接到 %1</translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+116"/>
         <source>Disconnect from %1 before replaying a log file</source>
         <translation>回放日志文件前，请先断开与 %1 的连接</translation>
     </message>
@@ -2267,7 +2317,12 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1765"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1238"/>
+        <source>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</source>
+        <translation>⏸ 输出已暂停  %1 待显示   Enter: 复制  Esc: 取消</translation>
+    </message>
+    <message>
+        <location line="+920"/>
         <source>&amp;Copy</source>
         <translation>复制(&amp;C)</translation>
     </message>
@@ -2282,12 +2337,17 @@ Nothing is saved until you press OK.</source>
         <translation>全选(&amp;A)</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Clear &amp;Screen</source>
-        <translation>清除屏幕(&amp;S)</translation>
+        <location line="+6"/>
+        <source>Clear &amp;Screen (keep scrollback)</source>
+        <translation>清除屏幕（保留回滚缓冲区）(&amp;S)</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+20"/>
+        <source>Right click: paste / copy selection - Shift+right click: this menu</source>
+        <translation>右键：粘贴 / 复制所选内容 - Shift+右键：打开本菜单</translation>
+    </message>
+    <message>
+        <location line="-18"/>
         <source>Clear Scroll&amp;back</source>
         <translation>清除回滚缓冲区(&amp;B)</translation>
     </message>

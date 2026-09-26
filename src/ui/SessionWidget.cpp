@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QLocale>
 #include <QStackedWidget>
 #include <QStringConverter>
 #include <QStringDecoder>
@@ -73,6 +74,17 @@ SessionWidget::SessionWidget(QuickCommandStore* quickCommands, CommandHistory* h
         if (!deviceTitle.trimmed().isEmpty()) {
             emit statusMessage(deviceTitle, kStatusShortMs);
         }
+    });
+    // Mark mode (pause output while selecting): a persistent status-bar hint while the display is
+    // frozen; the empty message with timeout 0 on resume clears it again (MainWindow keeps it in
+    // step with the current tab through persistentStatusMessage()).
+    connect(m_terminal, &TerminalWidget::outputPausedChanged, this,
+            [this](bool) { emit statusMessage(persistentStatusMessage(), 0); });
+    connect(m_terminal, &TerminalWidget::pauseBufferOverflow, this, [this](qint64 flushedBytes) {
+        qCInfo(lcUi) << "terminal pause buffer overflow:" << flushedBytes << "bytes flushed";
+        emit statusMessage(tr("Output resumed: %1 arrived while the display was paused")
+                               .arg(QLocale().formattedDataSize(flushedBytes, 1, QLocale::DataSizeTraditionalFormat)),
+                           kStatusLongMs);
     });
 
     // ---- Command input / quick commands ---------------------------------------------------
@@ -303,6 +315,8 @@ void SessionWidget::applyPreferences()
         }
     }
     m_terminal->setImplicitCr(s.implicitCr());
+    m_terminal->setPauseWhileSelecting(s.pauseWhileSelecting());
+    m_terminal->setRightClickPastes(s.rightClickPastes());
 
     m_connection->setAutoReconnect(s.autoReconnect());
     m_connection->setReconnectIntervalMs(s.reconnectIntervalMs());
@@ -399,7 +413,9 @@ void SessionWidget::toggleConnection()
 
 void SessionWidget::clearTerminal()
 {
-    m_terminal->clearScreen();
+    // "Clear" means nothing of the previous output survives: screen, scrollback and hex dump.
+    // The emulator state (attributes, modes) stays; Reset Terminal is the full RIS.
+    m_terminal->clearAll();
     m_hexView->clearAll();
 }
 
@@ -674,10 +690,12 @@ void SessionWidget::onInputSendRequested(const QByteArray& payload, const QStrin
 void SessionWidget::writeSystemLine(const QString& text)
 {
     // Dim (SGR 2) on its own line, encoded like device output so the parser decodes it correctly.
+    // It takes the feedData() path so it queues like device output while the display is paused
+    // (writing straight into the parser would move the screen under a selection in progress).
     QByteArray line = QByteArrayLiteral("\r\n\x1b[2m--- ");
     line += encodeForDevice(text.toUtf8());
     line += QByteArrayLiteral(" ---\x1b[0m\r\n");
-    m_terminal->parser()->feed(line);
+    m_terminal->feedData(line);
 }
 
 QByteArray SessionWidget::encodeForDevice(const QByteArray& utf8) const
@@ -724,6 +742,14 @@ QByteArray SessionWidget::unescapeForDevice(const QString& text, QString* error)
 bool SessionWidget::isReplaying() const
 {
     return m_replayer && m_replayer->isRunning();
+}
+
+QString SessionWidget::persistentStatusMessage() const
+{
+    if (m_terminal->isOutputPaused()) {
+        return tr("Output paused while selecting - Enter copies, Esc cancels");
+    }
+    return {};
 }
 
 void SessionWidget::replayLogFile(const QString& path, qint64 bytesPerSecond)
