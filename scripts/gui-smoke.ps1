@@ -134,6 +134,14 @@ function Drag($x0, $y0, $x1, $y1) {   # window-relative pixels
     [Win32]::mouse_event([Win32]::LEFTUP, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 200
     Log "dragged ($x0,$y0) -> ($x1,$y1) window-relative"
 }
+function LeftClick($x, $y) {   # window-relative pixels
+    $h = (Get-Process -Id $script:appPid).MainWindowHandle
+    $r = New-Object Win32+RECT; [Win32]::GetWindowRect($h, [ref]$r) | Out-Null
+    [Win32]::SetCursorPos($r.Left + $x, $r.Top + $y) | Out-Null; Start-Sleep -Milliseconds 120
+    [Win32]::mouse_event([Win32]::LEFTDOWN, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 80
+    [Win32]::mouse_event([Win32]::LEFTUP, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 300
+    Log "left-clicked ($x,$y) window-relative"
+}
 function RightClick($x, $y) {   # window-relative pixels
     $h = (Get-Process -Id $script:appPid).MainWindowHandle
     $r = New-Object Win32+RECT; [Win32]::GetWindowRect($h, [ref]$r) | Out-Null
@@ -394,9 +402,11 @@ switch ($Scenario) {
       Shot 'password-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"   # v0.4: "Remember password for user@host:22" (left unchecked)
       Keys ((EscapeKeys $password) + '{ENTER}') 3000
       Shot 'shell'
-      # Session > Upload File to Remote... through the menu bar: Alt+S opens the menu, U is the accelerator.
-      Keys '%s' 700; Shot 'session-menu' -Screen
-      Keys 'u' 1500; Shot 'upload-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"
+      # Session > Upload File to Remote... through the toolbar button: since 0.4 Alt+<letter> goes to the
+      # shell while a session is connected (readline's Alt+F / Alt+B), so the menu mnemonics are not
+      # available from the terminal; the toolbar's Upload button sits right of Send File.
+      Shot 'session-toolbar' -Screen
+      LeftClick 640 70; Start-Sleep -Milliseconds 1500; Shot 'upload-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"
       DialogKeys '%l' 300; Paste $small 600                 # Alt+L: the local file field
       DialogKeys '%r' 600; Shot 'upload-default-remote' -Screen   # leaving the field derived <remote home>/<name>
       Paste '/tmp/' 400                                # an explicit directory with a trailing slash
