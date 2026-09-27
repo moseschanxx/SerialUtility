@@ -18,16 +18,21 @@
 #include <QDockWidget>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLocale>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTextDocument>
@@ -42,9 +47,12 @@
 #include "core/SerialConnection.h"
 #include "core/Transport.h"
 #include "dialogs/AboutDialog.h"
+#include "dialogs/PreferencesDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "ssh/SecretStore.h"
 #include "ssh/SshConnection.h"
 #include "ssh/SshProfile.h"
+#include "support/TestSshServer.h"
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
@@ -53,6 +61,8 @@
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
 #include "ui/SshConnectionBar.h"
+
+#include <iterator>   // std::size
 #include "ui/SystemLogViewer.h"
 
 // =======================================================================================
@@ -128,9 +138,12 @@ private:
 namespace {
 
 constexpr int kSimTimeoutMs = 10000;   ///< simulated device round trips
+constexpr int kSshTimeoutMs = 15000;   ///< a connect / a round trip to the in-process SSH server
 
 const QString kLoopback = QStringLiteral("SIM:loopback");
 const QString kMcu = QStringLiteral("SIM:mcu");
+const QString kSshUser = QStringLiteral("test");
+const QString kSshPassword = QStringLiteral("secret");
 const QString kShowCommandInputKey = QStringLiteral("ui/showCommandInput");
 const QString kShowQuickCommandsKey = QStringLiteral("ui/showQuickCommands");
 const QString kNewSessionTitle = QStringLiteral("New Session");
@@ -148,7 +161,7 @@ const ActionSpec kActions[] = {
     // File
     {"actionNewSession", "Ctrl+T", false},
     {"actionNewSshSession", "Ctrl+Shift+T", false},
-    {"actionCloseSession", "Ctrl+W", false},
+    {"actionCloseSession", "Ctrl+Shift+W", false},
     {"actionStartLogging", "", false},
     {"actionStopLogging", "", false},
     {"actionOpenLogFolder", "", false},
@@ -165,6 +178,7 @@ const ActionSpec kActions[] = {
     {"actionDownloadFile", "", false},
     {"actionSendBreak", "", false},
     {"actionSyncTerminalSize", "", false},
+    {"actionDetectBaudRate", "Ctrl+Shift+B", false},
     {"actionRefreshPorts", "F5", false},
     // Edit
     {"actionCopy", "Ctrl+Shift+C", false},
@@ -184,8 +198,18 @@ const ActionSpec kActions[] = {
     {"actionZoomIn", "Ctrl++", false},
     {"actionZoomOut", "Ctrl+-", false},
     {"actionZoomReset", "Ctrl+0", false},
+    // Window
     {"actionNextTab", "Ctrl+Tab", false},
     {"actionPreviousTab", "Ctrl+Shift+Tab", false},
+    {"actionSelectTab1", "Alt+1", false},
+    {"actionSelectTab2", "Alt+2", false},
+    {"actionSelectTab3", "Alt+3", false},
+    {"actionSelectTab4", "Alt+4", false},
+    {"actionSelectTab5", "Alt+5", false},
+    {"actionSelectTab6", "Alt+6", false},
+    {"actionSelectTab7", "Alt+7", false},
+    {"actionSelectTab8", "Alt+8", false},
+    {"actionSelectTab9", "Alt+9", false},
     // Language
     {"actionLanguageEnglish", "", true},
     {"actionLanguageChinese", "", true},
@@ -231,6 +255,66 @@ QString viewerText(const SystemLogViewer& viewer)
     return edit ? edit->toPlainText() : QString();
 }
 
+/// Every payload of a QByteArray signal spy (Transport::dataSent / dataReceived), in order.
+QByteArray spyBytes(const QSignalSpy& spy)
+{
+    QByteArray all;
+    for (const QList<QVariant>& args : spy) {
+        all += args.at(0).toByteArray();
+    }
+    return all;
+}
+
+QKeySequence seq(const char* portable)
+{
+    return QKeySequence(QString::fromLatin1(portable), QKeySequence::PortableText);
+}
+
+/// The last line of the terminal with any text on it ("$" for the test server's shell prompt).
+QString lastNonBlankLine(const TerminalWidget* terminal)
+{
+    const TerminalScreen* screen = terminal->screen();
+    for (int i = screen->totalLines() - 1; i >= 0; --i) {
+        const QString line = screen->lineText(i).trimmed();
+        if (!line.isEmpty()) {
+            return line;
+        }
+    }
+    return QString();
+}
+
+/// The accelerator of a menu / action text ("&Connect" -> 'c', lower case); a null QChar when
+/// the text has none ("&&" is a literal ampersand, as in the Window menu's session entries).
+QChar mnemonicOf(const QString& text)
+{
+    for (qsizetype i = 0; i + 1 < text.size(); ++i) {
+        if (text.at(i) == QLatin1Char('&')) {
+            if (text.at(i + 1) == QLatin1Char('&')) {
+                ++i;
+                continue;
+            }
+            return text.at(i + 1).toLower();
+        }
+    }
+    return QChar();
+}
+
+/// The dynamic per-session entries of the Window menu: everything after its second separator.
+QList<QAction*> sessionEntries(const QMenu* windowMenu)
+{
+    QList<QAction*> entries;
+    int separators = 0;
+    const QList<QAction*> actions = windowMenu->actions();
+    for (QAction* a : actions) {
+        if (a->isSeparator()) {
+            ++separators;
+        } else if (separators >= 2) {
+            entries.append(a);
+        }
+    }
+    return entries;
+}
+
 } // namespace
 
 // =======================================================================================
@@ -265,6 +349,18 @@ private slots:
     void nextPreviousTabCycle();
     void tabTextAndTooltip();
     void tabChangeUpdatesTitleAndStatus();
+
+    // ---- Keyboard (v0.4): configurable shortcuts, tab selection, Ctrl+W to the shell -----
+    void closeSessionShortcutLeavesCtrlWToShell();
+    void selectTabShortcuts();
+    void windowMenuListsSessions();
+    void middleClickClosesTab();
+    void detectBaudRateAction();
+    void shortcutEntriesContract();
+    void storedShortcutAppliedAndLive();
+    void reservedShortcutsPushedToTerminals();
+    void sshTabKeyboardEndToEnd();
+    void menuMnemonicsUnique();
 
     // ---- View -----------------------------------------------------------------------
     void hexViewToggle();
@@ -367,6 +463,9 @@ void Tst_mainwindow::initTestCase()
     QDesktopServices::setUrlHandler(QStringLiteral("file"), &m_urls, "handle");
     QDesktopServices::setUrlHandler(QStringLiteral("http"), &m_urls, "handle");
     QDesktopServices::setUrlHandler(QStringLiteral("https"), &m_urls, "handle");
+
+    // The one SSH connect of this suite (sshTabKeyboardEndToEnd) must not read ~/.ssh/config.
+    qputenv("SU_SSH_IGNORE_CONFIG", "1");
 }
 
 void Tst_mainwindow::cleanupTestCase()
@@ -387,6 +486,7 @@ void Tst_mainwindow::init()
     app.setConfirmCloseWhenConnected(true);
     app.setRestoreLastPorts(true);
     app.setReconnectIntervalMs(200);
+    app.setAutoBaudSampleMs(300);   // Detect Baud Rate, should a test trigger it, stays short
     m_urls.urls.clear();
 }
 
@@ -464,10 +564,16 @@ void Tst_mainwindow::constructsAndShows()
     QVERIFY(w.windowTitle().contains(QStringLiteral(APP_DISPLAY_NAME)));
     QVERIFY(w.windowTitle().contains(QStringLiteral(APP_VERSION)));
 
-    // The menus of the contract exist and the System Log dock is present but hidden.
-    for (const char* menu : {"menuFile", "menuSession", "menuEdit", "menuView", "menuLanguage", "menuHelp"}) {
+    // The menus of the contract exist (Window between View and Language) and the System Log
+    // dock is present but hidden.
+    for (const char* menu : {"menuFile", "menuSession", "menuEdit", "menuView", "menuWindow", "menuLanguage", "menuHelp"}) {
         QVERIFY2(child<QMenu>(&w, menu) != nullptr, menu);
     }
+    const QList<QAction*> menuBarActions = w.menuBar()->actions();
+    const qsizetype viewIndex = menuBarActions.indexOf(child<QMenu>(&w, "menuView")->menuAction());
+    QVERIFY(viewIndex >= 0);
+    QCOMPARE(menuBarActions.at(viewIndex + 1), child<QMenu>(&w, "menuWindow")->menuAction());
+    QCOMPARE(menuBarActions.at(viewIndex + 2), child<QMenu>(&w, "menuLanguage")->menuAction());
     // Help opens on a local dialog (keyboard default), not on the external homepage link.
     auto* help = child<QMenu>(&w, "menuHelp");
     QCOMPARE(help->actions().first(), action(w, "actionVersion"));
@@ -507,8 +613,9 @@ void Tst_mainwindow::actionsExistWithShortcuts()
 
 void Tst_mainwindow::noBareCtrlLetterShortcuts()
 {
-    // While connected the terminal sends Ctrl+<letter> to the device, so only the two
-    // explicitly passed-through tab shortcuts may use a bare Ctrl+letter.
+    // A bare Ctrl+<letter> that an action reserves is taken away from the shell while connected
+    // (Ctrl+W used to close the tab instead of deleting a word), so by default only New Session
+    // (Ctrl+T) may use one; the user can still assign others in Preferences > Keyboard.
     MainWindow w;
     const QList<QAction*> actions = w.findChildren<QAction*>();
     QVERIFY(actions.size() >= static_cast<int>(std::size(kActions)));
@@ -523,7 +630,7 @@ void Tst_mainwindow::noBareCtrlLetterShortcuts()
                                         combo.key() <= Qt::Key_Z;
             if (bareCtrlLetter) {
                 const QString name = a->objectName();
-                QVERIFY2(name == QLatin1String("actionNewSession") || name == QLatin1String("actionCloseSession"),
+                QVERIFY2(name == QLatin1String("actionNewSession"),
                          qPrintable(name + QStringLiteral(" uses the bare shortcut ") +
                                     sequence.toString(QKeySequence::PortableText)));
             }
@@ -711,8 +818,8 @@ void Tst_mainwindow::newSessionShortcut()
     QTest::keyClick(session->terminal(), Qt::Key_T, Qt::ControlModifier);
     QTRY_COMPARE(w.sessionCount(), 2);
 
-    // Ctrl+W closes the new (disconnected) session again.
-    QTest::keyClick(w.currentSession()->terminal(), Qt::Key_W, Qt::ControlModifier);
+    // Ctrl+Shift+W closes the new (disconnected) session again (Ctrl+W belongs to the shell).
+    QTest::keyClick(w.currentSession()->terminal(), Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
     QTRY_COMPARE(w.sessionCount(), 1);
 }
 
@@ -898,16 +1005,13 @@ void Tst_mainwindow::hexViewShortcutWhileConnected()
     QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
 
     // Ask the terminal whether it claims the key while input is enabled (the decision it makes
-    // for the real ShortcutOverride). If it does, the menu shortcut cannot be reached from a
-    // connected terminal; TerminalWidget::isPassThroughShortcut() must let Ctrl+Shift+<letter>
-    // through (TerminalWidget.cpp is owned by another package).
+    // for the real ShortcutOverride): Ctrl+Shift+<anything> always passes through, and the key
+    // is reserved anyway (the window pushed its shortcuts to the terminal).
     QKeyEvent probe(QEvent::ShortcutOverride, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier, QStringLiteral("H"));
     probe.ignore();
     QApplication::sendEvent(session->terminal(), &probe);
-    if (probe.isAccepted()) {
-        QSKIP("TerminalWidget claims Ctrl+Shift+H while connected; add Ctrl+Shift+<letter> to "
-              "isPassThroughShortcut() in TerminalWidget.cpp so the View > Hex View shortcut stays reachable");
-    }
+    QVERIFY2(!probe.isAccepted(), "TerminalWidget claims Ctrl+Shift+H while connected");
+    QVERIFY(session->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+H")));
 
     QTest::keyClick(&w, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
     QTRY_COMPARE(session->viewMode(), SessionWidget::ViewMode::HexDump);
@@ -2210,6 +2314,657 @@ void Tst_mainwindow::aboutAndVersionDialogsReused()
     QCOMPARE(w.findChildren<AboutDialog*>().size(), 0);
     QCOMPARE(w.findChildren<VersionDialog*>().size(), 0);
     QVERIFY(w.isVisible());
+}
+
+// =======================================================================================
+// Keyboard (v0.4): configurable shortcuts, tab selection, Ctrl+W to the shell
+// =======================================================================================
+
+void Tst_mainwindow::closeSessionShortcutLeavesCtrlWToShell()
+{
+    // Ctrl+W typed into a connected terminal is the control byte 0x17 for the device (the
+    // loopback echoes it back) and the tab stays open; Ctrl+Shift+W is Close Session and asks
+    // the usual question for a connected tab.
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession();
+    QVERIFY(connectCurrent(w, kLoopback));
+    QCOMPARE(w.sessionCount(), 2);
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+    QVERIFY(session->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+W")));
+    QVERIFY(!session->terminal()->reservedShortcuts().contains(seq("Ctrl+W")));
+
+    QSignalSpy sent(session->transport(), &Transport::dataSent);
+    QSignalSpy received(session->transport(), &Transport::dataReceived);
+    QTest::keyClick(session->terminal(), Qt::Key_W, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(spyBytes(received), QByteArray(1, '\x17'), kSimTimeoutMs);
+    QCOMPARE(spyBytes(sent), QByteArray(1, '\x17'));
+    QCOMPARE(w.sessionCount(), 2);
+    QVERIFY(session->isConnected());
+    QCOMPARE(w.currentSession(), session);
+
+    ModalDismisser dismisser(ModalDismisser::Answer::Yes);
+    QTest::keyClick(session->terminal(), Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(w.sessionCount(), 1);
+    dismisser.stop();
+    QCOMPARE(dismisser.count(), 1);
+    QCOMPARE(dismisser.classNames().first(), QStringLiteral("QMessageBox"));
+}
+
+void Tst_mainwindow::selectTabShortcuts()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QAction* selectTab[9];
+    for (int i = 0; i < 9; ++i) {
+        selectTab[i] = action(w, qPrintable(QStringLiteral("actionSelectTab%1").arg(i + 1)));
+        QVERIFY(selectTab[i]);
+        QCOMPARE(selectTab[i]->shortcut(), seq(qPrintable(QStringLiteral("Alt+%1").arg(i + 1))));
+        QCOMPARE(selectTab[i]->isEnabled(), i == 0);   // one tab: only Tab 1
+    }
+    QCOMPARE(selectTab[0]->text(), QStringLiteral("Tab &1"));
+
+    w.newSession(kLoopback);
+    w.newSession(kMcu);
+    QTabWidget* tabWidget = tabs(w);
+    QCOMPARE(tabWidget->currentIndex(), 2);
+    for (int i = 0; i < 9; ++i) {
+        QCOMPARE(selectTab[i]->isEnabled(), i < 3);
+    }
+    selectTab[1]->trigger();
+    QCOMPARE(tabWidget->currentIndex(), 1);
+    QTest::keyClick(&w, Qt::Key_3, Qt::AltModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 2);
+    QTest::keyClick(&w, Qt::Key_1, Qt::AltModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 0);
+    QTest::keyClick(&w, Qt::Key_4, Qt::AltModifier);   // no such tab: disabled, nothing happens
+    QCoreApplication::processEvents();
+    QCOMPARE(tabWidget->currentIndex(), 0);
+
+    // Next / Previous Tab carry the fixed alternates Ctrl+PgDown / Ctrl+PgUp.
+    QCOMPARE(action(w, "actionNextTab")->shortcuts(), (QList<QKeySequence>{seq("Ctrl+Tab"), seq("Ctrl+PgDown")}));
+    QCOMPARE(action(w, "actionPreviousTab")->shortcuts(),
+             (QList<QKeySequence>{seq("Ctrl+Shift+Tab"), seq("Ctrl+PgUp")}));
+    QTest::keyClick(&w, Qt::Key_PageDown, Qt::ControlModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 1);
+    QTest::keyClick(&w, Qt::Key_PageUp, Qt::ControlModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 0);
+    QTest::keyClick(&w, Qt::Key_PageUp, Qt::ControlModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 2);
+
+    // From a connected, focused terminal the same keys pass through and nothing is sent.
+    tabWidget->setCurrentIndex(1);
+    QVERIFY(connectCurrent(w, kLoopback));
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+    QSignalSpy sent(session->transport(), &Transport::dataSent);
+    QTest::keyClick(session->terminal(), Qt::Key_3, Qt::AltModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 2);
+    tabWidget->setCurrentIndex(1);
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+    QTest::keyClick(session->terminal(), Qt::Key_PageDown, Qt::ControlModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 2);
+    QCOMPARE(sent.count(), qsizetype(0));
+    tabWidget->setCurrentIndex(1);
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!session->isConnected(), kSimTimeoutMs);
+}
+
+void Tst_mainwindow::windowMenuListsSessions()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    auto* menu = child<QMenu>(&w, "menuWindow");
+    QVERIFY(menu);
+
+    // Fixed part: Next, Previous, separator, Tab 1..9, separator.
+    const QList<QAction*> fixed = menu->actions();
+    QVERIFY(fixed.size() >= 13);
+    QCOMPARE(fixed.at(0), action(w, "actionNextTab"));
+    QCOMPARE(fixed.at(1), action(w, "actionPreviousTab"));
+    QVERIFY(fixed.at(2)->isSeparator());
+    for (int i = 0; i < 9; ++i) {
+        QCOMPARE(fixed.at(3 + i), action(w, qPrintable(QStringLiteral("actionSelectTab%1").arg(i + 1))));
+    }
+    QVERIFY(fixed.at(12)->isSeparator());
+
+    // One entry per session, the current one checked.
+    QList<QAction*> entries = sessionEntries(menu);
+    QCOMPARE(entries.size(), qsizetype(1));
+    QCOMPARE(entries.at(0)->text(), kNewSessionTitle);
+    QVERIFY(entries.at(0)->isCheckable());
+    QVERIFY(entries.at(0)->isChecked());
+    QVERIFY(entries.at(0)->objectName().isEmpty());   // not configurable
+
+    w.newSession(kLoopback);
+    w.newSession(kMcu);
+    QTabWidget* tabWidget = tabs(w);
+    entries = sessionEntries(menu);
+    QCOMPARE(entries.size(), qsizetype(3));
+    QCOMPARE(entries.at(0)->text(), kNewSessionTitle);
+    QCOMPARE(entries.at(1)->text(), kLoopback);
+    QCOMPARE(entries.at(2)->text(), kMcu);
+    QVERIFY(!entries.at(0)->isChecked());
+    QVERIFY(!entries.at(1)->isChecked());
+    QVERIFY(entries.at(2)->isChecked());
+
+    // Triggering selects the tab; the check mark follows the current tab.
+    entries.at(0)->trigger();
+    QCOMPARE(tabWidget->currentIndex(), 0);
+    entries = sessionEntries(menu);
+    QVERIFY(entries.at(0)->isChecked());
+    QVERIFY(!entries.at(2)->isChecked());
+    tabWidget->setCurrentIndex(1);
+    entries = sessionEntries(menu);
+    QVERIFY(entries.at(1)->isChecked());
+    QVERIFY(!entries.at(0)->isChecked());
+
+    // Rename (a port selected on the first tab) and reorder (drag) rebuild the list.
+    const QString linuxPort = QStringLiteral("SIM:linux");
+    w.sessionAt(0)->setPortName(linuxPort);
+    entries = sessionEntries(menu);
+    QCOMPARE(entries.at(0)->text(), linuxPort);
+    tabWidget->tabBar()->moveTab(0, 2);
+    entries = sessionEntries(menu);
+    QCOMPARE(entries.size(), qsizetype(3));
+    QCOMPARE(entries.at(0)->text(), kLoopback);
+    QCOMPARE(entries.at(1)->text(), kMcu);
+    QCOMPARE(entries.at(2)->text(), linuxPort);
+    QCOMPARE(tabWidget->currentIndex(), 0);   // the current widget (loopback) moved to the front
+    QVERIFY(entries.at(0)->isChecked());
+
+    // Closing a tab removes its entry.
+    w.closeSession(1);
+    entries = sessionEntries(menu);
+    QCOMPARE(entries.size(), qsizetype(2));
+    QCOMPARE(entries.at(0)->text(), kLoopback);
+    QCOMPARE(entries.at(1)->text(), linuxPort);
+}
+
+void Tst_mainwindow::middleClickClosesTab()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession(kMcu);
+    QCOMPARE(w.sessionCount(), 2);
+    QTabBar* bar = tabs(w)->tabBar();
+    QVERIFY(bar);
+
+    QTest::mouseClick(bar, Qt::MiddleButton, Qt::NoModifier, bar->tabRect(1).center());
+    QTRY_COMPARE(w.sessionCount(), 1);
+    QCOMPARE(tabs(w)->tabText(0), kNewSessionTitle);
+
+    // A press on one tab released elsewhere closes nothing; a left click only selects.
+    w.newSession(kMcu);
+    QCOMPARE(w.sessionCount(), 2);
+    QTest::mousePress(bar, Qt::MiddleButton, Qt::NoModifier, bar->tabRect(0).center());
+    QTest::mouseRelease(bar, Qt::MiddleButton, Qt::NoModifier, QPoint(-20, -20));
+    QCoreApplication::processEvents();
+    QCOMPARE(w.sessionCount(), 2);
+    QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->tabRect(0).center());
+    QTRY_COMPARE(tabs(w)->currentIndex(), 0);
+    QCOMPARE(w.sessionCount(), 2);
+
+    // A connected tab asks first (the close button's confirmation): No keeps it, Yes closes it.
+    tabs(w)->setCurrentIndex(1);
+    QVERIFY(connectCurrent(w, kLoopback));
+    QVERIFY(AppSettings::instance().confirmCloseWhenConnected());
+    {
+        ModalDismisser no(ModalDismisser::Answer::No);
+        QTest::mouseClick(bar, Qt::MiddleButton, Qt::NoModifier, bar->tabRect(1).center());
+        no.stop();
+        QCOMPARE(no.count(), 1);
+        QCOMPARE(no.classNames().first(), QStringLiteral("QMessageBox"));
+        QCOMPARE(w.sessionCount(), 2);
+        QVERIFY(w.sessionAt(1)->isConnected());
+    }
+    {
+        ModalDismisser yes(ModalDismisser::Answer::Yes);
+        QTest::mouseClick(bar, Qt::MiddleButton, Qt::NoModifier, bar->tabRect(1).center());
+        yes.stop();
+        QCOMPARE(yes.count(), 1);
+        QTRY_COMPARE(w.sessionCount(), 1);
+    }
+}
+
+void Tst_mainwindow::detectBaudRateAction()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QAction* detect = action(w, "actionDetectBaudRate");
+    QVERIFY(detect);
+    QCOMPARE(detect->shortcut(), seq("Ctrl+Shift+B"));
+    QVERIFY(!detect->text().isEmpty());
+    // Session menu: right after Sync Terminal Size.
+    const QList<QAction*> session = child<QMenu>(&w, "menuSession")->actions();
+    const qsizetype sync = session.indexOf(action(w, "actionSyncTerminalSize"));
+    QVERIFY(sync >= 0);
+    QCOMPARE(session.at(sync + 1), detect);
+
+    QVERIFY(!detect->isEnabled());   // disconnected serial tab
+    QVERIFY(connectCurrent(w, kLoopback));
+    QVERIFY(detect->isEnabled());
+    SessionWidget* current = w.currentSession();
+    detect->trigger();   // must not crash, whatever the detector does on a loopback
+    QCoreApplication::processEvents();
+    QVERIFY(current->isConnected());
+    QCOMPARE(w.currentSession(), current);
+
+    // The shortcut is reserved: from the focused terminal it reaches the action, not the device.
+    current->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(current->terminal()));
+    QVERIFY(current->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+B")));
+    QSignalSpy triggered(detect, &QAction::triggered);
+    QSignalSpy sent(current->transport(), &Transport::dataSent);
+    QTest::keyClick(current->terminal(), Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier);
+    QCoreApplication::processEvents();
+    QCOMPARE(triggered.count(), qsizetype(1));
+    QCOMPARE(sent.count(), qsizetype(0));
+    QVERIFY(current->isConnected());
+
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!current->isConnected(), kSimTimeoutMs);
+    QVERIFY(!detect->isEnabled());
+
+    // Never on an SSH tab.
+    w.newSshSession(QStringLiteral("root@10.0.0.24"));
+    QVERIFY(w.currentSession()->isSsh());
+    QVERIFY(!detect->isEnabled());
+}
+
+void Tst_mainwindow::shortcutEntriesContract()
+{
+    MainWindow w;
+    const QList<ShortcutEntry> entries = w.shortcutEntries();
+    QVERIFY(entries.size() >= static_cast<qsizetype>(std::size(kActions)) - 2);   // minus the language actions
+
+    QSet<QString> names;
+    QHash<QString, qsizetype> position;
+    for (const ShortcutEntry& entry : entries) {
+        QVERIFY2(!entry.objectName.isEmpty(), qPrintable(entry.title));
+        QVERIFY2(!entry.title.isEmpty(), qPrintable(entry.objectName));
+        QVERIFY2(!names.contains(entry.objectName), qPrintable(entry.objectName));
+        QVERIFY2(!entry.objectName.startsWith(QLatin1String("actionLanguage")), qPrintable(entry.objectName));
+        QVERIFY2(entry.title.contains(QLatin1String(" > ")), qPrintable(entry.title));
+        QVERIFY2(!entry.title.contains(QLatin1Char('&')), qPrintable(entry.title));
+        QVERIFY2(!entry.title.endsWith(QLatin1String("...")), qPrintable(entry.title));
+        position.insert(entry.objectName, names.size());
+        names.insert(entry.objectName);
+    }
+    const auto find = [&entries](const char* name) -> const ShortcutEntry* {
+        for (const ShortcutEntry& entry : entries) {
+            if (entry.objectName == QLatin1String(name)) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    };
+    struct Expected
+    {
+        const char* name;
+        const char* title;
+        const char* sequence;
+    };
+    const Expected expected[] = {{"actionNewSession", "File > New Session", "Ctrl+T"},
+                                 {"actionNewSshSession", "File > New SSH Session", "Ctrl+Shift+T"},
+                                 {"actionCloseSession", "File > Close Session", "Ctrl+Shift+W"},
+                                 {"actionConnect", "Session > Connect", "F2"},
+                                 {"actionDetectBaudRate", "Session > Detect Baud Rate", "Ctrl+Shift+B"},
+                                 {"actionResetTerminal", "Session > Reset Terminal", ""},
+                                 {"actionPreferences", "Edit > Preferences", "Ctrl+,"},
+                                 {"actionHexView", "View > Hex View", "Ctrl+Shift+H"},
+                                 {"actionNextTab", "Window > Next Tab", "Ctrl+Tab"},
+                                 {"actionSelectTab1", "Window > Tab 1", "Alt+1"},
+                                 {"actionSelectTab9", "Window > Tab 9", "Alt+9"},
+                                 {"actionAbout", "Help > About BuildAI Serial Utility", ""}};
+    for (const Expected& e : expected) {
+        const ShortcutEntry* entry = find(e.name);
+        QVERIFY2(entry != nullptr, e.name);
+        QCOMPARE(entry->title, QString::fromLatin1(e.title));
+        QCOMPARE(entry->defaultSequence, seq(e.sequence));
+    }
+    // Every action of the contract table is listed with its .ui default, except the language ones.
+    for (const ActionSpec& spec : kActions) {
+        const ShortcutEntry* entry = find(spec.name);
+        if (QLatin1String(spec.name).startsWith(QLatin1String("actionLanguage"))) {
+            QVERIFY2(entry == nullptr, spec.name);
+            continue;
+        }
+        QVERIFY2(entry != nullptr, spec.name);
+        QCOMPARE(entry->defaultSequence, seq(spec.shortcut));
+    }
+    // Menu order.
+    QVERIFY(position.value(QStringLiteral("actionNewSession")) < position.value(QStringLiteral("actionConnect")));
+    QVERIFY(position.value(QStringLiteral("actionConnect")) < position.value(QStringLiteral("actionCopy")));
+    QVERIFY(position.value(QStringLiteral("actionCopy")) < position.value(QStringLiteral("actionHexView")));
+    QVERIFY(position.value(QStringLiteral("actionHexView")) < position.value(QStringLiteral("actionNextTab")));
+    QVERIFY(position.value(QStringLiteral("actionNextTab")) < position.value(QStringLiteral("actionAbout")));
+    // The per-session Window entries are not listed.
+    w.newSession(kLoopback);
+    QCOMPARE(w.shortcutEntries().size(), entries.size());
+
+    // The fixed shortcuts the Preferences page checks conflicts against: the tab alternates,
+    // owned by their actions, and the menu bar's mnemonics, owned by nobody configurable.
+    const QList<ShortcutEntry> fixed = w.fixedShortcutEntries();
+    const auto fixedFor = [&fixed](const char* sequence) -> const ShortcutEntry* {
+        for (const ShortcutEntry& entry : fixed) {
+            if (entry.defaultSequence == seq(sequence)) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    };
+    struct ExpectedFixed
+    {
+        const char* sequence;
+        const char* name;
+        const char* title;
+    };
+    const ExpectedFixed expectedFixed[] = {{"Ctrl+PgDown", "actionNextTab", "Window > Next Tab"},
+                                           {"Ctrl+PgUp", "actionPreviousTab", "Window > Previous Tab"},
+                                           {"Alt+F", "", "File menu"},
+                                           {"Alt+S", "", "Session menu"},
+                                           {"Alt+E", "", "Edit menu"},
+                                           {"Alt+V", "", "View menu"},
+                                           {"Alt+W", "", "Window menu"},
+                                           {"Alt+L", "", "Language menu"},
+                                           {"Alt+H", "", "Help menu"}};
+    QCOMPARE(fixed.size(), static_cast<qsizetype>(std::size(expectedFixed)));
+    for (const ExpectedFixed& e : expectedFixed) {
+        const ShortcutEntry* entry = fixedFor(e.sequence);
+        QVERIFY2(entry != nullptr, e.sequence);
+        QCOMPARE(entry->objectName, QString::fromLatin1(e.name));
+        QCOMPARE(entry->title, QString::fromLatin1(e.title));
+    }
+
+    // The default stays the .ui value even when an override is stored.
+    AppSettings::instance().setShortcut(QStringLiteral("actionNewSession"), seq("Ctrl+Shift+N"));
+    MainWindow second;
+    const QList<ShortcutEntry> again = second.shortcutEntries();
+    for (const ShortcutEntry& entry : again) {
+        if (entry.objectName == QLatin1String("actionNewSession")) {
+            QCOMPARE(entry.defaultSequence, seq("Ctrl+T"));
+        }
+    }
+    QCOMPARE(action(second, "actionNewSession")->shortcut(), seq("Ctrl+Shift+N"));
+}
+
+void Tst_mainwindow::storedShortcutAppliedAndLive()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.setShortcut(QStringLiteral("actionCloseSession"), seq("Ctrl+Shift+X"));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    QAction* close = action(w, "actionCloseSession");
+    QCOMPARE(close->shortcut(), seq("Ctrl+Shift+X"));   // applied at construction
+
+    // Live: a change while the window exists is applied at once, tooltip included.
+    settings.setShortcut(QStringLiteral("actionNewSession"), seq("Ctrl+Shift+N"));
+    QAction* newSession = action(w, "actionNewSession");
+    QCOMPARE(newSession->shortcut(), seq("Ctrl+Shift+N"));
+    QWidget* plus = tabs(w)->cornerWidget(Qt::TopRightCorner);
+    QVERIFY(plus);
+    QVERIFY2(plus->toolTip().contains(seq("Ctrl+Shift+N").toString(QKeySequence::NativeText)), qPrintable(plus->toolTip()));
+
+    // It works from a connected terminal: Ctrl+Shift+N opens a tab, Ctrl+T is now the device's.
+    QVERIFY(connectCurrent(w, kLoopback));
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+    QSignalSpy sent(session->transport(), &Transport::dataSent);
+    QTest::keyClick(session->terminal(), Qt::Key_T, Qt::ControlModifier);
+    QTRY_COMPARE(spyBytes(sent), QByteArray(1, '\x14'));
+    QCOMPARE(w.sessionCount(), 1);
+    QTest::keyClick(session->terminal(), Qt::Key_N, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(w.sessionCount(), 2);
+    QCOMPARE(spyBytes(sent), QByteArray(1, '\x14'));
+
+    // Clearing the override restores the default.
+    settings.clearShortcut(QStringLiteral("actionNewSession"));
+    QCOMPARE(newSession->shortcut(), seq("Ctrl+T"));
+    QVERIFY(plus->toolTip().contains(seq("Ctrl+T").toString(QKeySequence::NativeText)));
+
+    // An empty stored sequence means "no shortcut"; the fixed alternate stays and is never doubled.
+    QAction* next = action(w, "actionNextTab");
+    settings.setShortcut(QStringLiteral("actionNextTab"), QKeySequence());
+    QCOMPARE(next->shortcuts(), (QList<QKeySequence>{seq("Ctrl+PgDown")}));
+    settings.setShortcut(QStringLiteral("actionNextTab"), seq("Ctrl+PgDown"));
+    QCOMPARE(next->shortcuts(), (QList<QKeySequence>{seq("Ctrl+PgDown")}));
+    settings.setShortcut(QStringLiteral("actionNextTab"), seq("F6"));
+    QCOMPARE(next->shortcuts(), (QList<QKeySequence>{seq("F6"), seq("Ctrl+PgDown")}));
+    settings.clearShortcut(QStringLiteral("actionNextTab"));
+    QCOMPARE(next->shortcuts(), (QList<QKeySequence>{seq("Ctrl+Tab"), seq("Ctrl+PgDown")}));
+
+    // A language switch (retranslateUi re-sets the .ui shortcuts) keeps the configured one.
+    action(w, "actionLanguageChinese")->trigger();
+    QCoreApplication::processEvents();
+    QTRY_COMPARE(close->shortcut(), seq("Ctrl+Shift+X"));
+    QCOMPARE(next->shortcuts(), (QList<QKeySequence>{seq("Ctrl+Tab"), seq("Ctrl+PgDown")}));
+    action(w, "actionLanguageEnglish")->trigger();
+    QCoreApplication::processEvents();
+    QTRY_COMPARE(close->shortcut(), seq("Ctrl+Shift+X"));
+
+    tabs(w)->setCurrentIndex(0);
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!session->isConnected(), kSimTimeoutMs);
+}
+
+void Tst_mainwindow::reservedShortcutsPushedToTerminals()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession(kMcu);
+    QCOMPARE(w.sessionCount(), 2);
+
+    const QList<QKeySequence> expected = {seq("Ctrl+T"),  seq("Ctrl+Shift+T"), seq("Ctrl+Shift+W"), seq("F2"),
+                                          seq("F3"),      seq("F5"),           seq("Ctrl+Tab"),     seq("Ctrl+PgDown"),
+                                          seq("Ctrl+Shift+Tab"), seq("Ctrl+PgUp"), seq("Alt+1"),   seq("Alt+9"),
+                                          seq("Ctrl+Shift+B"), seq("Ctrl+,"),  seq("Ctrl+Shift+H"), seq("Ctrl++")};
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        const QList<QKeySequence> reserved = w.sessionAt(i)->terminal()->reservedShortcuts();
+        for (const QKeySequence& sequence : expected) {
+            QVERIFY2(reserved.contains(sequence), qPrintable(sequence.toString(QKeySequence::PortableText)));
+        }
+        QVERIFY(!reserved.contains(seq("Ctrl+W")));
+        QVERIFY(!reserved.contains(QKeySequence()));
+    }
+
+    // A change reaches every terminal, existing and new.
+    AppSettings::instance().setShortcut(QStringLiteral("actionFind"), seq("Ctrl+K"));
+    for (int i = 0; i < w.sessionCount(); ++i) {
+        const QList<QKeySequence> reserved = w.sessionAt(i)->terminal()->reservedShortcuts();
+        QVERIFY(reserved.contains(seq("Ctrl+K")));
+        QVERIFY(!reserved.contains(seq("Ctrl+Shift+F")));
+    }
+    SessionWidget* later = w.newSession();
+    QVERIFY(later->terminal()->reservedShortcuts().contains(seq("Ctrl+K")));
+    QVERIFY(!later->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+F")));
+
+    // End to end: on a connected terminal Ctrl+K now opens Find instead of sending 0x0B, and
+    // Ctrl+Shift+F, no longer an application shortcut, comes back as the control byte 0x06.
+    tabs(w)->setCurrentIndex(0);
+    QVERIFY(connectCurrent(w, kLoopback));
+    SessionWidget* session = w.currentSession();
+    session->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(session->terminal()));
+    QSignalSpy sent(session->transport(), &Transport::dataSent);
+    {
+        ModalDismisser dismisser(ModalDismisser::Answer::Reject);
+        QTest::keyClick(session->terminal(), Qt::Key_K, Qt::ControlModifier);
+        dismisser.stop();
+        QCOMPARE(dismisser.count(), 1);
+        QCOMPARE(dismisser.classNames().first(), QStringLiteral("QInputDialog"));
+    }
+    QCOMPARE(sent.count(), qsizetype(0));
+    QTest::keyClick(session->terminal(), Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(spyBytes(sent), QByteArray(1, '\x06'));
+
+    AppSettings::instance().clearShortcut(QStringLiteral("actionFind"));
+    QVERIFY(!session->terminal()->reservedShortcuts().contains(seq("Ctrl+K")));
+    QVERIFY(session->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+F")));
+    QTest::keyClick(session->terminal(), Qt::Key_K, Qt::ControlModifier);
+    QTRY_COMPARE(spyBytes(sent), QByteArray("\x06\x0b"));
+
+    action(w, "actionDisconnect")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!session->isConnected(), kSimTimeoutMs);
+}
+
+void Tst_mainwindow::sshTabKeyboardEndToEnd()
+{
+    // The v0.4 keyboard rules on a real SSH tab against the in-process server (cross-package:
+    // keyboard + ssh-core + test server): Ctrl+W typed into the connected terminal reaches the
+    // server's shell as 0x17 and the tab stays open, Alt+1 / Alt+2 switch tabs from the focused
+    // terminal without sending a byte, Detect Baud Rate is never enabled for SSH, and
+    // Ctrl+Shift+W closes the tab with the usual question.
+    TestSshServer::Options options;
+    options.user = kSshUser;
+    options.password = kSshPassword;
+    options.rootDir = tempPath(QStringLiteral("ssh-root"));
+    QVERIFY(QDir().mkpath(options.rootDir));
+    TestSshServer server(options);
+    QString error;
+    QVERIFY2(server.start(&error), qPrintable(error));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    // A stored profile whose known_hosts already holds the server's key and whose password is
+    // in SecretStore: the connect needs no dialog (tst_sshsession drives the dialogs).
+    auto* store = w.findChild<SshProfileStore*>();
+    QVERIFY(store);
+    SshProfile p;
+    p.name = QStringLiteral("Keyboard box");
+    p.host = QStringLiteral("127.0.0.1");
+    p.port = server.port();
+    p.user = kSshUser;
+    p.auth = SshProfile::Auth::Password;   // never the developer's ~/.ssh/id_* keys
+    p.passwordSaved = true;
+    p.connectTimeoutSeconds = 5;
+    p.knownHostsFile = tempPath(QStringLiteral("ssh-known_hosts"));
+    QVERIFY(writeFile(p.knownHostsFile, (server.knownHostsLine() + QLatin1Char('\n')).toUtf8()));
+    AppSettings::instance().setSshKnownHostsFile(p.knownHostsFile);   // never the user's ~/.ssh
+    const SshProfile stored = store->upsert(p);
+    QVERIFY(!stored.id.isEmpty());
+    QVERIFY(SecretStore::store(QStringLiteral("ssh/%1/password").arg(stored.id), kSshPassword));
+
+    SessionWidget* ssh = w.newSshSession(QStringLiteral("ssh:profile:") + stored.id);
+    QVERIFY(ssh && ssh->isSsh());
+    QCOMPARE(w.sessionCount(), 2);
+    QTabWidget* tabWidget = tabs(w);
+    QCOMPARE(tabWidget->currentIndex(), 1);
+    QAction* detect = action(w, "actionDetectBaudRate");
+    QVERIFY(!detect->isEnabled());
+    ModalDismisser dismisser(ModalDismisser::Answer::Yes);   // only the close question at the end is expected
+    action(w, "actionConnect")->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), Transport::State::Connected, kSshTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(lastNonBlankLine(ssh->terminal()), QStringLiteral("$"), kSshTimeoutMs);
+    QCOMPARE(dismisser.count(), 0);
+    QVERIFY(!detect->isEnabled());   // connected, but SSH
+    QVERIFY(action(w, "actionDisconnect")->isEnabled());
+    QVERIFY(!action(w, "actionSendBreak")->isEnabled());
+
+    ssh->focusTerminal();
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(ssh->terminal()));
+    QVERIFY(!ssh->terminal()->reservedShortcuts().contains(seq("Ctrl+W")));
+    QVERIFY(ssh->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+W")));
+    QVERIFY(ssh->terminal()->reservedShortcuts().contains(seq("Alt+1")));
+    QVERIFY(ssh->terminal()->reservedShortcuts().contains(seq("Ctrl+Shift+B")));
+
+    // Ctrl+W: the shell's "delete word" byte reaches the server; nothing closes.
+    const QByteArray before = server.receivedShellInput();
+    QTest::keyClick(ssh->terminal(), Qt::Key_W, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(server.receivedShellInput(), before + QByteArray(1, '\x17'), kSshTimeoutMs);
+    QCOMPARE(w.sessionCount(), 2);
+    QVERIFY(ssh->isConnected());
+    QCOMPARE(w.currentSession(), ssh);
+    QCOMPARE(dismisser.count(), 0);
+
+    // Alt+1 from the SSH terminal selects the serial tab and sends nothing; Alt+2 from there
+    // comes back to the SSH tab (Alt+<anything> always belongs to the application).
+    QTest::keyClick(ssh->terminal(), Qt::Key_1, Qt::AltModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 0);
+    QVERIFY(!w.currentSession()->isSsh());
+    QVERIFY(!detect->isEnabled());   // a disconnected serial tab
+    QTest::keyClick(&w, Qt::Key_2, Qt::AltModifier);
+    QTRY_COMPARE(tabWidget->currentIndex(), 1);
+    QCOMPARE(w.currentSession(), ssh);
+    QVERIFY(!detect->isEnabled());
+    QTest::qWait(200);   // a byte sent by mistake would have arrived by now
+    QCOMPARE(server.receivedShellInput(), before + QByteArray(1, '\x17'));
+
+    // Ctrl+Shift+B is reserved (the action is disabled here): nothing goes to the shell.
+    QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget*>(ssh->terminal()));
+    QTest::keyClick(ssh->terminal(), Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier);
+    QTest::qWait(200);
+    QCOMPARE(server.receivedShellInput(), before + QByteArray(1, '\x17'));
+
+    // Ctrl+Shift+W: Close Session asks (a connected tab) and closes it; the server sees the
+    // client go and the serial tab is what remains.
+    QTest::keyClick(ssh->terminal(), Qt::Key_W, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(w.sessionCount(), 1);
+    QVERIFY(!w.currentSession()->isSsh());
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kSshTimeoutMs);
+    dismisser.stop();
+    QCOMPARE(dismisser.count(), 1);
+    QCOMPARE(dismisser.classNames().first(), QStringLiteral("QMessageBox"));
+    QCOMPARE(server.receivedShellInput(), before + QByteArray(1, '\x17'));
+    QCOMPARE(server.connectionCount(), 1);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);   // the closed tab, before the server stops
+    server.stop();
+}
+
+void Tst_mainwindow::menuMnemonicsUnique()
+{
+    // Every '&' accelerator is unique within its menu, and so are the menu bar's own: an
+    // ambiguous one only moves the highlight in an open Qt menu instead of activating the entry
+    // (found by the real-window smoke of v0.4: Disconnect / Download File both on D, Send Break /
+    // Detect Baud Rate both on B).
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    w.newSession(kLoopback);   // a dynamic Window-menu entry with a real title in the list too
+    QStringList problems;
+    const auto check = [&problems](const QString& menuName, const QList<QAction*>& actions) {
+        QHash<QChar, QString> seen;
+        for (const QAction* a : actions) {
+            if (a->isSeparator()) {
+                continue;
+            }
+            const QChar m = mnemonicOf(a->text());
+            if (m.isNull()) {
+                continue;
+            }
+            if (seen.contains(m)) {
+                problems.append(QStringLiteral("%1: '%2' and '%3' both use %4").arg(menuName, seen.value(m), a->text(), m));
+            } else {
+                seen.insert(m, a->text());
+            }
+        }
+    };
+    const QList<QAction*> menus = w.menuBar()->actions();
+    check(QStringLiteral("menu bar"), menus);
+    int checked = 0;
+    for (const QAction* top : menus) {
+        if (QMenu* menu = top->menu()) {
+            check(menu->title(), menu->actions());
+            ++checked;
+        }
+    }
+    QCOMPARE(checked, 7);   // File, Session, Edit, View, Window, Language, Help
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral("; "))));
+    // The two v0.4 fixes stay in place.
+    QCOMPARE(mnemonicOf(action(w, "actionDownloadFile")->text()), QChar(QLatin1Char('w')));
+    QCOMPARE(mnemonicOf(action(w, "actionDetectBaudRate")->text()), QChar(QLatin1Char('t')));
+    QCOMPARE(mnemonicOf(action(w, "actionDisconnect")->text()), QChar(QLatin1Char('d')));
+    QCOMPARE(mnemonicOf(action(w, "actionSendBreak")->text()), QChar(QLatin1Char('b')));
+    // The per-session entries carry no accelerator: their '&' is doubled.
+    const QList<QAction*> entries = sessionEntries(child<QMenu>(&w, "menuWindow"));
+    QCOMPARE(entries.size(), 2);
+    for (const QAction* entry : entries) {
+        QVERIFY2(mnemonicOf(entry->text()).isNull(), qPrintable(entry->text()));
+    }
 }
 
 // =======================================================================================

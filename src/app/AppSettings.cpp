@@ -43,6 +43,10 @@ constexpr auto kRestoreLastPorts = "session/restoreLastPorts";
 constexpr auto kLastOpenPorts = "session/lastOpenPorts";
 constexpr auto kWindowGeometry = "window/geometry";
 constexpr auto kWindowState = "window/state";
+constexpr auto kShortcutsGroup = "shortcuts";
+constexpr auto kAutoBaudCandidates = "connection/autoBaudCandidates";
+constexpr auto kAutoBaudSampleMs = "connection/autoBaudSampleMs";
+constexpr auto kAutoBaudWatchdog = "connection/autoBaudWatchdog";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -54,6 +58,9 @@ constexpr int kMinSshKeepAlive = 0;
 constexpr int kMaxSshKeepAlive = 600;
 constexpr int kDefaultSshKeepAlive = 30;
 const QLatin1String kDefaultSshTerminalType("xterm-256color");
+constexpr int kMinAutoBaudSampleMs = 300;
+constexpr int kMaxAutoBaudSampleMs = 10000;
+constexpr int kDefaultAutoBaudSampleMs = 1500;
 
 QVariant readValue(const char* key, const QVariant& fallback = QVariant())
 {
@@ -483,8 +490,6 @@ void AppSettings::setMainWindowState(const QByteArray& state)
     SU_WRITE_SETTING(kWindowState, state);
 }
 
-#undef SU_WRITE_SETTING
-
 QString AppSettings::dataDirectory()
 {
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
@@ -508,3 +513,111 @@ void AppSettings::sync()
         qCWarning(lcApp) << "settings sync failed with status" << static_cast<int>(settings.status());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+
+QKeySequence AppSettings::shortcut(const QString& actionName, const QKeySequence& fallback) const
+{
+    QSettings settings;
+    const QString key = QLatin1String(kShortcutsGroup) + QLatin1Char('/') + actionName;
+    if (!settings.contains(key)) {
+        return fallback;
+    }
+    return QKeySequence::fromString(settings.value(key).toString(), QKeySequence::PortableText);
+}
+
+void AppSettings::setShortcut(const QString& actionName, const QKeySequence& sequence)
+{
+    if (actionName.trimmed().isEmpty()) {
+        return;
+    }
+    const QString key = QLatin1String(kShortcutsGroup) + QLatin1Char('/') + actionName;
+    {
+        QSettings settings;
+        settings.setValue(key, sequence.toString(QKeySequence::PortableText));
+    }
+    emit changed(key);
+}
+
+void AppSettings::clearShortcut(const QString& actionName)
+{
+    const QString key = QLatin1String(kShortcutsGroup) + QLatin1Char('/') + actionName;
+    {
+        QSettings settings;
+        if (!settings.contains(key)) {
+            return;
+        }
+        settings.remove(key);
+    }
+    emit changed(key);
+}
+
+QStringList AppSettings::customizedShortcutActions() const
+{
+    QSettings settings;
+    settings.beginGroup(QLatin1String(kShortcutsGroup));
+    QStringList names = settings.childKeys();
+    settings.endGroup();
+    names.sort();
+    return names;
+}
+
+// ---------------------------------------------------------------------------
+// Automatic baud-rate detection
+// ---------------------------------------------------------------------------
+
+QList<qint32> AppSettings::defaultAutoBaudCandidates()
+{
+    return {115200, 1500000, 921600, 460800, 230400, 57600, 38400, 19200, 9600};
+}
+
+QList<qint32> AppSettings::autoBaudCandidates() const
+{
+    QList<qint32> result;
+    const QStringList parts = readValue(kAutoBaudCandidates).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        bool ok = false;
+        const qint32 baud = part.trimmed().toInt(&ok);
+        if (ok && SerialSettings::isValidBaudRate(baud) && !result.contains(baud)) {
+            result.append(baud);
+        }
+    }
+    return result.isEmpty() ? defaultAutoBaudCandidates() : result;
+}
+
+void AppSettings::setAutoBaudCandidates(const QList<qint32>& candidates)
+{
+    QStringList parts;
+    for (qint32 baud : candidates) {
+        if (SerialSettings::isValidBaudRate(baud) && !parts.contains(QString::number(baud))) {
+            parts.append(QString::number(baud));
+        }
+    }
+    SU_WRITE_SETTING(kAutoBaudCandidates, parts.join(QLatin1Char(',')));
+}
+
+int AppSettings::autoBaudSampleMs() const
+{
+    bool ok = false;
+    const int ms = readValue(kAutoBaudSampleMs, kDefaultAutoBaudSampleMs).toInt(&ok);
+    return qBound(kMinAutoBaudSampleMs, ok ? ms : kDefaultAutoBaudSampleMs, kMaxAutoBaudSampleMs);
+}
+
+void AppSettings::setAutoBaudSampleMs(int ms)
+{
+    SU_WRITE_SETTING(kAutoBaudSampleMs, qBound(kMinAutoBaudSampleMs, ms, kMaxAutoBaudSampleMs));
+}
+
+bool AppSettings::autoBaudWatchdog() const
+{
+    return readValue(kAutoBaudWatchdog, true).toBool();
+}
+
+void AppSettings::setAutoBaudWatchdog(bool on)
+{
+    SU_WRITE_SETTING(kAutoBaudWatchdog, on);
+}
+
+#undef SU_WRITE_SETTING

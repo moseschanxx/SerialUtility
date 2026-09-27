@@ -59,7 +59,7 @@
     <name>AuthPromptDialog</name>
     <message>
         <location filename="../src/dialogs/AuthPromptDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+27"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+28"/>
         <location line="+2"/>
         <source>Authentication</source>
         <translation>Authentication</translation>
@@ -77,17 +77,19 @@
     </message>
     <message>
         <location line="+3"/>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+64"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+92"/>
         <source>Show</source>
         <translation>Show</translation>
     </message>
     <message>
         <location line="+15"/>
-        <source>Remember in this profile</source>
-        <translation>Remember in this profile</translation>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-65"/>
+        <location line="+12"/>
+        <source>Remember password</source>
+        <translation>Remember password</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-77"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-52"/>
         <source>Password</source>
         <translation>Password</translation>
     </message>
@@ -113,7 +115,32 @@
         <translation>Response:</translation>
     </message>
     <message>
-        <location line="+37"/>
+        <location line="+20"/>
+        <source>Remember password for %1</source>
+        <translation>Remember password for %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Remember passphrase</source>
+        <translation>Remember passphrase</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember passphrase for %1</source>
+        <translation>Remember passphrase for %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Remember answer</source>
+        <translation>Remember answer</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember answer for %1</source>
+        <translation>Remember answer for %1</translation>
+    </message>
+    <message>
+        <location line="+36"/>
         <source>Authentication failed, try again (attempt %1 of %2)</source>
         <translation>Authentication failed, try again (attempt %1 of %2)</translation>
     </message>
@@ -195,12 +222,12 @@
 <context>
     <name>ConnectionBar</name>
     <message>
-        <location filename="../src/ui/ConnectionBar.cpp" line="+54"/>
+        <location filename="../src/ui/ConnectionBar.cpp" line="+89"/>
         <source>unavailable</source>
         <translation>unavailable</translation>
     </message>
     <message>
-        <location line="+194"/>
+        <location line="+205"/>
         <source>Port:</source>
         <translation>Port:</translation>
     </message>
@@ -230,12 +257,13 @@
         <translation>Refresh the port list</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Baud rate (type a custom value and press Enter)</source>
-        <translation>Baud rate (type a custom value and press Enter)</translation>
+        <location line="+5"/>
+        <location line="+4"/>
+        <source>Auto</source>
+        <translation>Auto</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Data bits</source>
         <translation>Data bits</translation>
     </message>
@@ -300,7 +328,27 @@
         <translation>Send BREAK (250 ms)</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+105"/>
+        <source>Auto (%1)</source>
+        <translation>Auto (%1)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Detect the baud rate automatically</source>
+        <translation>Detect the baud rate automatically</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The baud rate is detected automatically; this is the current one</source>
+        <translation>The baud rate is detected automatically; this is the current one</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Baud rate (type a custom value and press Enter, or choose Auto)</source>
+        <translation>Baud rate (type a custom value and press Enter, or choose Auto)</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>%1 is not currently available</source>
         <translation>%1 is not currently available</translation>
     </message>
@@ -348,24 +396,24 @@
 <context>
     <name>DeviceSimulator</name>
     <message>
-        <location filename="../src/core/DeviceSimulator.cpp" line="+620"/>
-        <source>Simulated loopback (echoes every byte)</source>
-        <translation>Simulated loopback (echoes every byte)</translation>
+        <location filename="../src/core/DeviceSimulator.cpp" line="+644"/>
+        <source>Simulated loopback (echoes every byte, any baud rate)</source>
+        <translation>Simulated loopback (echoes every byte, any baud rate)</translation>
     </message>
     <message>
         <location line="+2"/>
-        <source>Simulated Rockchip Linux console</source>
-        <translation>Simulated Rockchip Linux console</translation>
+        <source>Simulated Rockchip Linux console (%1 baud)</source>
+        <translation>Simulated Rockchip Linux console (%1 baud)</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Simulated U-Boot prompt (boots into Linux)</source>
-        <translation>Simulated U-Boot prompt (boots into Linux)</translation>
+        <location line="+3"/>
+        <source>Simulated U-Boot prompt, boots into Linux (%1 baud)</source>
+        <translation>Simulated U-Boot prompt, boots into Linux (%1 baud)</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Simulated MCU firmware shell</source>
-        <translation>Simulated MCU firmware shell</translation>
+        <location line="+5"/>
+        <source>Simulated MCU firmware shell (%1 baud)</source>
+        <translation>Simulated MCU firmware shell (%1 baud)</translation>
     </message>
 </context>
 <context>
@@ -611,7 +659,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>&amp;Session</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>&amp;Edit</source>
         <translation>&amp;Edit</translation>
     </message>
@@ -621,7 +669,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>&amp;View</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+34"/>
         <source>&amp;Language</source>
         <translation>&amp;Language</translation>
     </message>
@@ -631,7 +679,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>&amp;Help</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
         <source>Main Toolbar</source>
         <translation>Main Toolbar</translation>
     </message>
@@ -661,12 +709,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Close the current session tab</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+W</source>
-        <translation>Ctrl+W</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Start &amp;Logging...</source>
         <translation>Start &amp;Logging...</translation>
     </message>
@@ -761,7 +804,12 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Ctrl+Shift+O</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+22"/>
+        <source>Do&amp;wnload File from Remote...</source>
+        <translation>Do&amp;wnload File from Remote...</translation>
+    </message>
+    <message>
+        <location line="+100"/>
         <source>Ctrl+Shift+F</source>
         <translation>Ctrl+Shift+F</translation>
     </message>
@@ -771,12 +819,17 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Ctrl+Shift+H</translation>
     </message>
     <message>
-        <location line="-229"/>
+        <location line="-246"/>
         <source>&amp;Connect</source>
         <translation>&amp;Connect</translation>
     </message>
     <message>
-        <location line="-109"/>
+        <location line="-213"/>
+        <source>&amp;Window</source>
+        <translation>&amp;Window</translation>
+    </message>
+    <message>
+        <location line="+104"/>
         <source>New &amp;SSH Session...</source>
         <translation>New &amp;SSH Session...</translation>
     </message>
@@ -796,7 +849,12 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Ctrl+Shift+T</translation>
     </message>
     <message>
-        <location line="+103"/>
+        <location line="+14"/>
+        <source>Ctrl+Shift+W</source>
+        <translation>Ctrl+Shift+W</translation>
+    </message>
+    <message>
+        <location line="+89"/>
         <source>Open the selected serial port</source>
         <translation>Open the selected serial port</translation>
     </message>
@@ -866,12 +924,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Copy a local file to the SSH server (SFTP)</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <source>&amp;Download File from Remote...</source>
-        <translation>&amp;Download File from Remote...</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+11"/>
         <source>Download</source>
         <translation>Download</translation>
     </message>
@@ -899,6 +952,26 @@ Only replace the stored key if you are sure the change is expected.</translation
         <location line="+3"/>
         <source>Send &quot;stty cols/rows&quot; so the remote shell matches the window</source>
         <translation>Send &quot;stty cols/rows&quot; so the remote shell matches the window</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>De&amp;tect Baud Rate</source>
+        <translation>De&amp;tect Baud Rate</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Detect Baud Rate</source>
+        <translation>Detect Baud Rate</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Listen at the candidate baud rates until the output reads as text and apply the one that works (serial sessions)</source>
+        <translation>Listen at the candidate baud rates until the output reads as text and apply the one that works (serial sessions)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+B</source>
+        <translation>Ctrl+Shift+B</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -1096,6 +1169,141 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Ctrl+Shift+Tab</translation>
     </message>
     <message>
+        <location line="+8"/>
+        <source>Tab &amp;1</source>
+        <translation>Tab &amp;1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 1</source>
+        <translation>Switch to session tab 1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+1</source>
+        <translation>Alt+1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;2</source>
+        <translation>Tab &amp;2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 2</source>
+        <translation>Switch to session tab 2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+2</source>
+        <translation>Alt+2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;3</source>
+        <translation>Tab &amp;3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 3</source>
+        <translation>Switch to session tab 3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+3</source>
+        <translation>Alt+3</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;4</source>
+        <translation>Tab &amp;4</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 4</source>
+        <translation>Switch to session tab 4</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+4</source>
+        <translation>Alt+4</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;5</source>
+        <translation>Tab &amp;5</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 5</source>
+        <translation>Switch to session tab 5</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+5</source>
+        <translation>Alt+5</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;6</source>
+        <translation>Tab &amp;6</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 6</source>
+        <translation>Switch to session tab 6</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+6</source>
+        <translation>Alt+6</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;7</source>
+        <translation>Tab &amp;7</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 7</source>
+        <translation>Switch to session tab 7</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+7</source>
+        <translation>Alt+7</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;8</source>
+        <translation>Tab &amp;8</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 8</source>
+        <translation>Switch to session tab 8</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+8</source>
+        <translation>Alt+8</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;9</source>
+        <translation>Tab &amp;9</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 9</source>
+        <translation>Switch to session tab 9</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+9</source>
+        <translation>Alt+9</translation>
+    </message>
+    <message>
         <location line="+11"/>
         <source>English</source>
         <translation>English</translation>
@@ -1121,13 +1329,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>BuildAI &amp;Homepage</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+105"/>
-        <location line="+409"/>
-        <source>New Session (Ctrl+T)</source>
-        <translation>New Session (Ctrl+T)</translation>
-    </message>
-    <message>
-        <location line="-56"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+515"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>Session %1 is still connected.
@@ -1176,20 +1378,20 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Close</translation>
     </message>
     <message>
-        <location line="+51"/>
-        <location line="+824"/>
+        <location line="+54"/>
+        <location line="+1097"/>
         <source>System Log</source>
         <translation>System Log</translation>
     </message>
     <message>
-        <location line="-719"/>
-        <location line="+675"/>
+        <location line="-963"/>
+        <location line="+919"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-596"/>
+        <location line="-833"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>%n serial port found</numerusform>
@@ -1203,12 +1405,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+350"/>
+        <location line="+585"/>
         <source>Cannot open %1</source>
         <translation>Cannot open %1</translation>
     </message>
     <message>
-        <location line="-307"/>
+        <location line="-542"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
@@ -1228,7 +1430,27 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Not found</translation>
     </message>
     <message>
-        <location line="+349"/>
+        <location line="+129"/>
+        <source>Switch to %1</source>
+        <translation>Switch to %1</translation>
+    </message>
+    <message>
+        <location line="+89"/>
+        <source>New Session</source>
+        <translation>New Session</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>New Session (%1)</source>
+        <translation>New Session (%1)</translation>
+    </message>
+    <message>
+        <location line="+83"/>
+        <source>%1 menu</source>
+        <translation>%1 menu</translation>
+    </message>
+    <message>
+        <location line="+284"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
@@ -1267,7 +1489,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+204"/>
         <source>Preferences</source>
         <translation>Preferences</translation>
     </message>
@@ -1428,11 +1650,13 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+7"/>
+        <location line="+59"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+122"/>
         <source> ms</source>
         <translation> ms</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-40"/>
         <source>List the built-in simulated devices (SIM:loopback, SIM:linux, SIM:uboot, SIM:mcu) in the port list so the tool can be tried without hardware.</source>
         <translation>List the built-in simulated devices (SIM:loopback, SIM:linux, SIM:uboot, SIM:mcu) in the port list so the tool can be tried without hardware.</translation>
     </message>
@@ -1440,6 +1664,36 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <location line="+3"/>
         <source>Show simulated devices (SIM:...) in the port list</source>
         <translation>Show simulated devices (SIM:...) in the port list</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Auto baud candidates:</source>
+        <translation>Auto baud candidates:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated.</source>
+        <translation>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated.</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Auto baud sample time:</source>
+        <translation>Auto baud sample time:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long the detector listens at each candidate rate before judging the output.</source>
+        <translation>How long the detector listens at each candidate rate before judging the output.</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>While a session runs with the Auto baud rate, run the detection again when the incoming bytes stop looking like text (the board switched rates, e.g. U-Boot at 1500000 and the kernel at 115200).</source>
+        <translation>While a session runs with the Auto baud rate, run the detection again when the incoming bytes stop looking like text (the board switched rates, e.g. U-Boot at 1500000 and the kernel at 115200).</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Re-detect when the output turns into garbage</source>
+        <translation>Re-detect when the output turns into garbage</translation>
     </message>
     <message>
         <location line="+11"/>
@@ -1493,7 +1747,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+3"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+25"/>
         <source>Off</source>
         <translation>Off</translation>
     </message>
@@ -1510,6 +1764,69 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+18"/>
+        <source>Keyboard</source>
+        <translation>Keyboard</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Select a row and press the new key combination in the field below.</source>
+        <translation>Select a row and press the new key combination in the field below.</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-20"/>
+        <source>Action</source>
+        <translation>Action</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+0"/>
+        <source>Shortcut</source>
+        <translation>Shortcut</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+0"/>
+        <source>Default</source>
+        <translation>Default</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Shortcut:</source>
+        <translation>Shortcut:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Press the key combination for the selected action.</source>
+        <translation>Press the key combination for the selected action.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Remove the shortcut of the selected action.</source>
+        <translation>Remove the shortcut of the selected action.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Clear</source>
+        <translation>Clear</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Put the selected action back to its default shortcut.</source>
+        <translation>Put the selected action back to its default shortcut.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Restore Default</source>
+        <translation>Restore Default</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>While a session is connected, every key that is not an application shortcut is sent to the device: bare Ctrl+letter combinations such as Ctrl+C or Ctrl+W reach the shell unless you assign them here.</source>
+        <translation>While a session is connected, every key that is not an application shortcut is sent to the device: bare Ctrl+letter combinations such as Ctrl+C or Ctrl+W reach the shell unless you assign them here.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Logging</source>
         <translation>Logging</translation>
     </message>
@@ -1519,9 +1836,9 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Log directory:</translation>
     </message>
     <message>
-        <location line="-107"/>
+        <location line="-215"/>
         <location line="+25"/>
-        <location line="+94"/>
+        <location line="+202"/>
         <source>Browse...</source>
         <translation>Browse...</translation>
     </message>
@@ -1556,7 +1873,18 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Reopen the previous session tabs on start</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-27"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-53"/>
+        <location line="+4"/>
+        <source>Auto</source>
+        <translation>Auto</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Detect the baud rate automatically when a session connects</source>
+        <translation>Detect the baud rate automatically when a session connects</translation>
+    </message>
+    <message>
+        <location line="+13"/>
         <source>None</source>
         <translation>None</translation>
     </message>
@@ -1581,7 +1909,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Mark</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+22"/>
+        <source>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated. Default: %1</source>
+        <translation>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated. Default: %1</translation>
+    </message>
+    <message>
+        <location line="+34"/>
         <source>Raw bytes (replayable capture)</source>
         <translation>Raw bytes (replayable capture)</translation>
     </message>
@@ -1596,7 +1929,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Hex dump</translation>
     </message>
     <message>
-        <location line="+138"/>
+        <location line="+156"/>
         <source>Terminal Font</source>
         <translation>Terminal Font</translation>
     </message>
@@ -1624,6 +1957,21 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <location line="+0"/>
         <source>All files (*)</source>
         <translation>All files (*)</translation>
+    </message>
+    <message>
+        <location line="+207"/>
+        <source>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</source>
+        <translation>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</translation>
+    </message>
+    <message>
+        <location line="+78"/>
+        <source>Conflict: &quot;%1&quot; and &quot;%2&quot; both use %3.</source>
+        <translation>Conflict: &quot;%1&quot; and &quot;%2&quot; both use %3.</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Conflict: &quot;%1&quot; uses %2, which is fixed for &quot;%3&quot;.</source>
+        <translation>Conflict: &quot;%1&quot; uses %2, which is fixed for &quot;%3&quot;.</translation>
     </message>
 </context>
 <context>
@@ -1956,8 +2304,8 @@ Nothing is saved until you press OK.</translation>
     <name>RemoteFileDialog</name>
     <message>
         <location filename="../src/dialogs/RemoteFileDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+69"/>
-        <location line="+57"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+120"/>
+        <location line="+58"/>
         <source>Remote File Transfer</source>
         <translation>Remote File Transfer</translation>
     </message>
@@ -1967,28 +2315,18 @@ Nothing is saved until you press OK.</translation>
         <translation>Direction:</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Copy a local file to the remote host (SFTP)</source>
-        <translation>Copy a local file to the remote host (SFTP)</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+10"/>
         <source>&amp;Upload to remote</source>
         <translation>&amp;Upload to remote</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Copy a remote file to this computer (SFTP)</source>
-        <translation>Copy a remote file to this computer (SFTP)</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+13"/>
         <source>&amp;Download from remote</source>
         <translation>&amp;Download from remote</translation>
     </message>
     <message>
         <location line="+24"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+252"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+305"/>
         <source>&amp;Local file:</source>
         <translation>&amp;Local file:</translation>
     </message>
@@ -2009,9 +2347,19 @@ Nothing is saved until you press OK.</translation>
         <translation>&amp;Remote path:</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Absolute path on the remote host, or a directory ending in /</source>
-        <translation>Absolute path on the remote host, or a directory ending in /</translation>
+        <location line="-67"/>
+        <source>Copy a local file to the remote host (SFTP, or the remote shell when the server has no SFTP)</source>
+        <translation>Copy a local file to the remote host (SFTP, or the remote shell when the server has no SFTP)</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Copy a remote file to this computer (SFTP, or the remote shell when the server has no SFTP)</source>
+        <translation>Copy a remote file to this computer (SFTP, or the remote shell when the server has no SFTP)</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Path on the remote host: ~ is the home, a directory ending in / keeps the file name</source>
+        <translation>Path on the remote host: ~ is the home, a directory ending in / keeps the file name</translation>
     </message>
     <message>
         <location line="+10"/>
@@ -2040,7 +2388,7 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+41"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+109"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+167"/>
         <source>Not connected.</source>
         <translation>Not connected.</translation>
     </message>
@@ -2056,11 +2404,11 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+20"/>
-        <source>Cl&amp;ose</source>
-        <translation>Cl&amp;ose</translation>
+        <source>Clos&amp;e</source>
+        <translation>Clos&amp;e</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="-179"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="-250"/>
         <source>Select File to Upload</source>
         <translation>Select File to Upload</translation>
     </message>
@@ -2076,7 +2424,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Save Downloaded File As</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+14"/>
         <source>Resolving the remote home directory...</source>
         <translation>Resolving the remote home directory...</translation>
     </message>
@@ -2086,22 +2434,12 @@ Nothing is saved until you press OK.</translation>
         <translation>The remote home directory is known once the session is connected.</translation>
     </message>
     <message>
-        <location line="+47"/>
+        <location line="+63"/>
         <source>The file to upload</source>
         <translation>The file to upload</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Where to write it on the remote host (a directory ending in / keeps the file name)</source>
-        <translation>Where to write it on the remote host (a directory ending in / keeps the file name)</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>&amp;Save as:</source>
-        <translation>&amp;Save as:</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+9"/>
         <source>&amp;Remote file:</source>
         <translation>&amp;Remote file:</translation>
     </message>
@@ -2111,32 +2449,27 @@ Nothing is saved until you press OK.</translation>
         <translation>Where to write the downloaded file (an existing directory keeps the file name)</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>The remote file to download</source>
-        <translation>The remote file to download</translation>
-    </message>
-    <message>
-        <location line="-6"/>
+        <location line="-7"/>
         <source>&amp;Start upload</source>
         <translation>&amp;Start upload</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+9"/>
         <source>&amp;Start download</source>
         <translation>&amp;Start download</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+20"/>
         <source>Enter both the local and the remote path.</source>
         <translation>Enter both the local and the remote path.</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+13"/>
         <source>Local file not found: %1</source>
         <translation>Local file not found: %1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+4"/>
         <source>%1 already exists (enable Overwrite to replace it).</source>
         <translation>%1 already exists (enable Overwrite to replace it).</translation>
     </message>
@@ -2146,24 +2479,52 @@ Nothing is saved until you press OK.</translation>
         <translation>The transfer could not be started (not connected, or another transfer is running).</translation>
     </message>
     <message>
-        <location line="+5"/>
-        <location line="+17"/>
-        <source>Uploading %1...</source>
-        <translation>Uploading %1...</translation>
+        <location line="-440"/>
+        <source>SFTP</source>
+        <translation>SFTP</translation>
     </message>
     <message>
-        <location line="-16"/>
-        <location line="+17"/>
-        <source>Downloading %1...</source>
-        <translation>Downloading %1...</translation>
+        <location line="+3"/>
+        <source>shell (cat)</source>
+        <translation>shell (cat)</translation>
     </message>
     <message>
-        <location line="-8"/>
+        <location line="+338"/>
+        <source>The remote home directory could not be resolved; a relative path is written to the login directory.</source>
+        <translation>The remote home directory could not be resolved; a relative path is written to the login directory.</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Where to write it on the remote host (a directory ending in / keeps the file name; ~ is the remote home)</source>
+        <translation>Where to write it on the remote host (a directory ending in / keeps the file name; ~ is the remote home)</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Save &amp;to:</source>
+        <translation>Save &amp;to:</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The remote file to download (~ is the remote home)</source>
+        <translation>The remote file to download (~ is the remote home)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 looks like a Windows path. Enter a path on the remote host, for example /tmp/ or ~/.</source>
+        <translation>%1 looks like a Windows path. Enter a path on the remote host, for example /tmp/ or ~/.</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 is a folder. Select a single file to upload (folders are not supported yet).</source>
+        <translation>%1 is a folder. Select a single file to upload (folders are not supported yet).</translation>
+    </message>
+    <message>
+        <location line="+36"/>
         <source>Cancelling...</source>
         <translation>Cancelling...</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+55"/>
         <source>Transfer complete.</source>
         <translation>Transfer complete.</translation>
     </message>
@@ -2173,12 +2534,32 @@ Nothing is saved until you press OK.</translation>
         <translation>Transfer failed.</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+35"/>
         <source>Ready.</source>
         <translation>Ready.</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+19"/>
+        <source>Uploading %1</source>
+        <translation>Uploading %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Uploading %1 via %2</source>
+        <translation>Uploading %1 via %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Downloading %1</source>
+        <translation>Downloading %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Downloading %1 via %2</source>
+        <translation>Downloading %1 via %2</translation>
+    </message>
+    <message>
+        <location line="+22"/>
         <source>A transfer is already running.</source>
         <translation>A transfer is already running.</translation>
     </message>
@@ -2435,37 +2816,37 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SerialConnection</name>
     <message>
-        <location filename="../src/core/SerialConnection.cpp" line="+279"/>
-        <location line="+461"/>
+        <location filename="../src/core/SerialConnection.cpp" line="+288"/>
+        <location line="+470"/>
         <source>baud rate %1</source>
         <translation>baud rate %1</translation>
     </message>
     <message>
-        <location line="-457"/>
-        <location line="+460"/>
+        <location line="-466"/>
+        <location line="+469"/>
         <source>data bits %1</source>
         <translation>data bits %1</translation>
     </message>
     <message>
-        <location line="-455"/>
-        <location line="+458"/>
+        <location line="-464"/>
+        <location line="+467"/>
         <source>parity %1</source>
         <translation>parity %1</translation>
     </message>
     <message>
-        <location line="-453"/>
-        <location line="+456"/>
+        <location line="-462"/>
+        <location line="+465"/>
         <source>stop bits %1</source>
         <translation>stop bits %1</translation>
     </message>
     <message>
-        <location line="-451"/>
-        <location line="+454"/>
+        <location line="-460"/>
+        <location line="+463"/>
         <source>flow control %1</source>
         <translation>flow control %1</translation>
     </message>
     <message>
-        <location line="-447"/>
+        <location line="-455"/>
         <source>Cannot apply %1 to %2: %3</source>
         <translation>Cannot apply %1 to %2: %3</translation>
     </message>
@@ -2481,13 +2862,13 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+337"/>
+        <location line="+345"/>
         <location line="+5"/>
         <source>Port %1 not found</source>
         <translation>Port %1 not found</translation>
     </message>
     <message>
-        <location line="-339"/>
+        <location line="-347"/>
         <source>Cannot open %1: %2</source>
         <translation>Cannot open %1: %2</translation>
     </message>
@@ -2517,7 +2898,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Cannot send BREAK on %1: %2</translation>
     </message>
     <message>
-        <location line="+235"/>
+        <location line="+243"/>
         <source>Port %1 disconnected</source>
         <translation>Port %1 disconnected</translation>
     </message>
@@ -2631,6 +3012,14 @@ Nothing is saved until you press OK.</translation>
     </message>
 </context>
 <context>
+    <name>SerialSettings</name>
+    <message>
+        <location filename="../src/core/SerialConnection.cpp" line="-640"/>
+        <source>Auto (%1)</source>
+        <translation>Auto (%1)</translation>
+    </message>
+</context>
+<context>
     <name>SessionLogger</name>
     <message>
         <location filename="../src/core/SessionLogger.cpp" line="+35"/>
@@ -2657,17 +3046,23 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+1216"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+1293"/>
         <source>Output paused while selecting - Enter copies, Esc cancels</source>
         <translation>Output paused while selecting - Enter copies, Esc cancels</translation>
     </message>
     <message>
-        <location line="-1068"/>
+        <location line="-1112"/>
         <source>Output resumed: %1 arrived while the display was paused</source>
         <translation>Output resumed: %1 arrived while the display was paused</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="-46"/>
+        <location line="+12"/>
+        <source>Trying %1...</source>
+        <translation>Trying %1...</translation>
+    </message>
+    <message>
+        <location line="+79"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
@@ -2677,7 +3072,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Log closed: %1 (%2 bytes)</translation>
     </message>
     <message>
-        <location line="+151"/>
+        <location line="+157"/>
         <source>Replay: %1</source>
         <translation>Replay: %1</translation>
     </message>
@@ -2692,7 +3087,7 @@ Nothing is saved until you press OK.</translation>
         <translation>New Session</translation>
     </message>
     <message>
-        <location line="+178"/>
+        <location line="+179"/>
         <source>Select a serial port first</source>
         <translation>Select a serial port first</translation>
     </message>
@@ -2702,7 +3097,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Connected to %1 (%2)</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+18"/>
         <source>Enter a target such as user@host</source>
         <translation>Enter a target such as user@host</translation>
     </message>
@@ -2743,12 +3138,12 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+529"/>
+        <location line="+562"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>Log files (*.log *.txt);;All files (*)</translation>
     </message>
     <message>
-        <location line="-506"/>
+        <location line="-539"/>
         <source>(no port)</source>
         <translation>(no port)</translation>
     </message>
@@ -2767,16 +3162,18 @@ Nothing is saved until you press OK.</translation>
         <location line="+56"/>
         <location line="+22"/>
         <location line="+13"/>
+        <location line="+471"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
     <message>
-        <location line="-39"/>
+        <location line="-510"/>
+        <location line="+506"/>
         <source>Not available for SSH sessions</source>
         <translation>Not available for SSH sessions</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="-494"/>
         <source>BREAK sent</source>
         <translation>BREAK sent</translation>
     </message>
@@ -2846,7 +3243,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Reconnected to %1</translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+141"/>
         <source>Authenticated (%1)</source>
         <translation>Authenticated (%1)</translation>
     </message>
@@ -2915,11 +3312,71 @@ Nothing is saved until you press OK.</translation>
         <source>Replay the file at:</source>
         <translation>Replay the file at:</translation>
     </message>
+    <message>
+        <location line="+29"/>
+        <source>Baud rate detection is already running</source>
+        <translation>Baud rate detection is already running</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Cannot detect the baud rate while a file is being sent</source>
+        <translation>Cannot detect the baud rate while a file is being sent</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>output unreadable, re-detecting baud rate</source>
+        <translation>output unreadable, re-detecting baud rate</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>detecting baud rate</source>
+        <translation>detecting baud rate</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Cannot detect the baud rate now</source>
+        <translation>Cannot detect the baud rate now</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>baud rate detection cancelled</source>
+        <translation>baud rate detection cancelled</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Baud rate detection cancelled</source>
+        <translation>Baud rate detection cancelled</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>baud rate %1 detected</source>
+        <translation>baud rate %1 detected</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Baud rate %1 detected (%2)</source>
+        <translation>Baud rate %1 detected (%2)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no readable output at any baud rate, keeping %1</source>
+        <translation>no readable output at any baud rate, keeping %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No readable output at any baud rate, keeping %1</source>
+        <translation>No readable output at any baud rate, keeping %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No output from the device, keeping %1</source>
+        <translation>No output from the device, keeping %1</translation>
+    </message>
 </context>
 <context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+421"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+431"/>
         <source>No SSH host given</source>
         <translation>No SSH host given</translation>
     </message>
@@ -2929,7 +3386,12 @@ Nothing is saved until you press OK.</translation>
         <translation>Invalid SSH port for %1</translation>
     </message>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+295"/>
+        <location line="+78"/>
+        <source>Transfer aborted: the connection was closed</source>
+        <translation>Transfer aborted: the connection was closed</translation>
+    </message>
+    <message>
+        <location filename="../src/ssh/SshWorker.cpp" line="+305"/>
         <source>unknown size</source>
         <translation>unknown size</translation>
     </message>
@@ -3491,72 +3953,91 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>SshWorker</name>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+254"/>
-        <location line="+100"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+279"/>
+        <location line="+99"/>
+        <location line="+1760"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
     <message>
-        <location line="-96"/>
+        <location line="-1855"/>
         <source>Another transfer is still running</source>
         <translation>Another transfer is still running</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
+        <location line="+1925"/>
         <source>Local file not found: %1</source>
         <translation>Local file not found: %1</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="-1917"/>
+        <location line="+1930"/>
         <source>Remote file already exists: %1</source>
         <translation>Remote file already exists: %1</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <location line="+1362"/>
+        <location line="-1923"/>
+        <location line="+1465"/>
+        <location line="+464"/>
+        <location line="+99"/>
         <source>Cannot read %1: %2</source>
         <translation>Cannot read %1: %2</translation>
     </message>
     <message>
-        <location line="-1357"/>
+        <location line="-2023"/>
+        <location line="+1941"/>
+        <location line="+6"/>
         <source>Cannot create remote file %1: %2</source>
         <translation>Cannot create remote file %1: %2</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-1942"/>
+        <location line="+1947"/>
         <source>Local file already exists: %1</source>
         <translation>Local file already exists: %1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-1942"/>
+        <location line="+1958"/>
         <source>Remote file not found: %1 (%2)</source>
         <translation>Remote file not found: %1 (%2)</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="-1945"/>
+        <location line="+1959"/>
         <source>Cannot open remote file %1: %2</source>
         <translation>Cannot open remote file %1: %2</translation>
     </message>
     <message>
-        <location line="+9"/>
-        <location line="+1354"/>
-        <location line="+31"/>
+        <location line="-1950"/>
+        <location line="+1490"/>
+        <location line="+86"/>
+        <location line="+367"/>
+        <location line="+84"/>
+        <location line="+120"/>
         <source>Cannot write %1: %2</source>
         <translation>Cannot write %1: %2</translation>
     </message>
     <message>
-        <location line="-1364"/>
-        <location line="+1293"/>
+        <location line="-2126"/>
+        <location line="+1388"/>
         <source>Transfer cancelled</source>
         <translation>Transfer cancelled</translation>
     </message>
     <message>
-        <location line="-1273"/>
+        <location line="-1372"/>
+        <location line="+30"/>
         <source>Cannot resolve the remote home directory: %1</source>
         <translation>Cannot resolve the remote home directory: %1</translation>
     </message>
     <message>
-        <location line="+70"/>
+        <location line="-4"/>
+        <source>&apos;%1&apos; printed &quot;%2&quot;</source>
+        <translation>&apos;%1&apos; printed &quot;%2&quot;</translation>
+    </message>
+    <message>
+        <location line="+76"/>
         <source>Cannot create an SSH session</source>
         <translation>Cannot create an SSH session</translation>
     </message>
@@ -3586,7 +4067,7 @@ You will be asked for it when connecting.</translation>
         <translation>Host key rejected for %1</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+66"/>
         <source>Authentication with %1 failed: %2</source>
         <translation>Authentication with %1 failed: %2</translation>
     </message>
@@ -3606,7 +4087,7 @@ You will be asked for it when connecting.</translation>
         <translation>every method was rejected</translation>
     </message>
     <message>
-        <location line="+56"/>
+        <location line="+71"/>
         <source>Cannot read the key %1</source>
         <translation>Cannot read the key %1</translation>
     </message>
@@ -3631,7 +4112,7 @@ You will be asked for it when connecting.</translation>
         <translation>Enter passphrase for key &apos;%1&apos;:</translation>
     </message>
     <message>
-        <location line="+53"/>
+        <location line="+67"/>
         <source>Wrong password for %1</source>
         <translation>Wrong password for %1</translation>
     </message>
@@ -3651,12 +4132,12 @@ You will be asked for it when connecting.</translation>
         <translation>Password for %1:</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+53"/>
         <source>Keyboard-interactive authentication did not finish</source>
         <translation>Keyboard-interactive authentication did not finish</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+21"/>
         <source>%1 asks for interactive input - reconnect cancelled</source>
         <translation>%1 asks for interactive input - reconnect cancelled</translation>
     </message>
@@ -3671,17 +4152,18 @@ You will be asked for it when connecting.</translation>
         <translation>Response:</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+31"/>
         <source>Keyboard-interactive authentication failed for %1</source>
         <translation>Keyboard-interactive authentication failed for %1</translation>
     </message>
     <message>
         <location line="+32"/>
+        <location line="+840"/>
         <source>Cannot create a channel: %1</source>
         <translation>Cannot create a channel: %1</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-836"/>
         <source>Cannot open the session channel on %1: %2</source>
         <translation>Cannot open the session channel on %1: %2</translation>
     </message>
@@ -3702,27 +4184,30 @@ You will be asked for it when connecting.</translation>
     </message>
     <message>
         <location line="+29"/>
+        <location line="+904"/>
         <source>Connection to %1 cancelled</source>
         <translation>Connection to %1 cancelled</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-901"/>
         <source>No answer within 5 minutes - connection to %1 cancelled</source>
         <translation>No answer within 5 minutes - connection to %1 cancelled</translation>
     </message>
     <message>
         <location line="+115"/>
+        <location line="+778"/>
         <source>Connection to %1 lost: %2</source>
         <translation>Connection to %1 lost: %2</translation>
     </message>
     <message>
-        <location line="+17"/>
-        <location line="+347"/>
+        <location line="-761"/>
+        <location line="+375"/>
+        <location line="+67"/>
         <source>Write to %1 failed: %2</source>
         <translation>Write to %1 failed: %2</translation>
     </message>
     <message>
-        <location line="-316"/>
+        <location line="-411"/>
         <source>Connection to %1 lost</source>
         <translation>Connection to %1 lost</translation>
     </message>
@@ -3747,47 +4232,128 @@ You will be asked for it when connecting.</translation>
         <translation>Invalid bind address &quot;%1&quot; for the port forward %2</translation>
     </message>
     <message>
-        <location line="+155"/>
-        <source>Cannot start SFTP on %1: %2</source>
-        <translation>Cannot start SFTP on %1: %2</translation>
+        <location line="+345"/>
+        <source>Uploaded %1 to %2 (%3, SFTP)</source>
+        <translation>Uploaded %1 to %2 (%3, SFTP)</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>SFTP initialisation on %1 failed: %2 (code %3)</source>
-        <translation>SFTP initialisation on %1 failed: %2 (code %3)</translation>
+        <location line="+22"/>
+        <source>Downloaded %1 to %2 (%3, SFTP)</source>
+        <translation>Downloaded %1 to %2 (%3, SFTP)</translation>
     </message>
     <message>
-        <location line="+48"/>
+        <location line="+124"/>
+        <source>Cannot open a channel on %1: %2</source>
+        <translation>Cannot open a channel on %1: %2</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Cannot run a command on %1: %2</source>
+        <translation>Cannot run a command on %1: %2</translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <location line="+131"/>
+        <location line="+26"/>
+        <location line="+173"/>
+        <source>exit status %1</source>
+        <translation>exit status %1</translation>
+    </message>
+    <message>
+        <location line="-328"/>
+        <source>the remote command ended without an exit status</source>
+        <translation>the remote command ended without an exit status</translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>&apos;%1&apos; on %2 did not finish within %3 s</source>
+        <translation>&apos;%1&apos; on %2 did not finish within %3 s</translation>
+    </message>
+    <message>
+        <location line="+88"/>
+        <source>unexpected size &quot;%1&quot;</source>
+        <translation>unexpected size &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <location line="+27"/>
+        <location line="+104"/>
+        <source>Upload to %1 failed: %2</source>
+        <translation>Upload to %1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="-109"/>
+        <source>Connection to %1 lost during the upload of %2</source>
+        <translation>Connection to %1 lost during the upload of %2</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Connection to %1 lost during the download of %2</source>
+        <translation>Connection to %1 lost during the download of %2</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Connection to %1 lost during the transfer of %2</source>
+        <translation>Connection to %1 lost during the transfer of %2</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>%1 of %2 written</source>
+        <translation>%1 of %2 written</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the remote command did not finish (%1)</source>
+        <translation>the remote command did not finish (%1)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download of %1 failed: %2</source>
+        <translation>Download of %1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Uploaded %1 to %2 (%3, via shell)</source>
+        <translation>Uploaded %1 to %2 (%3, via shell)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Download of %1 ended after %2 of %3</source>
+        <translation>Download of %1 ended after %2 of %3</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Downloaded %1 to %2 (%3, via shell)</source>
+        <translation>Downloaded %1 to %2 (%3, via shell)</translation>
+    </message>
+    <message>
+        <location line="-697"/>
+        <location line="+19"/>
+        <location line="+19"/>
+        <location line="+30"/>
+        <location line="+509"/>
         <source>Read from %1 failed: %2</source>
         <translation>Read from %1 failed: %2</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="-476"/>
         <source>Closing %1 failed: %2</source>
         <translation>Closing %1 failed: %2</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>Uploaded %1 to %2 (%3)</source>
-        <translation>Uploaded %1 to %2 (%3)</translation>
-    </message>
-    <message>
-        <location line="+11"/>
+        <location line="+17"/>
+        <location line="+571"/>
         <source>Cannot replace %1</source>
         <translation>Cannot replace %1</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-567"/>
+        <location line="+571"/>
         <source>Cannot rename %1 to %2</source>
         <translation>Cannot rename %1 to %2</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Downloaded %1 to %2 (%3)</source>
-        <translation>Downloaded %1 to %2 (%3)</translation>
-    </message>
-    <message>
-        <location line="+109"/>
+        <location line="+61"/>
         <source>end of file</source>
         <translation>end of file</translation>
     </message>
@@ -3955,12 +4521,12 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1238"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1316"/>
         <source>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</source>
         <translation>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</translation>
     </message>
     <message>
-        <location line="+920"/>
+        <location line="+928"/>
         <source>&amp;Copy</source>
         <translation>&amp;Copy</translation>
     </message>

@@ -6,6 +6,7 @@
 #include <QHostAddress>
 #include <QPointer>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -99,7 +100,7 @@ struct ProbeSession
                 conn.cancelPrompt();
                 return;
             }
-            conn.answerPrompt(number <= responses.size() ? responses.at(number - 1) : password, false);
+            conn.answerPrompt(number <= responses.size() ? responses.at(number - 1) : password, rememberResponse);
         });
         QObject::connect(&conn, &Transport::errorOccurred, &conn, [this](const QString& message) { errors.append(message); });
         QObject::connect(&conn, &Transport::stateChanged, &conn, [this](Transport::State state) { states.append(state); });
@@ -112,6 +113,8 @@ struct ProbeSession
     {
         conn.setProfile(profile);
     }
+
+    bool rememberResponse = false;   ///< answer every prompt with "remember"
 
     // The recorders come first so they outlive `conn` (members are destroyed in reverse order):
     // a signal delivered while the connection is torn down must never append to freed storage.
@@ -434,12 +437,21 @@ private slots:
     void e2eLocalForward();
     void e2eLocalForwardClientClosesFirst();
     void e2eSftpTransfers();
+    void e2eSftpPipelineSizes();
     void e2eRemoteHome();
     void e2eCloseDuringHostKeyQuestion();
     void e2eCloseDuringAuthPrompt();
     void e2eCloseWhileConnecting();
     void e2eDestroyWhileConnected();
     void e2eTwoConnectionsInParallel();
+    // v0.4: remembered credentials for ad-hoc targets / key files, transfers without SFTP
+    void e2eAdHocRememberPassword();
+    void e2ePassphraseRememberedPerKey();
+    void e2eShellFallbackTransfers();
+    void e2eShellFallbackRemoteHome();
+    void e2eShellFallbackFailedUploadRemoved();
+    void e2eShellFallbackUploadWithoutExitStatus();
+    void e2eCloseDuringUploadRemovesRemote();
 
     // ---- (b) live probe against a real sshd -------------------------------------------
     void probeShellResizeAndSftp();
@@ -447,6 +459,7 @@ private slots:
     void probeChangedHostKey();
     void probeKeyLogin();
     void probeRemoteExit();
+    void probeAdHocRemember();
 
 private:
     quint16 closedLocalPort();
@@ -840,7 +853,8 @@ void Tst_sshconnection::e2ePasswordShellExit()
     QCOMPARE(prompt.attempt, 1);
     QCOMPARE(prompt.user, kServerUser);
     QCOMPARE(prompt.host, QStringLiteral("127.0.0.1"));
-    QVERIFY(!prompt.canRemember);   // ad-hoc profile without an id
+    QVERIFY(prompt.canRemember);   // an ad-hoc target remembers under "ssh/target/<target>/password"
+    QCOMPARE(prompt.rememberTarget, c.profile.displayTarget());
     QVERIFY2(prompt.prompt.contains(QStringLiteral("127.0.0.1")), qPrintable(prompt.prompt));
 
     QCOMPARE(c.hostKeys.size(), 1);
@@ -955,7 +969,8 @@ void Tst_sshconnection::e2ePublicKeyPassphrase()
     QCOMPARE(c.prompts.at(0).keyFile, keyPath);
     QVERIFY2(c.prompts.at(0).prompt.contains(QStringLiteral("passphrase")), qPrintable(c.prompts.at(0).prompt));
     QVERIFY(!c.prompts.at(0).echo);
-    QVERIFY(!c.prompts.at(0).canRemember);
+    QVERIFY(c.prompts.at(0).canRemember);   // remembered per key file, whatever the target
+    QCOMPARE(c.prompts.at(0).rememberTarget, QDir::cleanPath(QFileInfo(keyPath).absoluteFilePath()));
     QCOMPARE(c.prompts.at(1).kind, SshConnection::PromptKind::Passphrase);
     QCOMPARE(c.prompts.at(1).attempt, 2);
     QCOMPARE(c.methods, QStringList{QStringLiteral("publickey")});
@@ -1022,6 +1037,34 @@ void Tst_sshconnection::e2eKeyboardInteractive()
     QCOMPARE(e.prompts.size(), 3);
     QCOMPARE(e.errors.size(), 1);
     QVERIFY2(e.errors.first().contains(QStringLiteral("Authentication failed")), qPrintable(e.errors.first()));
+
+    // The (first) hidden prompt of a round can be remembered like a password: the answer lands
+    // under the ad-hoc target key and the next connect asks nothing.
+    const QString key = QStringLiteral("ssh/target/%1/password").arg(p.displayTarget());
+    QVERIFY(!SecretStore::contains(key));
+    QVERIFY(c.prompts.at(0).canRemember);
+    QCOMPARE(c.prompts.at(0).rememberTarget, p.displayTarget());
+    TestClient f(p);
+    f.responses = {options.kbdintAnswer};
+    f.rememberResponse = true;
+    E2E_CONNECT(f);
+    QCOMPARE(f.prompts.size(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(key).value_or(QString()), options.kbdintAnswer, kE2eTimeoutMs);
+    f.conn.close();
+    TestClient g(p);
+    E2E_CONNECT(g);
+    QCOMPARE(g.prompts.size(), 0);
+    QCOMPARE(g.conn.authMethod(), QStringLiteral("keyboard-interactive"));
+    g.conn.close();
+    // A stale saved answer is dropped before the prompt (attempt 2).
+    QVERIFY(SecretStore::store(key, QStringLiteral("000000")));
+    TestClient h(p);
+    h.responses = {options.kbdintAnswer};
+    E2E_CONNECT(h);
+    QCOMPARE(h.prompts.size(), 1);
+    QCOMPARE(h.prompts.first().attempt, 2);
+    QTRY_VERIFY_WITH_TIMEOUT(!SecretStore::contains(key), kE2eTimeoutMs);
+    h.conn.close();
 }
 
 void Tst_sshconnection::e2eWrongPasswordThenCancel()
@@ -1734,6 +1777,8 @@ void Tst_sshconnection::e2eSftpTransfers()
     QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 60000);
     QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
     QVERIFY(!c.conn.isTransferActive());
+    QCOMPARE(c.conn.transferStatus().method, QStringLiteral("sftp"));
+    QVERIFY2(finished.at(0).at(1).toString().endsWith(QStringLiteral(", SFTP)")), qPrintable(finished.at(0).at(1).toString()));
     QCOMPARE(started.count(), 1);
     QCOMPARE(started.at(0).at(0).value<SshConnection::TransferRequest>().remotePath, remoteName);
     QVERIFY(progress.count() >= 2);
@@ -1766,6 +1811,8 @@ void Tst_sshconnection::e2eSftpTransfers()
     QVERIFY(c.conn.startTransfer(download));
     QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, 60000);
     QVERIFY2(finished.at(2).at(0).toBool(), qPrintable(finished.at(2).at(1).toString()));
+    QVERIFY2(finished.at(2).at(1).toString().endsWith(QStringLiteral(", SFTP)")), qPrintable(finished.at(2).at(1).toString()));
+    QCOMPARE(c.conn.transferStatus().method, QStringLiteral("sftp"));
     QVERIFY(QFileInfo::exists(downPath));
     QVERIFY(!QFileInfo::exists(downPath + QStringLiteral(".part")));
     QCOMPARE(readAll(downPath), payload);
@@ -1801,6 +1848,9 @@ void Tst_sshconnection::e2eSftpTransfers()
     QVERIFY2(finished.at(5).at(1).toString().contains(QStringLiteral("cancel"), Qt::CaseInsensitive),
              qPrintable(finished.at(5).at(1).toString()));
     QVERIFY(!c.conn.isTransferActive());
+    // v0.4: the truncated remote file of a cancelled SFTP upload is removed (unlinked once the
+    // handle is closed, before transferFinished), like the .part of a cancelled download.
+    QVERIFY(!QFileInfo::exists(QDir(options.rootDir).filePath(QStringLiteral("cancelled-up.bin"))));
     SshConnection::TransferRequest cancelledDownload;
     cancelledDownload.direction = SshConnection::TransferDirection::Download;
     cancelledDownload.localPath = m_dir.filePath(QStringLiteral("sftp/local/cancelled.bin"));
@@ -1829,6 +1879,71 @@ void Tst_sshconnection::e2eSftpTransfers()
     QCOMPARE(spy.sftp, 1);   // one SFTP session serves every transfer
     c.conn.close();
     QVERIFY(!c.conn.isTransferActive());
+}
+
+void Tst_sshconnection::e2eSftpPipelineSizes()
+{
+    // v0.4: SFTP keeps 16 requests in flight. Sizes on and around the request boundaries (libssh
+    // caps one request at 32 KiB against a server without the limits extension, the worker's
+    // chunk is 64 KiB, the pipeline 1 MiB), an empty file, a single byte and a prime tail go up
+    // and come back byte for byte: the short-read reply of the last block drops the requests
+    // queued behind it, EOF ends the download once every reply is collected, and the progress
+    // ends at the total in both directions.
+    const TestSshServer::Options options = serverOptions(QStringLiteral("sizes"));
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    TestClient c(serverProfile(server, QStringLiteral("sizes")));
+    E2E_CONNECT(c);
+    QSignalSpy finished(&c.conn, &SshConnection::transferFinished);
+    QSignalSpy progress(&c.conn, &SshConnection::transferProgress);
+    int expected = 0;
+    const qsizetype sizes[] = {0, 1, 32 * 1024, 32 * 1024 + 1, 64 * 1024 - 1, 64 * 1024, 64 * 1024 + 1,
+                               16 * 64 * 1024 + 3, 3 * 1024 * 1024 + 7919};
+    for (const qsizetype size : sizes) {
+        const QByteArray payload = randomBytes(size);
+        const QString name = QStringLiteral("size-%1.bin").arg(size);
+        const QString upPath = m_dir.filePath(QStringLiteral("sizes/local/up-") + name);
+        const QString downPath = m_dir.filePath(QStringLiteral("sizes/local/down-") + name);
+        QVERIFY(writeFile(upPath, payload));
+
+        SshConnection::TransferRequest upload;
+        upload.direction = SshConnection::TransferDirection::Upload;
+        upload.localPath = upPath;
+        upload.remotePath = name;
+        progress.clear();
+        QVERIFY2(c.conn.startTransfer(upload), qPrintable(name));
+        ++expected;   // outside the macro: QTRY_* re-evaluates its arguments on every poll
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), expected, 60000);
+        QVERIFY2(finished.last().at(0).toBool(), qPrintable(name + QStringLiteral(": ") + finished.last().at(1).toString()));
+        QCOMPARE(c.conn.transferStatus().method, QStringLiteral("sftp"));
+        QCOMPARE(c.conn.transferStatus().done, qint64(size));
+        QVERIFY(!progress.isEmpty());
+        QCOMPARE(progress.last().at(0).toLongLong(), qint64(size));
+        QCOMPARE(readAll(QDir(options.rootDir).filePath(name)), payload);
+
+        SshConnection::TransferRequest download;
+        download.direction = SshConnection::TransferDirection::Download;
+        download.localPath = downPath;
+        download.remotePath = name;
+        progress.clear();
+        QVERIFY2(c.conn.startTransfer(download), qPrintable(name));
+        ++expected;   // outside the macro: QTRY_* re-evaluates its arguments on every poll
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), expected, 60000);
+        QVERIFY2(finished.last().at(0).toBool(), qPrintable(name + QStringLiteral(": ") + finished.last().at(1).toString()));
+        QCOMPARE(c.conn.transferStatus().done, qint64(size));
+        QVERIFY(!progress.isEmpty());
+        QCOMPARE(progress.last().at(0).toLongLong(), qint64(size));
+        QCOMPARE(progress.last().at(1).toLongLong(), qint64(size));
+        QVERIFY(!QFileInfo::exists(downPath + QStringLiteral(".part")));
+        QCOMPARE(readAll(downPath), payload);
+    }
+
+    // The shell answered nothing in between and still works after 18 pipelined transfers.
+    c.received.clear();
+    c.conn.write(QByteArrayLiteral("echo SIZES\r"));
+    QTRY_VERIFY2_WITH_TIMEOUT(c.received.contains("SIZES\r\n$ "), c.received.constData(), kE2eTimeoutMs);
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    c.conn.close();
 }
 
 void Tst_sshconnection::e2eRemoteHome()
@@ -2044,6 +2159,583 @@ void Tst_sshconnection::e2eTwoConnectionsInParallel()
 // (b) live probe
 // ---------------------------------------------------------------------------------------
 
+void Tst_sshconnection::e2eAdHocRememberPassword()
+{
+    TestSshServer server(serverOptions(QStringLiteral("adhoc")));
+    QVERIFY(server.start());
+    const SshProfile p = serverProfile(server, QStringLiteral("adhoc"));
+    QVERIFY(p.id.isEmpty());
+    const QString key = QStringLiteral("ssh/target/%1/password").arg(p.displayTarget());
+    QVERIFY(!SecretStore::contains(key));
+
+    // The prompt of an ad-hoc target can be remembered for that target; the answer given with
+    // "remember" is stored under it once it worked.
+    TestClient c(p);
+    c.rememberResponse = true;
+    E2E_CONNECT(c);
+    QCOMPARE(c.prompts.size(), 1);
+    QVERIFY(c.prompts.first().canRemember);
+    QCOMPARE(c.prompts.first().rememberTarget, p.displayTarget());
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(key).value_or(QString()), kServerPassword, kE2eTimeoutMs);
+    c.conn.close();
+
+    // A NEW connection to the same ad-hoc target connects without any prompt.
+    TestClient d(p);
+    E2E_CONNECT(d);
+    QCOMPARE(d.prompts.size(), 0);
+    QCOMPARE(d.conn.authMethod(), QStringLiteral("password"));
+    d.conn.close();
+
+    // A stale stored password is removed before the prompt (attempt 2); answered without
+    // "remember", nothing is written back.
+    QVERIFY(SecretStore::store(key, QStringLiteral("stale-password")));
+    TestClient e(p);
+    bool storeHadKeyAtPrompt = true;
+    connect(&e.conn, &SshConnection::authPromptRequired, &e.conn,
+            [&storeHadKeyAtPrompt, key](const SshConnection::AuthPrompt&) { storeHadKeyAtPrompt = SecretStore::contains(key); });
+    E2E_CONNECT(e);
+    QCOMPARE(e.prompts.size(), 1);
+    QCOMPARE(e.prompts.first().kind, SshConnection::PromptKind::Password);
+    QCOMPARE(e.prompts.first().attempt, 2);
+    QVERIFY(!storeHadKeyAtPrompt);
+    QTest::qWait(100);
+    QVERIFY(!SecretStore::contains(key));
+    e.conn.close();
+
+    // A stored profile for the same target: its own entry wins over the target entry, which
+    // is not even tried (so it stays as it is).
+    QVERIFY(SecretStore::store(key, QStringLiteral("stale-password")));
+    SshProfile stored = p;
+    stored.id = QStringLiteral("e2e-adhoc-profile");
+    const QString profileKey = QStringLiteral("ssh/%1/password").arg(stored.id);
+    QVERIFY(SecretStore::store(profileKey, kServerPassword));
+    TestClient f(stored);
+    E2E_CONNECT(f);
+    QCOMPARE(f.prompts.size(), 0);
+    QCOMPARE(SecretStore::load(key).value_or(QString()), QStringLiteral("stale-password"));
+    f.conn.close();
+
+    // A profile without its own entry falls back to the target entry.
+    QVERIFY(SecretStore::remove(profileKey));
+    QVERIFY(SecretStore::store(key, kServerPassword));
+    TestClient g(stored);
+    E2E_CONNECT(g);
+    QCOMPARE(g.prompts.size(), 0);
+    g.conn.close();
+
+    // A remembered answer of a profile goes under its id, not under the target.
+    QVERIFY(SecretStore::remove(key));
+    TestClient h(stored);
+    h.rememberResponse = true;
+    E2E_CONNECT(h);
+    QCOMPARE(h.prompts.size(), 1);
+    QVERIFY(h.prompts.first().canRemember);
+    QCOMPARE(h.prompts.first().rememberTarget, p.displayTarget());
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(profileKey).value_or(QString()), kServerPassword, kE2eTimeoutMs);
+    QVERIFY(!SecretStore::contains(key));
+    h.conn.close();
+    QVERIFY(SecretStore::remove(profileKey));
+}
+
+void Tst_sshconnection::e2ePassphraseRememberedPerKey()
+{
+    const QString keyPath = m_dir.filePath(QStringLiteral("keyremember/id_enc"));
+    QDir().mkpath(QFileInfo(keyPath).absolutePath());
+    const QString passphrase = QStringLiteral("open-sesame");
+    QString publicLine;
+    QVERIFY(TestSshServer::generateClientKeyPair(keyPath, &publicLine, passphrase));
+
+    TestSshServer::Options options = serverOptions(QStringLiteral("keyremember"));
+    options.authorizedPublicKey = publicLine;
+    options.allowPassword = false;
+    TestSshServer first(options);
+    QVERIFY(first.start());
+    TestSshServer second(options);   // another target (port) that accepts the same key
+    QVERIFY(second.start());
+    QVERIFY(first.port() != second.port());
+
+    const QString normalized = QDir::cleanPath(QFileInfo(keyPath).absoluteFilePath());
+    const QString keySecret = QStringLiteral("ssh/key/%1/passphrase").arg(normalized);
+    QVERIFY(!SecretStore::contains(keySecret));
+
+    // Ad-hoc target one: the passphrase prompt is rememberable for the key file; "remember"
+    // stores it under the key path.
+    SshProfile p = serverProfile(first, QStringLiteral("keyremember"));
+    p.auth = SshProfile::Auth::PublicKey;
+    p.identityFile = keyPath;
+    TestClient c(p);
+    c.responses = {passphrase};
+    c.rememberResponse = true;
+    E2E_CONNECT(c);
+    QCOMPARE(c.prompts.size(), 1);
+    QCOMPARE(c.prompts.first().kind, SshConnection::PromptKind::Passphrase);
+    QVERIFY(c.prompts.first().canRemember);
+    QCOMPARE(c.prompts.first().rememberTarget, normalized);
+    QCOMPARE(c.prompts.first().keyFile, keyPath);
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(keySecret).value_or(QString()), passphrase, kE2eTimeoutMs);
+    c.conn.close();
+
+    // Ad-hoc target two with the same key: no prompt at all.
+    SshProfile q = serverProfile(second, QStringLiteral("keyremember2"));
+    q.auth = SshProfile::Auth::PublicKey;
+    q.identityFile = keyPath;
+    TestClient d(q);
+    E2E_CONNECT(d);
+    QCOMPARE(d.prompts.size(), 0);
+    QCOMPARE(d.conn.authMethod(), QStringLiteral("publickey"));
+    d.conn.close();
+
+    // A stored profile: its own entry wins over the key entry (the stale key entry is never
+    // tried and stays).
+    QVERIFY(SecretStore::store(keySecret, QStringLiteral("stale")));
+    SshProfile stored = p;
+    stored.id = QStringLiteral("e2e-key-profile");
+    const QString profileKey = QStringLiteral("ssh/%1/passphrase").arg(stored.id);
+    QVERIFY(SecretStore::store(profileKey, passphrase));
+    TestClient e(stored);
+    E2E_CONNECT(e);
+    QCOMPARE(e.prompts.size(), 0);
+    QCOMPARE(SecretStore::load(keySecret).value_or(QString()), QStringLiteral("stale"));
+    e.conn.close();
+
+    // The other way round: the stale profile entry is dropped, the key entry serves, no prompt.
+    QVERIFY(SecretStore::store(profileKey, QStringLiteral("stale")));
+    QVERIFY(SecretStore::store(keySecret, passphrase));
+    TestClient f(stored);
+    E2E_CONNECT(f);
+    QCOMPARE(f.prompts.size(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!SecretStore::contains(profileKey), kE2eTimeoutMs);
+    QCOMPARE(SecretStore::load(keySecret).value_or(QString()), passphrase);
+    f.conn.close();
+
+    // Both stale: both dropped, the prompt is attempt 3, and "remember" for a profile stores
+    // under the profile id AND the key path.
+    QVERIFY(SecretStore::store(profileKey, QStringLiteral("stale")));
+    QVERIFY(SecretStore::store(keySecret, QStringLiteral("stale-too")));
+    TestClient g(stored);
+    g.responses = {passphrase};
+    g.rememberResponse = true;
+    E2E_CONNECT(g);
+    QCOMPARE(g.prompts.size(), 1);
+    QCOMPARE(g.prompts.first().attempt, 3);
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(profileKey).value_or(QString()), passphrase, kE2eTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(SecretStore::load(keySecret).value_or(QString()), passphrase, kE2eTimeoutMs);
+    g.conn.close();
+    QVERIFY(SecretStore::remove(profileKey));
+    QVERIFY(SecretStore::remove(keySecret));
+}
+
+void Tst_sshconnection::e2eShellFallbackTransfers()
+{
+    // A dropbear-like server: the sftp subsystem is refused, so every transfer runs through
+    // exec channels (cat / wc / test / chmod / rm) - the same expectations as e2eSftpTransfers.
+    TestSshServer::Options options = serverOptions(QStringLiteral("shellxfer"));
+    options.allowSftp = false;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("shellxfer")));
+    E2E_CONNECT(c);
+    QSignalSpy started(&c.conn, &SshConnection::transferStarted);
+    QSignalSpy progress(&c.conn, &SshConnection::transferProgress);
+    QSignalSpy finished(&c.conn, &SshConnection::transferFinished);
+
+    const QByteArray payload = randomBytes(2 * 1024 * 1024);
+    const QString upPath = m_dir.filePath(QStringLiteral("shellxfer/local/up.bin"));
+    const QString downPath = m_dir.filePath(QStringLiteral("shellxfer/local/down.bin"));
+    QVERIFY(writeFile(upPath, payload));
+    const QString remoteName = QStringLiteral("it's up.bin");   // a quote in the name: shell quoting
+    const QString remoteFile = QDir(options.rootDir).filePath(remoteName);
+
+    // Upload 2 MiB with monotonic progress ending at the total; the method is "shell".
+    SshConnection::TransferRequest upload;
+    upload.direction = SshConnection::TransferDirection::Upload;
+    upload.localPath = upPath;
+    upload.remotePath = remoteName;
+    QVERIFY(c.conn.startTransfer(upload));
+    QVERIFY(c.conn.isTransferActive());
+    QVERIFY(!c.conn.startTransfer(upload));   // busy
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 60000);
+    QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+    QVERIFY(!c.conn.isTransferActive());
+    QCOMPARE(c.conn.transferStatus().method, QStringLiteral("shell"));
+    const QString uploadMessage = finished.at(0).at(1).toString();
+    QVERIFY2(uploadMessage.endsWith(QStringLiteral(", via shell)")), qPrintable(uploadMessage));
+    QVERIFY2(uploadMessage.startsWith(QStringLiteral("Uploaded up.bin to it's up.bin (")), qPrintable(uploadMessage));
+    QCOMPARE(started.count(), 1);
+    QCOMPARE(started.at(0).at(0).value<SshConnection::TransferRequest>().remotePath, remoteName);
+    QVERIFY(progress.count() >= 2);
+    qint64 previous = -1;
+    for (const QList<QVariant>& args : progress) {
+        const qint64 done = args.at(0).toLongLong();
+        QVERIFY2(done >= previous, qPrintable(QStringLiteral("%1 < %2").arg(done).arg(previous)));
+        QCOMPARE(args.at(1).toLongLong(), qint64(payload.size()));
+        previous = done;
+    }
+    QCOMPARE(previous, qint64(payload.size()));
+    QCOMPARE(c.conn.transferStatus().done, qint64(payload.size()));
+    QCOMPARE(readAll(remoteFile), payload);
+    QTRY_COMPARE_WITH_TIMEOUT(spy.sftp, 1, kE2eTimeoutMs);   // the probe, refused
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("cat > 'it'\\''s up.bin'")), kE2eTimeoutMs);
+    QVERIFY2(spy.execCommands.filter(QRegularExpression(QStringLiteral("^chmod [0-7]{3} 'it'\\\\''s up\\.bin'$"))).size() == 1,
+             qPrintable(spy.execCommands.join(QStringLiteral(" | "))));
+
+    // overwrite = false refuses an existing remote file (test -e).
+    upload.overwrite = false;
+    QVERIFY(c.conn.startTransfer(upload));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kE2eTimeoutMs);
+    QVERIFY(!finished.at(1).at(0).toBool());
+    QVERIFY2(finished.at(1).at(1).toString().contains(QStringLiteral("exists")), qPrintable(finished.at(1).at(1).toString()));
+    QCOMPARE(readAll(remoteFile), payload);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("test -e 'it'\\''s up.bin'")), kE2eTimeoutMs);
+
+    // Download it back byte-identical (wc -c for the size, then cat), no .part left behind.
+    SshConnection::TransferRequest download;
+    download.direction = SshConnection::TransferDirection::Download;
+    download.localPath = downPath;
+    download.remotePath = remoteName;
+    progress.clear();
+    QVERIFY(c.conn.startTransfer(download));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, 60000);
+    QVERIFY2(finished.at(2).at(0).toBool(), qPrintable(finished.at(2).at(1).toString()));
+    const QString downloadMessage = finished.at(2).at(1).toString();
+    QVERIFY2(downloadMessage.endsWith(QStringLiteral(", via shell)")), qPrintable(downloadMessage));
+    QCOMPARE(c.conn.transferStatus().method, QStringLiteral("shell"));
+    QCOMPARE(c.conn.transferStatus().total, qint64(payload.size()));
+    QVERIFY(QFileInfo::exists(downPath));
+    QVERIFY(!QFileInfo::exists(downPath + QStringLiteral(".part")));
+    QCOMPARE(readAll(downPath).size(), payload.size());
+    QCOMPARE(readAll(downPath), payload);
+    QVERIFY(progress.count() >= 2);
+    previous = -1;
+    for (const QList<QVariant>& args : progress) {
+        const qint64 done = args.at(0).toLongLong();
+        QVERIFY2(done >= previous, qPrintable(QStringLiteral("%1 < %2").arg(done).arg(previous)));
+        QCOMPARE(args.at(1).toLongLong(), qint64(payload.size()));
+        previous = done;
+    }
+    QCOMPARE(previous, qint64(payload.size()));
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("wc -c < 'it'\\''s up.bin'")), kE2eTimeoutMs);
+    QVERIFY(spy.execCommands.contains(QStringLiteral("cat 'it'\\''s up.bin'")));
+
+    // overwrite = false refuses an existing local file.
+    download.overwrite = false;
+    QVERIFY(c.conn.startTransfer(download));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, kE2eTimeoutMs);
+    QVERIFY(!finished.at(3).at(0).toBool());
+    QVERIFY2(finished.at(3).at(1).toString().contains(QStringLiteral("exists")), qPrintable(finished.at(3).at(1).toString()));
+
+    // A missing remote file gives a readable error (the shell's stderr) and leaves nothing local.
+    download.remotePath = QStringLiteral("does-not-exist.bin");
+    download.localPath = m_dir.filePath(QStringLiteral("shellxfer/local/missing.bin"));
+    QVERIFY(c.conn.startTransfer(download));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 5, kE2eTimeoutMs);
+    QVERIFY(!finished.at(4).at(0).toBool());
+    const QString missingMessage = finished.at(4).at(1).toString();
+    QVERIFY2(missingMessage.contains(QStringLiteral("does-not-exist.bin")), qPrintable(missingMessage));
+    QVERIFY2(missingMessage.contains(QStringLiteral("No such file"), Qt::CaseInsensitive), qPrintable(missingMessage));
+    QVERIFY(!QFileInfo::exists(download.localPath));
+    QVERIFY(!QFileInfo::exists(download.localPath + QStringLiteral(".part")));
+
+    // cancelTransfer(): a cancelled upload leaves no remote file (rm -f after the close), a
+    // cancelled download leaves no .part file.
+    SshConnection::TransferRequest cancelledUpload = upload;
+    cancelledUpload.overwrite = true;
+    cancelledUpload.remotePath = QStringLiteral("cancelled-up.bin");
+    QVERIFY(c.conn.startTransfer(cancelledUpload));
+    c.conn.cancelTransfer();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 6, kE2eTimeoutMs);
+    QVERIFY(!finished.at(5).at(0).toBool());
+    QVERIFY2(finished.at(5).at(1).toString().contains(QStringLiteral("cancel"), Qt::CaseInsensitive),
+             qPrintable(finished.at(5).at(1).toString()));
+    QVERIFY(!c.conn.isTransferActive());
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("rm -f 'cancelled-up.bin'")), kE2eTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(QDir(options.rootDir).filePath(QStringLiteral("cancelled-up.bin"))), kE2eTimeoutMs);
+    SshConnection::TransferRequest cancelledDownload;
+    cancelledDownload.direction = SshConnection::TransferDirection::Download;
+    cancelledDownload.localPath = m_dir.filePath(QStringLiteral("shellxfer/local/cancelled.bin"));
+    cancelledDownload.remotePath = remoteName;
+    QVERIFY(c.conn.startTransfer(cancelledDownload));
+    c.conn.cancelTransfer();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 7, kE2eTimeoutMs);
+    QVERIFY(!finished.at(6).at(0).toBool());
+    QVERIFY(!QFileInfo::exists(cancelledDownload.localPath));
+    QVERIFY(!QFileInfo::exists(cancelledDownload.localPath + QStringLiteral(".part")));
+
+    // A transfer while the shell keeps echoing.
+    c.received.clear();
+    SshConnection::TransferRequest during = upload;
+    during.overwrite = true;
+    during.remotePath = QStringLiteral("during.bin");
+    QVERIFY(c.conn.startTransfer(during));
+    c.conn.write(QByteArrayLiteral("echo DURING\r"));
+    QTRY_VERIFY2_WITH_TIMEOUT(c.received.contains("DURING\r\n$ "), c.received.constData(), kE2eTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 8, 60000);
+    QVERIFY2(finished.at(7).at(0).toBool(), qPrintable(finished.at(7).at(1).toString()));
+    QCOMPARE(readAll(QDir(options.rootDir).filePath(QStringLiteral("during.bin"))), payload);
+    c.received.clear();
+    c.conn.write(QByteArrayLiteral("echo AFTER\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(c.received.contains("AFTER\r\n$ "), kE2eTimeoutMs);
+
+    // A remote name starting with '-' is written as "./-name" so cat / rm / chmod do not read
+    // it as an option (and `cat -` does not read the channel's stdin, which never ends): upload,
+    // download and the cleanup of a cancelled upload.
+    const QString dashName = QStringLiteral("-dash.bin");
+    SshConnection::TransferRequest dashUp = upload;
+    dashUp.overwrite = true;
+    dashUp.remotePath = dashName;
+    QVERIFY(c.conn.startTransfer(dashUp));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 9, 60000);
+    QVERIFY2(finished.at(8).at(0).toBool(), qPrintable(finished.at(8).at(1).toString()));
+    QCOMPARE(readAll(QDir(options.rootDir).filePath(dashName)), payload);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral(": > './-dash.bin'")), kE2eTimeoutMs);
+    QVERIFY(spy.execCommands.contains(QStringLiteral("cat > './-dash.bin'")));
+    QVERIFY2(spy.execCommands.filter(QRegularExpression(QStringLiteral("^chmod [0-7]{3} '\\./-dash\\.bin'$"))).size() == 1,
+             qPrintable(spy.execCommands.join(QStringLiteral(" | "))));
+    SshConnection::TransferRequest dashDown;
+    dashDown.direction = SshConnection::TransferDirection::Download;
+    dashDown.localPath = m_dir.filePath(QStringLiteral("shellxfer/local/dash-down.bin"));
+    dashDown.remotePath = dashName;
+    QVERIFY(c.conn.startTransfer(dashDown));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 10, 60000);
+    QVERIFY2(finished.at(9).at(0).toBool(), qPrintable(finished.at(9).at(1).toString()));
+    QCOMPARE(readAll(dashDown.localPath), payload);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("wc -c < './-dash.bin'")), kE2eTimeoutMs);
+    QVERIFY(spy.execCommands.contains(QStringLiteral("cat './-dash.bin'")));
+    QVERIFY(c.conn.startTransfer(dashUp));
+    c.conn.cancelTransfer();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 11, kE2eTimeoutMs);
+    QVERIFY(!finished.at(10).at(0).toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("rm -f './-dash.bin'")), kE2eTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(QDir(options.rootDir).filePath(dashName)), kE2eTimeoutMs);
+
+    // The remote home comes from `pwd` over an exec channel.
+    QSignalSpy home(&c.conn, &SshConnection::remoteHomeReceived);
+    c.conn.requestRemoteHome();
+    QTRY_COMPARE_WITH_TIMEOUT(home.count(), 1, kE2eTimeoutMs);
+    const QString path = home.at(0).at(0).toString();
+    QVERIFY2(!path.isEmpty(), "remote home is empty");
+    QCOMPARE(QFileInfo(path).canonicalFilePath(), QFileInfo(options.rootDir).canonicalFilePath());
+    QCOMPARE(c.conn.remoteHome(), path);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("pwd")), kE2eTimeoutMs);
+
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
+    QCOMPARE(spy.sftp, 1);   // probed exactly once per session
+    c.conn.close();
+    QVERIFY(!c.conn.isTransferActive());
+}
+
+void Tst_sshconnection::e2eShellFallbackRemoteHome()
+{
+    // The remote home over the fallback (`pwd` on an exec channel) and the SFTP probe: refused
+    // once, the session never asks again; a new session probes anew.
+    TestSshServer::Options options = serverOptions(QStringLiteral("shellhome"));
+    options.allowSftp = false;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("shellhome")));
+    E2E_CONNECT(c);
+    QSignalSpy home(&c.conn, &SshConnection::remoteHomeReceived);
+    c.conn.requestRemoteHome();
+    QTRY_COMPARE_WITH_TIMEOUT(home.count(), 1, kE2eTimeoutMs);
+    QCOMPARE(QFileInfo(home.at(0).at(0).toString()).canonicalFilePath(), QFileInfo(options.rootDir).canonicalFilePath());
+    QTRY_COMPARE_WITH_TIMEOUT(spy.sftp, 1, kE2eTimeoutMs);
+    c.conn.requestRemoteHome();
+    QTRY_COMPARE_WITH_TIMEOUT(home.count(), 2, kE2eTimeoutMs);
+    QCOMPARE(spy.sftp, 1);   // not probed again within the session
+    c.conn.close();
+
+    // A new session probes again.
+    E2E_CONNECT(c);
+    c.conn.requestRemoteHome();
+    QTRY_COMPARE_WITH_TIMEOUT(home.count(), 3, kE2eTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(spy.sftp, 2, kE2eTimeoutMs);
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    c.conn.close();
+}
+
+void Tst_sshconnection::e2eShellFallbackFailedUploadRemoved()
+{
+    // SshConnection.h: a shell upload that fails - here `cat > 'p'` ending with "No space left
+    // on device" after part of the data - removes the truncated remote file on the live link,
+    // exactly like a cancel does, so nothing that looks complete is left on the board; the
+    // failure names cat's reason. A file that cannot be created fails at the `: > 'p'` probe
+    // and is never touched.
+    TestSshServer::Options options = serverOptions(QStringLiteral("shellfull"));
+    options.allowSftp = false;
+    options.execUploadLimit = 300 * 1024;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("shellfull")));
+    E2E_CONNECT(c);
+    QSignalSpy finished(&c.conn, &SshConnection::transferFinished);
+    const QByteArray payload = randomBytes(1024 * 1024);
+    const QString upPath = m_dir.filePath(QStringLiteral("shellfull/local/up.bin"));
+    QVERIFY(writeFile(upPath, payload));
+    const QString remoteFile = QDir(options.rootDir).filePath(QStringLiteral("full.bin"));
+
+    SshConnection::TransferRequest upload;
+    upload.direction = SshConnection::TransferDirection::Upload;
+    upload.localPath = upPath;
+    upload.remotePath = QStringLiteral("full.bin");
+    QVERIFY(c.conn.startTransfer(upload));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 60000);
+    QVERIFY(!finished.at(0).at(0).toBool());
+    const QString message = finished.at(0).at(1).toString();
+    QVERIFY2(message.startsWith(QStringLiteral("Upload to full.bin failed: ")), qPrintable(message));
+    QVERIFY2(message.contains(QStringLiteral("No space left on device")), qPrintable(message));
+    QVERIFY(!c.conn.isTransferActive());
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("rm -f 'full.bin'")), kE2eTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(remoteFile), kE2eTimeoutMs);
+    // The order of the commands: the truncation probe, the data command, the removal.
+    const qsizetype probe = spy.execCommands.indexOf(QStringLiteral(": > 'full.bin'"));
+    const qsizetype data = spy.execCommands.indexOf(QStringLiteral("cat > 'full.bin'"));
+    const qsizetype removal = spy.execCommands.indexOf(QStringLiteral("rm -f 'full.bin'"));
+    QVERIFY2(probe >= 0 && probe < data && data < removal, qPrintable(spy.execCommands.join(QStringLiteral(" | "))));
+
+    // A path that cannot be written: refused by the probe with the shell's reason, no data
+    // command, nothing to remove.
+    upload.remotePath = QStringLiteral("missing-dir/full.bin");
+    QVERIFY(c.conn.startTransfer(upload));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kE2eTimeoutMs);
+    QVERIFY(!finished.at(1).at(0).toBool());
+    const QString refused = finished.at(1).at(1).toString();
+    QVERIFY2(refused.startsWith(QStringLiteral("Cannot create remote file missing-dir/full.bin: ")), qPrintable(refused));
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral(": > 'missing-dir/full.bin'")), kE2eTimeoutMs);
+    QVERIFY(!spy.execCommands.contains(QStringLiteral("cat > 'missing-dir/full.bin'")));
+    QVERIFY(!spy.execCommands.contains(QStringLiteral("rm -f 'missing-dir/full.bin'")));
+    QVERIFY(!c.conn.isTransferActive());
+
+    // The link is alive and the shell still answers.
+    c.received.clear();
+    c.conn.write(QByteArrayLiteral("echo STILL\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(c.received.contains("STILL\r\n$ "), kE2eTimeoutMs);
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
+    c.conn.close();
+}
+
+void Tst_sshconnection::e2eShellFallbackUploadWithoutExitStatus()
+{
+    // SshConnection.h: a server that ends an exec channel without an exit status (EOF + close
+    // only). Transfer::done counts what the channel accepted, not what cat wrote, so the upload
+    // is confirmed by `wc -c` against the local size before it is called a success; a download
+    // was always counted against wc. On a full disk the failure is reported and the file removed.
+    TestSshServer::Options options = serverOptions(QStringLiteral("shellnostatus"));
+    options.allowSftp = false;
+    options.sendExecExitStatus = false;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("shellnostatus")));
+    E2E_CONNECT(c);
+    QSignalSpy finished(&c.conn, &SshConnection::transferFinished);
+    const QByteArray payload = randomBytes(256 * 1024 + 17);
+    const QString upPath = m_dir.filePath(QStringLiteral("shellnostatus/local/up.bin"));
+    QVERIFY(writeFile(upPath, payload));
+    const QString remoteFile = QDir(options.rootDir).filePath(QStringLiteral("nostatus.bin"));
+
+    SshConnection::TransferRequest upload;
+    upload.direction = SshConnection::TransferDirection::Upload;
+    upload.localPath = upPath;
+    upload.remotePath = QStringLiteral("nostatus.bin");
+    QVERIFY(c.conn.startTransfer(upload));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 60000);
+    QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+    QVERIFY2(finished.at(0).at(1).toString().endsWith(QStringLiteral(", via shell)")), qPrintable(finished.at(0).at(1).toString()));
+    QCOMPARE(readAll(remoteFile), payload);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("wc -c < 'nostatus.bin'")), kE2eTimeoutMs);
+    QVERIFY(spy.execCommands.indexOf(QStringLiteral("cat > 'nostatus.bin'")) <
+            spy.execCommands.indexOf(QStringLiteral("wc -c < 'nostatus.bin'")));
+    QVERIFY(!spy.execCommands.contains(QStringLiteral("rm -f 'nostatus.bin'")));
+
+    SshConnection::TransferRequest download;
+    download.direction = SshConnection::TransferDirection::Download;
+    download.localPath = m_dir.filePath(QStringLiteral("shellnostatus/local/down.bin"));
+    download.remotePath = QStringLiteral("nostatus.bin");
+    QVERIFY(c.conn.startTransfer(download));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 60000);
+    QVERIFY2(finished.at(1).at(0).toBool(), qPrintable(finished.at(1).at(1).toString()));
+    QCOMPARE(readAll(download.localPath), payload);
+    QVERIFY(!QFileInfo::exists(download.localPath + QStringLiteral(".part")));
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
+    c.conn.close();
+
+    // The same server on a full disk: cat's stderr names the reason although no status came,
+    // and the truncated file is removed.
+    TestSshServer::Options full = serverOptions(QStringLiteral("shellnostatusfull"));
+    full.allowSftp = false;
+    full.sendExecExitStatus = false;
+    full.execUploadLimit = 100 * 1024;
+    TestSshServer fullServer(full);
+    QVERIFY(fullServer.start());
+    ServerSpy fullSpy(&fullServer);
+    TestClient d(serverProfile(fullServer, QStringLiteral("shellnostatusfull")));
+    E2E_CONNECT(d);
+    QSignalSpy fullFinished(&d.conn, &SshConnection::transferFinished);
+    QVERIFY(d.conn.startTransfer(upload));
+    QTRY_COMPARE_WITH_TIMEOUT(fullFinished.count(), 1, 60000);
+    QVERIFY(!fullFinished.at(0).at(0).toBool());
+    const QString failure = fullFinished.at(0).at(1).toString();
+    QVERIFY2(failure.contains(QStringLiteral("No space left on device")), qPrintable(failure));
+    QTRY_VERIFY_WITH_TIMEOUT(fullSpy.execCommands.contains(QStringLiteral("rm -f 'nostatus.bin'")), kE2eTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(QDir(full.rootDir).filePath(QStringLiteral("nostatus.bin"))), kE2eTimeoutMs);
+    QCOMPARE(d.lost, 0);
+    d.conn.close();
+}
+
+void Tst_sshconnection::e2eCloseDuringUploadRemovesRemote()
+{
+    // SshConnection.h: close() during an upload reports it at once with transferFinished(false,
+    // "Transfer aborted: the connection was closed") - the worker's own report belongs to the
+    // generation that was closed and is dropped - and the worker still removes the incomplete
+    // remote file on the live link, through SFTP and through the shell fallback alike.
+    for (const bool sftp : {true, false}) {
+        const QString name = sftp ? QStringLiteral("closesftp") : QStringLiteral("closeshell");
+        TestSshServer::Options options = serverOptions(name);
+        options.allowSftp = sftp;
+        TestSshServer server(options);
+        QVERIFY(server.start());
+        ServerSpy spy(&server);
+        TestClient c(serverProfile(server, name));
+        E2E_CONNECT(c);
+        const QByteArray payload = randomBytes(24 * 1024 * 1024);
+        const QString upPath = m_dir.filePath(name + QStringLiteral("/local/up.bin"));
+        QVERIFY(writeFile(upPath, payload));
+        const QString remoteFile = QDir(options.rootDir).filePath(QStringLiteral("closed.bin"));
+        QSignalSpy started(&c.conn, &SshConnection::transferStarted);
+        QSignalSpy finished(&c.conn, &SshConnection::transferFinished);
+
+        SshConnection::TransferRequest upload;
+        upload.direction = SshConnection::TransferDirection::Upload;
+        upload.localPath = upPath;
+        upload.remotePath = QStringLiteral("closed.bin");
+        QVERIFY(c.conn.startTransfer(upload));
+        QTRY_COMPARE_WITH_TIMEOUT(started.count(), 1, kE2eTimeoutMs);
+        QVERIFY2(c.conn.isTransferActive(), sftp ? "sftp" : "shell");
+        QCOMPARE(c.conn.transferStatus().method, sftp ? QStringLiteral("sftp") : QStringLiteral("shell"));
+        c.conn.close();
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(!finished.at(0).at(0).toBool());
+        QCOMPARE(finished.at(0).at(1).toString(), QStringLiteral("Transfer aborted: the connection was closed"));
+        QVERIFY(!c.conn.isTransferActive());
+        QCOMPARE(c.conn.state(), Transport::State::Disconnected);
+        QTRY_COMPARE_WITH_TIMEOUT(server.activeConnections(), 0, kE2eTimeoutMs);
+        QTRY_VERIFY2_WITH_TIMEOUT(!QFileInfo::exists(remoteFile), sftp ? "sftp left the file" : "shell left the file",
+                                  kE2eTimeoutMs);
+        if (!sftp) {
+            QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("rm -f 'closed.bin'")), kE2eTimeoutMs);
+        }
+        QTest::qWait(200);
+        QCOMPARE(finished.count(), 1);   // the worker's report for the closed generation was dropped
+        QCOMPARE(c.lost, 0);
+    }
+}
+
 void Tst_sshconnection::probeShellResizeAndSftp()
 {
     const ProbeEnv env = probeEnv();
@@ -2071,7 +2763,8 @@ void Tst_sshconnection::probeShellResizeAndSftp()
         QCOMPARE(s.prompts.first().kind, SshConnection::PromptKind::Password);
         QCOMPARE(s.prompts.first().attempt, 1);
         QCOMPARE(s.prompts.first().user, env.profile.user);
-        QVERIFY(!s.prompts.first().canRemember);       // ad-hoc profile without id
+        QVERIFY(s.prompts.first().canRemember);        // ad-hoc: remembered under the target
+        QCOMPARE(s.prompts.first().rememberTarget, env.profile.displayTarget());
         QCOMPARE(s.conn.authMethod(), QStringLiteral("password"));
     }
 
@@ -2398,6 +3091,58 @@ void Tst_sshconnection::probeRemoteExit()
     QCOMPARE(s.states, QList<Transport::State>({Transport::State::Connecting, Transport::State::Connected,
                                                 Transport::State::Disconnected}));
     QVERIFY(!s.states.contains(Transport::State::Reconnecting));
+}
+
+void Tst_sshconnection::probeAdHocRemember()
+{
+    // Ad-hoc remember round trip against the real sshd: the password answered with "remember"
+    // lands under the target key (in this suite's isolated settings), the next session asks
+    // nothing, and the entry is removed at the end. The value is never printed.
+    const ProbeEnv env = probeEnv();
+    if (!env.enabled) {
+        QSKIP(kSkipMessage);
+    }
+    if (env.password.isEmpty()) {
+        QSKIP("SU_SSH_PROBE_PASSWORD not set");
+    }
+    const QString key = QStringLiteral("ssh/target/%1/password").arg(env.profile.displayTarget());
+    SecretStore::remove(key);
+    QVERIFY(!SecretStore::contains(key));
+    {
+        ProbeSession s(env, m_dir.filePath(QStringLiteral("probe/known_hosts_remember")));
+        s.rememberResponse = true;
+        s.apply();
+        QVERIFY(s.conn.open());
+        QTRY_COMPARE_WITH_TIMEOUT(s.conn.state(), Transport::State::Connected, 40000);
+        QCOMPARE(s.prompts.size(), 1);
+        QVERIFY(s.prompts.first().canRemember);
+        QCOMPARE(s.prompts.first().rememberTarget, env.profile.displayTarget());
+        QTRY_VERIFY_WITH_TIMEOUT(SecretStore::load(key).value_or(QString()) == env.password, 15000);
+        s.conn.close();
+    }
+    {
+        ProbeSession t(env, m_dir.filePath(QStringLiteral("probe/known_hosts_remember")));
+        t.apply();
+        QVERIFY(t.conn.open());
+        QTRY_COMPARE_WITH_TIMEOUT(t.conn.state(), Transport::State::Connected, 40000);
+        QCOMPARE(t.prompts.size(), 0);
+        QCOMPARE(t.conn.authMethod(), QStringLiteral("password"));
+        QVERIFY2(t.errors.isEmpty(), qPrintable(t.errors.join(QStringLiteral(" | "))));
+        t.conn.close();
+    }
+    // A stale entry is dropped and the prompt comes back as attempt 2.
+    QVERIFY(SecretStore::store(key, QStringLiteral("definitely-stale")));
+    {
+        ProbeSession u(env, m_dir.filePath(QStringLiteral("probe/known_hosts_remember")));
+        u.apply();
+        QVERIFY(u.conn.open());
+        QTRY_COMPARE_WITH_TIMEOUT(u.conn.state(), Transport::State::Connected, 40000);
+        QCOMPARE(u.prompts.size(), 1);
+        QCOMPARE(u.prompts.first().attempt, 2);
+        QTRY_VERIFY_WITH_TIMEOUT(!SecretStore::contains(key), 15000);
+        u.conn.close();
+    }
+    QVERIFY(!SecretStore::contains(key));
 }
 
 QTEST_GUILESS_MAIN(Tst_sshconnection)

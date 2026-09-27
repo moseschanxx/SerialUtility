@@ -15,6 +15,7 @@
 
 #include "app/AppSettings.h"
 #include "app/Logging.h"
+#include "core/BaudRateDetector.h"
 #include "core/CommandHistory.h"
 #include "core/HexUtils.h"
 #include "core/LineEnding.h"
@@ -38,6 +39,8 @@ namespace {
 
 constexpr int kStatusShortMs = 3000;
 constexpr int kStatusLongMs = 5000;
+constexpr int kWatchdogQuietMs = 5000;            ///< BaudRateDetector::setQuietMs() and the re-detection bound
+constexpr qsizetype kMaxDetectSampleBytes = 512 * 1024;   ///< bytes kept for the replay of the winning candidate
 
 const QLatin1String kProfileKeyPrefix("ssh:profile:");
 const QLatin1String kTargetKeyPrefix("ssh:target:");
@@ -78,8 +81,12 @@ void SessionWidget::init(SshProfileStore* profiles)
     } else {
         m_connection = new SerialConnection(this);
         m_transport = m_connection;
+        m_baudDetector = new BaudRateDetector(this);
+        m_baudDetector->setConnection(m_connection);
+        m_baudDetector->setQuietMs(kWatchdogQuietMs);
     }
     m_logger = new SessionLogger(this);
+    m_clock.start();
 
     setupUi();
 
@@ -104,7 +111,9 @@ void SessionWidget::init(SshProfileStore* profiles)
     }
 
     // ---- Transport -> views / logger ----------------------------------------------------
-    connect(m_transport, &Transport::dataReceived, m_terminal, &TerminalWidget::feedData);
+    // The terminal is fed through onDataReceived() so a running baud-rate detection can mute it
+    // (and feed the watchdog); the hex view and the logger always get every byte.
+    connect(m_transport, &Transport::dataReceived, this, &SessionWidget::onDataReceived);
     connect(m_transport, &Transport::dataReceived, m_hexView, &HexDumpView::appendReceived);
     connect(m_transport, &Transport::dataReceived, m_logger, &SessionLogger::logReceived);
     connect(m_transport, &Transport::dataSent, m_hexView, &HexDumpView::appendSent);
@@ -116,6 +125,30 @@ void SessionWidget::init(SshProfileStore* profiles)
     connect(m_transport, &Transport::countersChanged, this, &SessionWidget::countersChanged);
     if (m_connection) {
         connect(m_connection, &SerialConnection::pinsChanged, m_bar, &ConnectionBar::setPinStates);
+    }
+
+    // ---- Baud-rate detection (serial only) ---------------------------------------------
+    if (m_baudDetector) {
+        connect(m_baudDetector, &BaudRateDetector::started, this, [this](qint32 originalBaud) {
+            m_lastTriedBaud = originalBaud;
+            m_detectSample.clear();
+            emit statusMessage(tr("Trying %1...").arg(originalBaud), kStatusLongMs);
+        });
+        connect(m_baudDetector, &BaudRateDetector::candidateTried, this,
+                [this](qint32 baud, double score, int bytes) {
+                    qCInfo(lcSerial) << m_connection->portName() << "baud" << baud << "scored" << score << "on"
+                                     << bytes << "bytes";
+                    // currentCandidate() already names the next candidate (0 when the search ends,
+                    // possibly with `baud` as the winner: its bytes are kept for the replay).
+                    const qint32 next = m_baudDetector->currentCandidate();
+                    if (next != 0) {
+                        m_lastTriedBaud = next;
+                        m_detectSample.clear();
+                        emit statusMessage(tr("Trying %1...").arg(next), kStatusLongMs);
+                    }
+                });
+        connect(m_baudDetector, &BaudRateDetector::finished, this, &SessionWidget::onBaudDetectionFinished);
+        connect(m_baudDetector, &BaudRateDetector::garbageDetected, this, &SessionWidget::onGarbageDetected);
     }
 
     // ---- Terminal -----------------------------------------------------------------------
@@ -230,6 +263,12 @@ SessionWidget::~SessionWidget()
     }
     if (m_replayer) {
         disconnect(m_replayer, nullptr, this, nullptr);
+    }
+    if (m_baudDetector) {
+        // cancel() restores the rate on the still-alive connection; its finished() must not reach
+        // the half-destroyed widget.
+        disconnect(m_baudDetector, nullptr, this, nullptr);
+        m_baudDetector->cancel();
     }
     // The transfer dialog watches the SSH connection: take it down before the connection goes.
     delete m_remoteFileDialog;
@@ -507,6 +546,7 @@ void SessionWidget::applyPreferences()
 
     m_transport->setAutoReconnect(s.autoReconnect());
     m_transport->setReconnectIntervalMs(s.reconnectIntervalMs());
+    m_watchdogEnabled = s.autoBaudWatchdog();
 
     if (!m_preferencesApplied) {
         // Seed the line-mode input once; afterwards the combo belongs to the user.
@@ -557,7 +597,11 @@ bool SessionWidget::connectSerial()
     AppSettings::instance().setLastPortName(settings.portName);
     emit statusMessage(tr("Connected to %1 (%2)").arg(settings.portName, settings.summary()), kStatusShortMs);
 
-    startAutoLog(settings.portName);
+    // "Auto": find the rate first; the auto-log then starts with the detected rate in its header
+    // (onBaudDetectionFinished()). Should the detection not start, the log starts here as usual.
+    if (!(settings.autoBaud && startBaudDetection(DetectReason::Connect))) {
+        startAutoLog(settings.portName);
+    }
 
     focusTerminal();
     return true;
@@ -1008,14 +1052,47 @@ void SessionWidget::onConnectionRestored(const QString& name)
     emit statusMessage(tr("Reconnected to %1").arg(name), kStatusShortMs);
 }
 
-void SessionWidget::onBarSettingsChanged(const SerialSettings& settings)
+void SessionWidget::onBarSettingsChanged(const SerialSettings& barSettings)
 {
+    SerialSettings settings = barSettings;
+    const bool wasAuto = m_connection->settings().autoBaud;
+    if (isDetectingBaud()) {
+        // The bar re-emits its settings on focus changes (connecting disables the port combo,
+        // which moves the focus to the baud edit; focusTerminal() then ends its editing; a port
+        // list change resets its duplicate filter): a repeat must not disturb the search. The
+        // connection's rate is the candidate being tried right now, so the comparison is made
+        // against the settings the search started from; while "Auto" runs the effective rate
+        // the bar reports is not a difference either.
+        SerialSettings wanted = settings;
+        if (wanted.autoBaud && m_detectStartSettings.autoBaud) {
+            wanted.baudRate = m_detectStartSettings.baudRate;
+        }
+        if (wanted == m_detectStartSettings) {
+            return;
+        }
+        // The user's explicit choice wins over a search in progress (cancel() restores the
+        // original rate first; the new settings are applied right after).
+        m_detectCancelled = true;
+        m_baudDetector->cancel();
+    }
+    if (settings.autoBaud && !wasAuto && m_connection->isOpen()) {
+        // A fixed rate switched to "Auto" while connected: the search below starts from the
+        // rate in use (tried first, and what a search on a quiet device keeps), not from the
+        // bar's stale effective rate - the session was readable at 9600 a moment ago and must
+        // not end up at 115200 because the board happened to be idle.
+        settings.baudRate = m_connection->settings().baudRate;
+        m_bar->setEffectiveBaudRate(settings.baudRate);
+    }
     m_connection->setSettings(settings); // applied live while open (port name only at next open)
     const SerialSettings accepted = m_connection->settings();
     if (accepted != settings) {
         m_bar->setSettings(accepted);   // a driver-rejected value snaps the combo back; emits nothing
     }
     emit titleChanged(title());
+    if (accepted.autoBaud && !wasAuto && m_connection->isOpen()) {
+        // Switched to "Auto" while connected: find the rate now (the log, if any, is already running).
+        startBaudDetection(DetectReason::Manual);
+    }
 }
 
 void SessionWidget::onPortsChanged(const QList<SerialPortEntry>& ports)
@@ -1305,6 +1382,151 @@ bool SessionWidget::askReplaySpeed(qint64& bytesPerSecond)
     const qsizetype index = labels.indexOf(chosen);
     bytesPerSecond = index >= 0 ? speeds.at(index).second : 11520;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Automatic baud-rate detection (core/BaudRateDetector.h)
+// ---------------------------------------------------------------------------
+
+bool SessionWidget::isDetectingBaud() const
+{
+    return m_baudDetector && m_baudDetector->isRunning();
+}
+
+void SessionWidget::detectBaudRate()
+{
+    if (isSsh()) {
+        emit statusMessage(tr("Not available for SSH sessions"), kStatusShortMs);
+        return;
+    }
+    if (!m_connection->isOpen()) {
+        emit statusMessage(tr("Not connected"), kStatusShortMs);
+        return;
+    }
+    if (isDetectingBaud()) {
+        emit statusMessage(tr("Baud rate detection is already running"), kStatusShortMs);
+        return;
+    }
+    startBaudDetection(DetectReason::Manual);
+}
+
+bool SessionWidget::startBaudDetection(DetectReason reason)
+{
+    if (!m_baudDetector || !m_connection->isOpen() || m_baudDetector->isRunning()) {
+        return false;
+    }
+    if (m_sendFileDialog && m_sendFileDialog->isSending()) {
+        // The candidates would be tried on the file's bytes as they leave the port: the board
+        // would receive the rest of the file at the wrong rates. The send finishes first.
+        qCInfo(lcSerial) << "baud rate detection not started on" << m_connection->portName()
+                         << ": a file is being sent";
+        if (reason != DetectReason::Watchdog) {
+            emit statusMessage(tr("Cannot detect the baud rate while a file is being sent"), kStatusShortMs);
+        }
+        return false;
+    }
+    const AppSettings& s = AppSettings::instance();
+    m_baudDetector->setConnection(m_connection);
+    m_baudDetector->setCandidates(s.autoBaudCandidates());
+    m_baudDetector->setSampleMs(s.autoBaudSampleMs());
+    m_detectReason = reason;
+    m_detectCancelled = false;
+    m_detectStartSettings = m_connection->settings();
+    m_detectSample.clear();
+    m_lastTriedBaud = 0;
+
+    writeSystemLine(reason == DetectReason::Watchdog ? tr("output unreadable, re-detecting baud rate")
+                                                     : tr("detecting baud rate"));
+    m_terminalMuted = true;
+    if (!m_baudDetector->start()) {
+        m_terminalMuted = false;
+        qCWarning(lcSerial) << "baud rate detection could not start on" << m_connection->portName();
+        emit statusMessage(tr("Cannot detect the baud rate now"), kStatusShortMs);
+        return false;
+    }
+    return true;
+}
+
+void SessionWidget::onDataReceived(const QByteArray& bytes)
+{
+    if (m_terminalMuted) {
+        // Kept for the replay if this candidate wins (bounded: a boot log at 1.5 Mbaud is fast).
+        if (m_detectSample.size() < kMaxDetectSampleBytes) {
+            m_detectSample += bytes;
+        }
+        return;
+    }
+    m_terminal->feedData(bytes);
+    if (m_baudDetector && m_watchdogEnabled && m_connection->settings().autoBaud) {
+        m_baudDetector->feed(bytes);   // ignored by the detector while a search runs
+    }
+}
+
+void SessionWidget::onGarbageDetected(double score)
+{
+    if (!m_connection->isOpen() || isDetectingBaud() || !m_connection->settings().autoBaud) {
+        return;
+    }
+    const qint64 now = m_clock.elapsed();
+    if (m_lastWatchdogDetectMs >= 0 && now - m_lastWatchdogDetectMs < kWatchdogQuietMs) {
+        qCDebug(lcSerial) << m_connection->portName() << "unreadable output (score" << score
+                          << ") - re-detection skipped, last one" << (now - m_lastWatchdogDetectMs) << "ms ago";
+        return;
+    }
+    qCInfo(lcSerial) << m_connection->portName() << "output unreadable (score" << score << "), re-detecting the baud rate";
+    m_lastWatchdogDetectMs = now;
+    startBaudDetection(DetectReason::Watchdog);
+}
+
+void SessionWidget::onBaudDetectionFinished(bool found, qint32 baud, double score)
+{
+    m_terminalMuted = false;
+    m_baudDetector->resetWatchdog();
+    const QByteArray sample = m_detectSample;
+    m_detectSample.clear();
+    const bool cancelled = m_detectCancelled || !m_connection->isOpen();
+    m_detectCancelled = false;
+
+    if (cancelled) {
+        qCInfo(lcSerial) << "baud rate detection on" << m_connection->portName() << "cancelled";
+        writeSystemLine(tr("baud rate detection cancelled"));
+        emit statusMessage(tr("Baud rate detection cancelled"), kStatusShortMs);
+        if (m_detectReason == DetectReason::Connect && m_connection->isOpen()) {
+            startAutoLog(m_connection->portName());   // the connect's auto-log was waiting for the rate
+        }
+        return;
+    }
+
+    const SerialSettings accepted = m_connection->settings();   // the detector applied / restored the rate
+    if (found) {
+        if (accepted.autoBaud) {
+            m_bar->setEffectiveBaudRate(baud);   // the combo keeps "Auto"; tooltips and summary show the rate
+        } else {
+            m_bar->setSettings(accepted);        // a manual detection on a fixed rate: the new fixed rate
+        }
+        writeSystemLine(tr("baud rate %1 detected").arg(baud));
+        emit statusMessage(tr("Baud rate %1 detected (%2)").arg(baud).arg(accepted.summary()), kStatusLongMs);
+    } else {
+        writeSystemLine(tr("no readable output at any baud rate, keeping %1").arg(accepted.baudRate));
+        emit statusMessage(score > 0.0 ? tr("No readable output at any baud rate, keeping %1").arg(accepted.baudRate)
+                                       : tr("No output from the device, keeping %1").arg(accepted.baudRate),
+                           kStatusLongMs);
+    }
+
+    // The auto-log of an "Auto" connect was held back so its header carries the detected rate.
+    const bool logWasActive = m_logger->isActive();
+    if (m_detectReason == DetectReason::Connect) {
+        startAutoLog(m_connection->portName());
+    }
+    // What the device sent at the winning rate is shown now (it was muted), in order, and logged
+    // if the log started just now (an already active log received it live).
+    if (found && baud == m_lastTriedBaud && !sample.isEmpty()) {
+        m_terminal->feedData(sample);
+        if (!logWasActive && m_logger->isActive()) {
+            m_logger->logReceived(sample);
+        }
+    }
+    emit titleChanged(title());   // MainWindow re-reads transport()->summary() for its status bar
 }
 
 #undef SU_LC

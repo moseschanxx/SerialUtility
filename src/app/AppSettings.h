@@ -5,6 +5,8 @@
 #include <QString>
 #include <QStringList>
 #include <QByteArray>
+#include <QKeySequence>
+#include <QList>
 
 #include "core/LineEnding.h"
 #include "core/SerialConnection.h"
@@ -110,6 +112,28 @@ public:
     void setSshDefaultIdentityFile(const QString& path);
     QString lastSshTarget() const;            ///< restore key of the last connected SSH tab; default ""
     void setLastSshTarget(const QString& key);
+
+    // ---- Keyboard shortcuts (Preferences > Keyboard) --------------------------------
+    /// The user's shortcut for a MainWindow action (its objectName, e.g. "actionCloseSession"),
+    /// or `fallback` (the .ui default) when none is stored. Stored as QKeySequence portable text
+    /// under "shortcuts/<actionName>"; an empty stored sequence means "no shortcut".
+    QKeySequence shortcut(const QString& actionName, const QKeySequence& fallback) const;
+    void setShortcut(const QString& actionName, const QKeySequence& sequence);   ///< emits changed("shortcuts/<name>")
+    void clearShortcut(const QString& actionName);                              ///< back to the default
+    QStringList customizedShortcutActions() const;                              ///< action names with a stored value
+
+    // ---- Automatic baud-rate detection (Preferences > Connection) --------------------
+    /// Candidates tried by BaudRateDetector, in order; default 115200, 1500000, 921600, 460800,
+    /// 230400, 57600, 38400, 19200, 9600 (key "connection/autoBaudCandidates", comma list).
+    QList<qint32> autoBaudCandidates() const;
+    void setAutoBaudCandidates(const QList<qint32>& candidates);   ///< empty -> default list
+    static QList<qint32> defaultAutoBaudCandidates();
+    int autoBaudSampleMs() const;             ///< listening time per candidate; default 1500, clamp 300..10000
+    void setAutoBaudSampleMs(int ms);
+    /// While a session runs with the "Auto" baud rate, re-run the detection when the incoming
+    /// bytes stop looking like text (the board switched rates). Default true.
+    bool autoBaudWatchdog() const;
+    void setAutoBaudWatchdog(bool on);
 
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()

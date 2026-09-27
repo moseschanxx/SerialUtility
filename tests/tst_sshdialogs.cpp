@@ -23,6 +23,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMap>
+#include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
@@ -199,6 +201,8 @@ private slots:
     void authMaskedAndShowToggle();
     void authEchoPrompt();
     void authRememberVisibility();
+    void authRememberLabels_data();
+    void authRememberLabels();
     void authAttemptLabel();
     void authEnterAccepts();
     void authEscapeRejects();
@@ -224,6 +228,11 @@ private slots:
     void remotePathsPersist();
     void remoteRestoredPathsAreDerived();
     void remoteRetranslate();
+    void remoteMethodTexts();
+    void remoteRequestNormalisation();
+    void remoteAcceleratorsUnique();
+    void remoteHomeUnresolved();
+    void remoteErrorLineSurvivesDisconnect();
 
 private:
     std::unique_ptr<SshProfileStore> newStore();
@@ -927,7 +936,7 @@ void Tst_sshdialogs::authRememberVisibility()
 {
     {
         SshConnection::AuthPrompt prompt = authPrompt();
-        prompt.canRemember = false;   // ad-hoc target: no profile id to store under
+        prompt.canRemember = false;   // the connection has nowhere to store the answer
         AuthPromptDialog dialog(prompt);
         QVERIFY(expose(&dialog));
         QVERIFY(!child<QCheckBox>(&dialog, "checkRemember")->isVisible());
@@ -935,12 +944,12 @@ void Tst_sshdialogs::authRememberVisibility()
         QVERIFY(!dialog.remember());
     }
     {
-        AuthPromptDialog dialog(authPrompt());
+        AuthPromptDialog dialog(authPrompt());   // canRemember, no rememberTarget: the headline target
         QVERIFY(expose(&dialog));
         auto* remember = child<QCheckBox>(&dialog, "checkRemember");
         auto* note = child<QLabel>(&dialog, "labelNote");
         QVERIFY(remember->isVisible());
-        QCOMPARE(remember->text(), QStringLiteral("Remember in this profile"));
+        QCOMPARE(remember->text(), QStringLiteral("Remember password for root@192.168.100.2"));
         const QString description = SecretStore::storageDescription();
         QCOMPARE(remember->toolTip(), description);
         QCOMPARE(note->isVisible(), !description.isEmpty());
@@ -949,6 +958,71 @@ void Tst_sshdialogs::authRememberVisibility()
         remember->click();
         QVERIFY(dialog.remember());
     }
+}
+
+void Tst_sshdialogs::authRememberLabels_data()
+{
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<QString>("rememberTarget");
+    QTest::addColumn<QString>("keyFile");
+    QTest::addColumn<QString>("expected");
+
+    // v0.4: every password / passphrase prompt can be remembered; the caption names the target
+    // ("user@host:port" for an ad-hoc connection) or the key file the answer is stored for.
+    QTest::newRow("password, ad-hoc target") << static_cast<int>(PromptKind::Password)
+                                             << QStringLiteral("root@192.168.100.2:22") << QString()
+                                             << QStringLiteral("Remember password for root@192.168.100.2:22");
+    QTest::newRow("password, custom port") << static_cast<int>(PromptKind::Password)
+                                           << QStringLiteral("moses@10.0.0.24:2200") << QString()
+                                           << QStringLiteral("Remember password for moses@10.0.0.24:2200");
+    QTest::newRow("password, no target given") << static_cast<int>(PromptKind::Password) << QString() << QString()
+                                               << QStringLiteral("Remember password for root@192.168.100.2");
+    QTest::newRow("passphrase, key file target") << static_cast<int>(PromptKind::Passphrase)
+                                                 << QStringLiteral("/home/moses/.ssh/id_ed25519")
+                                                 << QStringLiteral("/home/moses/.ssh/id_ed25519")
+                                                 << QStringLiteral("Remember passphrase for id_ed25519");
+    QTest::newRow("passphrase, from keyFile") << static_cast<int>(PromptKind::Passphrase) << QString()
+                                              << QStringLiteral("C:/Users/moses/.ssh/board_rsa")
+                                              << QStringLiteral("Remember passphrase for board_rsa");
+    QTest::newRow("keyboard-interactive") << static_cast<int>(PromptKind::KeyboardInteractive)
+                                          << QStringLiteral("pi@10.0.0.5:2222") << QString()
+                                          << QStringLiteral("Remember answer for pi@10.0.0.5:2222");
+}
+
+void Tst_sshdialogs::authRememberLabels()
+{
+    QFETCH(int, kind);
+    QFETCH(QString, rememberTarget);
+    QFETCH(QString, keyFile);
+    QFETCH(QString, expected);
+
+    SshConnection::AuthPrompt prompt = authPrompt(static_cast<PromptKind>(kind));
+    prompt.canRemember = true;
+    prompt.rememberTarget = rememberTarget;
+    prompt.keyFile = keyFile;
+    AuthPromptDialog dialog(prompt);
+    QVERIFY(expose(&dialog));
+    auto* remember = child<QCheckBox>(&dialog, "checkRemember");
+    auto* note = child<QLabel>(&dialog, "labelNote");
+    QVERIFY(remember && note);
+    QVERIFY(remember->isVisible());
+    QCOMPARE(remember->text(), expected);
+    QVERIFY(!remember->isChecked());   // never pre-checked
+    QVERIFY(!dialog.remember());
+    const QString description = SecretStore::storageDescription();
+    QCOMPARE(remember->toolTip(), description);
+    QCOMPARE(note->isVisible(), !description.isEmpty());
+    QCOMPARE(note->text(), description);
+    remember->click();
+    QVERIFY(dialog.remember());
+
+    // A retry keeps the caption and the unchecked default.
+    prompt.attempt = 2;
+    AuthPromptDialog retry(prompt);
+    QVERIFY(expose(&retry));
+    QCOMPARE(child<QCheckBox>(&retry, "checkRemember")->text(), expected);
+    QVERIFY(child<QCheckBox>(&retry, "checkRemember")->isVisible());
+    QVERIFY(!retry.remember());
 }
 
 void Tst_sshdialogs::authAttemptLabel()
@@ -1821,10 +1895,282 @@ void Tst_sshdialogs::remoteRetranslate()
     QApplication::sendEvent(&dialog, &event);
     QCOMPARE(dialog.windowTitle(), QStringLiteral("Remote File Transfer"));
     QCOMPARE(start->text(), QStringLiteral("&Start download"));
-    QCOMPARE(labelLocal->text(), QStringLiteral("&Save as:"));
+    QCOMPARE(labelLocal->text(), QStringLiteral("Save &to:"));   // Alt+S stays with Start, Alt+A with WeChat
     QCOMPARE(status->text(), QStringLiteral("Not connected."));
     QVERIFY(!start->isEnabled());
     QCOMPARE(dialog.request().direction, Direction::Download);
+}
+
+void Tst_sshdialogs::remoteMethodTexts()
+{
+    // The status line names the method the connection chose - transferStatus().method, which
+    // the worker publishes before transferStarted(). Without a worker the test supplies the
+    // status through the dialog's slot after the signal, then drives progress and the end.
+    SshConnection connection;   // never opened
+    RemoteFileDialog dialog(&connection);
+    QVERIFY(expose(&dialog));
+    auto* status = child<QLabel>(&dialog, "labelStatus");
+    auto* start = child<QPushButton>(&dialog, "buttonStart");
+    auto* cancel = child<QPushButton>(&dialog, "buttonCancel");
+    auto* progress = child<QProgressBar>(&dialog, "progressBar");
+    QVERIFY(status && start && cancel && progress);
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+
+    SshConnection::TransferRequest up;
+    up.direction = Direction::Upload;
+    up.localPath = QStringLiteral("C:/tmp/fw v2.bin");
+    up.remotePath = QStringLiteral("/oem/fw v2.bin");
+    emit connection.transferStarted(up);
+    QCOMPARE(status->text(), QStringLiteral("Uploading fw v2.bin..."));   // no method published yet
+
+    SshConnection::TransferStatus sftp;
+    sftp.active = true;
+    sftp.direction = Direction::Upload;
+    sftp.localPath = up.localPath;
+    sftp.remotePath = up.remotePath;
+    sftp.total = 3000000;
+    sftp.method = QStringLiteral("sftp");
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "applyTransferStatus", Q_ARG(SshConnection::TransferStatus, sftp)));
+    QCOMPARE(status->text(), QStringLiteral("Uploading fw v2.bin via SFTP..."));
+    emit connection.transferProgress(1500000, 3000000);
+    QVERIFY2(status->text().startsWith(QStringLiteral("Uploading fw v2.bin via SFTP: ")), qPrintable(status->text()));
+    QVERIFY2(status->text().endsWith(QStringLiteral("(50%)")), qPrintable(status->text()));
+    QCOMPARE(progress->value(), 50);
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+
+    // Finished: the connection's own message, verbatim and not red.
+    QSignalSpy finished(&dialog, &RemoteFileDialog::transferFinished);
+    const QString done = QStringLiteral("Uploaded fw v2.bin to /oem/fw v2.bin (3.0 MB, SFTP)");
+    emit connection.transferFinished(true, done);
+    QCOMPARE(status->text(), done);
+    QCOMPARE(progress->value(), 100);
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+    QCOMPARE(finished.count(), 1);
+
+    // The shell fallback on a download with an unknown size.
+    SshConnection::TransferRequest down;
+    down.direction = Direction::Download;
+    down.localPath = QStringLiteral("C:/tmp/app.bin");
+    down.remotePath = QStringLiteral("/oem/app.bin");
+    emit connection.transferStarted(down);
+    QCOMPARE(status->text(), QStringLiteral("Downloading app.bin..."));
+    SshConnection::TransferStatus shell;
+    shell.active = true;
+    shell.direction = Direction::Download;
+    shell.localPath = down.localPath;
+    shell.remotePath = down.remotePath;
+    shell.total = -1;
+    shell.method = QStringLiteral("shell");
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "applyTransferStatus", Q_ARG(SshConnection::TransferStatus, shell)));
+    QCOMPARE(status->text(), QStringLiteral("Downloading app.bin via shell (cat)..."));
+    emit connection.transferProgress(4096, -1);
+    QVERIFY2(status->text().startsWith(QStringLiteral("Downloading app.bin via shell (cat): ")),
+             qPrintable(status->text()));
+    QCOMPARE(progress->maximum(), 0);   // busy indicator
+
+    // Neither method works: the message in red, Cancel off, the progress bar back to determinate.
+    const QString failure =
+        QStringLiteral("Cannot start SFTP on root@192.168.100.2:22 (subsystem request failed) and the shell fallback failed: cat: not found");
+    emit connection.transferFinished(false, failure);
+    QCOMPARE(status->text(), failure);
+    QVERIFY(isReddish(status->palette().color(QPalette::WindowText)));
+    QVERIFY(!cancel->isEnabled());
+    QCOMPARE(progress->maximum(), 100);
+    QCOMPARE(finished.count(), 2);
+    QVERIFY(!finished.at(1).at(0).toBool());
+    // Start follows the connection state (never opened here: off, with the reason).
+    QVERIFY(!start->isEnabled());
+    QCOMPARE(start->toolTip(), QStringLiteral("Connect the session first."));
+
+    // The next idle line is in the normal colour again (a direction change rewrites it).
+    dialog.setDirection(Direction::Download);
+    QCOMPARE(status->text(), QStringLiteral("Not connected."));
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+}
+
+void Tst_sshdialogs::remoteRequestNormalisation()
+{
+    SshConnection connection;   // never opened: the home is unknown at first
+    RemoteFileDialog dialog(&connection);
+    QVERIFY(expose(&dialog));
+    auto* remote = child<QLineEdit>(&dialog, "editRemotePath");
+    QVERIFY(remote);
+    const QString firmware = tempPath(QStringLiteral("norm fw.bin"));
+    QVERIFY(writeFile(firmware, "fw"));
+    dialog.setLocalPath(firmware);
+    QVERIFY(remote->text().isEmpty());   // home unknown
+
+    // Backslashes are a Windows habit: converted, never sent to the host.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("\\oem\\fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/oem/fw.bin"));
+
+    // A directory typed and Start pressed from the field (Alt+S, no editingFinished): the
+    // request carries the file name although the field still shows the directory.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("/tmp/"));
+    QCOMPARE(remote->text(), QStringLiteral("/tmp/"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/tmp/norm fw.bin"));
+
+    // "~" with the home unknown: relative to the login directory (SFTP and the shell fallback
+    // both resolve it there).
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("norm fw.bin"));
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~/"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("norm fw.bin"));
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~/boards/fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("boards/fw.bin"));
+    // setRemotePath("~") keeps the tilde in the field until the home is known...
+    dialog.setRemotePath(QStringLiteral("~"));
+    QCOMPARE(remote->text(), QStringLiteral("~/norm fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("norm fw.bin"));
+
+    // ...and spells it out once it is (a trailing slash on the home is tolerated).
+    emit connection.remoteHomeReceived(QStringLiteral("/home/test/"));
+    QCOMPARE(remote->text(), QStringLiteral("/home/test/norm fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/home/test/norm fw.bin"));
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~/boards/fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/home/test/boards/fw.bin"));
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/home/test/norm fw.bin"));
+    dialog.setRemotePath(QStringLiteral("~/sub/"));
+    QCOMPARE(remote->text(), QStringLiteral("/home/test/sub/norm fw.bin"));
+
+    // A download resolves "~" the same way and derives the local name from it.
+    dialog.setDirection(Direction::Download);
+    dialog.setRemotePath(QStringLiteral("~/app.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/home/test/app.bin"));
+    QCOMPARE(QFileInfo(dialog.request().localPath).fileName(), QStringLiteral("app.bin"));
+    // A bare "~" is no file to download: the request stays empty, Start off.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("/home/test/"));
+    QVERIFY(!child<QPushButton>(&dialog, "buttonStart")->isEnabled());
+}
+
+void Tst_sshdialogs::remoteAcceleratorsUnique()
+{
+    // Every Alt+letter of the dialog is unique in both directions: Qt gives an ambiguous
+    // shortcut to the widgets in turn and a push button only takes the focus on it, so Alt+S
+    // did not start a download while "&Save as:" shared the letter (and Cl&ose shared Alt+O
+    // with &Overwrite).
+    SshConnection connection;
+    RemoteFileDialog dialog(&connection);
+    QVERIFY(expose(&dialog));
+    for (Direction direction : {Direction::Upload, Direction::Download}) {
+        dialog.setDirection(direction);
+        QMap<QChar, QStringList> owners;
+        const QList<QWidget*> widgets = dialog.findChildren<QWidget*>();
+        for (QWidget* widget : widgets) {
+            QString text;
+            if (auto* button = qobject_cast<QAbstractButton*>(widget)) {
+                text = button->text();
+            } else if (auto* label = qobject_cast<QLabel*>(widget)) {
+                text = label->buddy() ? label->text() : QString();
+            }
+            const qsizetype amp = text.indexOf(QLatin1Char('&'));
+            if (amp >= 0 && amp + 1 < text.size() && text.at(amp + 1) != QLatin1Char('&')) {
+                owners[text.at(amp + 1).toLower()].append(text);
+            }
+        }
+        QVERIFY(owners.contains(QLatin1Char('s')));   // Start
+        QVERIFY(owners.contains(QLatin1Char('r')));   // the remote field
+        for (auto it = owners.cbegin(); it != owners.cend(); ++it) {
+            QVERIFY2(it.value().size() == 1,
+                     qPrintable(QStringLiteral("Alt+%1 shared by: %2").arg(it.key()).arg(it.value().join(QStringLiteral(", ")))));
+        }
+    }
+}
+
+void Tst_sshdialogs::remoteHomeUnresolved()
+{
+    // A server without SFTP (dropbear on a buildroot board) cannot resolve the home: an upload
+    // with no destination still proposes the plain file name - the login directory - so Start
+    // is not stuck disabled with nothing to say.
+    SshConnection connection;
+    RemoteFileDialog dialog(&connection);
+    QVERIFY(expose(&dialog));
+    auto* remote = child<QLineEdit>(&dialog, "editRemotePath");
+    auto* home = child<QToolButton>(&dialog, "buttonRemoteHome");
+    auto* status = child<QLabel>(&dialog, "labelStatus");
+    QVERIFY(remote && home && status);
+    const QString firmware = tempPath(QStringLiteral("fw.bin"));
+    QVERIFY(writeFile(firmware, "fw"));
+    dialog.setLocalPath(firmware);
+    QVERIFY(remote->text().isEmpty());
+
+    emit connection.remoteHomeReceived(QString());   // the worker's answer when SFTP is unavailable
+    QCOMPARE(remote->text(), QStringLiteral("fw.bin"));
+    QCOMPARE(dialog.request().remotePath, QStringLiteral("fw.bin"));
+    // Derived: a later file follows.
+    const QString other = tempPath(QStringLiteral("other.img"));
+    QVERIFY(writeFile(other, "img"));
+    dialog.setLocalPath(other);
+    QCOMPARE(remote->text(), QStringLiteral("other.img"));
+    // A typed destination is left alone by the failure.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("/oem/x.bin"));
+    emit connection.remoteHomeReceived(QString());
+    QCOMPARE(remote->text(), QStringLiteral("/oem/x.bin"));
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+
+    // The "~" button explains itself while disconnected.
+    QTest::mouseClick(home, Qt::LeftButton);
+    QCOMPARE(status->text(), QStringLiteral("The remote home directory is known once the session is connected."));
+    QCOMPARE(remote->text(), QStringLiteral("/oem/x.bin"));
+}
+
+void Tst_sshdialogs::remoteErrorLineSurvivesDisconnect()
+{
+    // Header: a failure line - "Transfer aborted: the connection was closed", which the
+    // connection reports right before its state changes on close() or a dropped link - is kept
+    // while the link is down instead of being replaced by "Not connected."; a direction change,
+    // the next transfer or Connected write over it, and a success line is not kept.
+    SshConnection connection;   // never opened
+    RemoteFileDialog dialog(&connection);
+    QVERIFY(expose(&dialog));
+    auto* status = child<QLabel>(&dialog, "labelStatus");
+    QVERIFY(status);
+    QSignalSpy finished(&dialog, &RemoteFileDialog::transferFinished);
+    QCOMPARE(status->text(), QStringLiteral("Not connected."));
+
+    const QString aborted = QStringLiteral("Transfer aborted: the connection was closed");
+    emit connection.transferFinished(false, aborted);
+    QCOMPARE(status->text(), aborted);
+    QVERIFY(isReddish(status->palette().color(QPalette::WindowText)));
+    emit connection.stateChanged(Transport::State::Disconnected);
+    QCOMPARE(status->text(), aborted);   // kept: the reason stays next to the disabled Start
+    QVERIFY(isReddish(status->palette().color(QPalette::WindowText)));
+    emit connection.stateChanged(Transport::State::Reconnecting);
+    QCOMPARE(status->text(), aborted);
+    QCOMPARE(finished.count(), 1);
+    QVERIFY(!child<QPushButton>(&dialog, "buttonStart")->isEnabled());
+
+    // A direction change writes the idle line again, in the normal colour.
+    dialog.setDirection(SshConnection::TransferDirection::Download);
+    QCOMPARE(status->text(), QStringLiteral("Not connected."));
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
+
+    // A success line is replaced by the idle line on a state change.
+    const QString done = QStringLiteral("Uploaded fw.bin to /oem/fw.bin (1.0 MB, SFTP)");
+    emit connection.transferFinished(true, done);
+    QCOMPARE(status->text(), done);
+    emit connection.stateChanged(Transport::State::Disconnected);
+    QCOMPARE(status->text(), QStringLiteral("Not connected."));
+    QCOMPARE(finished.count(), 2);
+
+    // Connected replaces an error line as well (the idle text follows the connection's state,
+    // which this never-opened connection still reports as Disconnected).
+    emit connection.transferFinished(false, aborted);
+    QVERIFY(isReddish(status->palette().color(QPalette::WindowText)));
+    emit connection.stateChanged(Transport::State::Connected);
+    QCOMPARE(status->text(), QStringLiteral("Not connected."));
+    QVERIFY(!isReddish(status->palette().color(QPalette::WindowText)));
 }
 
 QTEST_MAIN(Tst_sshdialogs)

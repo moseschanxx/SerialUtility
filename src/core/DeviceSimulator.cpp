@@ -22,11 +22,35 @@ constexpr int kRebootDownMs = 3000;
 constexpr int kMcuResetDownMs = 1500;
 constexpr int kVanishGraceMs = 400;            ///< last shutdown byte leaves the UART -> port disappears
 constexpr int kTelemetryIntervalMs = 2000;
+constexpr int kMinTelemetryIntervalMs = 100;
+constexpr int kMaxTelemetryIntervalMs = 60000;
 constexpr int kCountdownStart = 3;
 constexpr int kProgressSteps = 100;
 constexpr int kProgressStepMs = 30;
 constexpr int kMaxSleepSeconds = 30;
 constexpr qint32 kDefaultBaud = 115200;
+constexpr qint32 kNativeBaudLinux = 1500000;
+constexpr qint32 kNativeBaudUBoot = 1500000;
+constexpr qint32 kNativeBaudMcu = 115200;
+constexpr quint32 kNoiseSeed = 0x2545F491u;
+
+/// What a UART delivers when it samples a line driven at another rate: framing errors turn into
+/// 0x00, an idle/late start bit into 0xFF, and the rest are bytes with runs of ones or zeros
+/// (the sampled edge lands somewhere inside the character). A few printable bytes slip through.
+const unsigned char kNoiseTable[32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+                                       0xFF, 0xFF, 0xFE, 0xF8, 0xE0, 0xC0, 0x80, 0x9C, 0xFC, 0xF0, 0x86,
+                                       0xE3, 0xB0, 0x60, 0x0C, 0x03, 0x1E, 0x38, 0x7E, 0x40, 0x8E};
+
+/// xorshift32: deterministic, cheap, and good enough to look like line noise.
+quint32 nextNoise(quint32& state)
+{
+    quint32 x = state == 0 ? kNoiseSeed : state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    state = x;
+    return x;
+}
 
 const QLatin1String kPrefix("SIM:");
 const QLatin1String kManufacturer("BuildAI Simulator");
@@ -370,7 +394,7 @@ const char* const kMcuHelp[] = {
     "  adc                  read the 8 ADC channels",
     "  temp                 die temperature",
     "  uptime               seconds since reset",
-    "  telemetry on|off     periodic telemetry line every 2 s",
+    "  telemetry on|off [ms] periodic telemetry line every 2 s (or every ms milliseconds)",
     "  echo <text>          echo back",
     "  AT, AT+GMR, ATE0/1, AT+RST",
 };
@@ -617,15 +641,46 @@ QString DeviceSimulator::description(Kind kind)
 {
     switch (kind) {
     case Kind::Loopback:
-        return QCoreApplication::translate("DeviceSimulator", "Simulated loopback (echoes every byte)");
+        return QCoreApplication::translate("DeviceSimulator", "Simulated loopback (echoes every byte, any baud rate)");
     case Kind::Linux:
-        return QCoreApplication::translate("DeviceSimulator", "Simulated Rockchip Linux console");
+        return QCoreApplication::translate("DeviceSimulator", "Simulated Rockchip Linux console (%1 baud)")
+            .arg(kNativeBaudLinux);
     case Kind::UBoot:
-        return QCoreApplication::translate("DeviceSimulator", "Simulated U-Boot prompt (boots into Linux)");
+        return QCoreApplication::translate("DeviceSimulator", "Simulated U-Boot prompt, boots into Linux (%1 baud)")
+            .arg(kNativeBaudUBoot);
     case Kind::Mcu:
         break;
     }
-    return QCoreApplication::translate("DeviceSimulator", "Simulated MCU firmware shell");
+    return QCoreApplication::translate("DeviceSimulator", "Simulated MCU firmware shell (%1 baud)").arg(kNativeBaudMcu);
+}
+
+qint32 DeviceSimulator::nativeBaudRate(Kind kind)
+{
+    switch (kind) {
+    case Kind::Loopback:
+        return 0;
+    case Kind::Linux:
+        return kNativeBaudLinux;
+    case Kind::UBoot:
+        return kNativeBaudUBoot;
+    case Kind::Mcu:
+        break;
+    }
+    return kNativeBaudMcu;
+}
+
+QByteArray DeviceSimulator::wrongRateNoise(qsizetype count, quint32 seed)
+{
+    QByteArray noise;
+    if (count <= 0) {
+        return noise;
+    }
+    noise.resize(count);
+    quint32 state = seed;
+    for (qsizetype i = 0; i < count; ++i) {
+        noise[i] = static_cast<char>(kNoiseTable[nextNoise(state) % 32u]);
+    }
+    return noise;
 }
 
 QList<SerialPortEntry> DeviceSimulator::entries()
@@ -695,6 +750,7 @@ DeviceSimulator::DeviceSimulator(Kind kind, qint32 baudRate, QObject* parent)
     : QObject(parent)
     , m_kind(kind)
     , m_baud(baudRate > 0 ? baudRate : kDefaultBaud)
+    , m_nativeBaud(nativeBaudRate(kind))
 {
     m_paceTimer.setSingleShot(true);
     m_paceTimer.setTimerType(Qt::PreciseTimer);
@@ -726,9 +782,47 @@ qint32 DeviceSimulator::baudRate() const
 
 void DeviceSimulator::setBaudRate(qint32 baud)
 {
-    if (baud > 0) {
-        m_baud = baud;
+    if (baud <= 0) {
+        return;
     }
+    const bool matchedBefore = baudRateMatches();
+    m_baud = baud;
+    if (matchedBefore != baudRateMatches()) {
+        qCInfo(lcSerial) << "simulator" << portName(m_kind) << "heard at" << m_baud << "baud, native" << m_nativeBaud
+                         << (baudRateMatches() ? "- readable" : "- garbage");
+    }
+}
+
+qint32 DeviceSimulator::nativeBaudRate() const
+{
+    return m_nativeBaud;
+}
+
+void DeviceSimulator::setNativeBaudRate(qint32 baud)
+{
+    m_nativeBaud = qMax(0, baud);
+    qCInfo(lcSerial) << "simulator" << portName(m_kind) << "now talks at" << m_nativeBaud << "baud, heard at" << m_baud
+                     << (baudRateMatches() ? "- readable" : "- garbage");
+}
+
+bool DeviceSimulator::baudRateMatches() const
+{
+    return m_nativeBaud <= 0 || m_nativeBaud == m_baud;
+}
+
+QByteArray DeviceSimulator::garble(const QByteArray& bytes)
+{
+    QByteArray noise;
+    noise.resize(bytes.size());
+    for (qsizetype i = 0; i < bytes.size(); ++i) {
+        noise[i] = static_cast<char>(kNoiseTable[nextNoise(m_noiseState) % 32u]);
+    }
+    return noise;
+}
+
+QByteArray DeviceSimulator::deliverable(const QByteArray& bytes)
+{
+    return baudRateMatches() ? bytes : garble(bytes);
 }
 
 bool DeviceSimulator::isStarted() const
@@ -773,6 +867,12 @@ void DeviceSimulator::receive(const QByteArray& hostToDevice)
     if (!m_started || m_stage == Stage::Off || m_stage == Stage::Down) {
         return;
     }
+    if (!baudRateMatches()) {
+        // The device sees the host's bytes as line noise and ignores them.
+        qCDebug(lcSerial) << "simulator" << portName(m_kind) << "drops" << hostToDevice.size()
+                          << "host byte(s): rate mismatch";
+        return;
+    }
     if (m_kind == Kind::Loopback) {
         emitRaw(hostToDevice);
         return;
@@ -795,7 +895,7 @@ void DeviceSimulator::flushOutput()
     m_segments.clear();
     m_paceTimer.stop();
     if (!all.isEmpty()) {
-        emit dataReady(all);
+        emit dataReady(deliverable(all));
     }
     for (const std::function<void()>& done : delivered) {
         done();
@@ -899,7 +999,7 @@ void DeviceSimulator::onPaceTimer()
         }
     }
     if (!out.isEmpty()) {
-        emit dataReady(out);
+        emit dataReady(deliverable(out));
     }
     for (const std::function<void()>& done : delivered) {
         done();
@@ -2127,9 +2227,21 @@ void DeviceSimulator::handleMcuCommand(const QString& line)
     } else if (cmd == QLatin1String("telemetry")) {
         const QString what = args.size() > 1 ? args.at(1).toLower() : QString();
         if (what == QLatin1String("on")) {
+            int intervalMs = kTelemetryIntervalMs;
+            if (args.size() > 2) {
+                bool ok = false;
+                const int requested = args.at(2).toInt(&ok);
+                if (!ok) {
+                    emitLine(QStringLiteral("usage: telemetry on|off [ms]"));
+                    prompt();
+                    return;
+                }
+                intervalMs = qBound(kMinTelemetryIntervalMs, requested, kMaxTelemetryIntervalMs);
+            }
             m_telemetry = true;
-            m_telemetryTimer.start();
-            emitLine(QStringLiteral("Telemetry enabled (every 2 s)"));
+            m_telemetryTimer.start(intervalMs);
+            emitLine(intervalMs == kTelemetryIntervalMs ? QStringLiteral("Telemetry enabled (every 2 s)")
+                                                        : QStringLiteral("Telemetry enabled (every %1 ms)").arg(intervalMs));
         } else if (what == QLatin1String("off")) {
             m_telemetry = false;
             m_telemetryTimer.stop();

@@ -41,6 +41,15 @@ speaks bytes.
   with plenty of headroom: the RX pipeline renders a coloured boot log at around 10 MB/s on a
   4-core desktop while the window stays responsive. Repaints are coalesced and drawn from a glyph
   cache, the hidden hex view queues instead of rendering, scrollback is bounded (default 10 000 lines).
+- **Auto baud rate** - pick *Auto* in the baud list: the tool listens at the candidate rates
+  (115200, 1500000, 921600, ... configurable) until the output reads as text, applies the rate
+  and tells you; if the board switches rates mid-session (U-Boot at 1 500 000, a kernel at 115200)
+  the garbage is noticed and the rate re-detected. *Session > Detect Baud Rate* (Ctrl+Shift+B)
+  does it on demand for a fixed rate too.
+- **Keyboard that belongs to the shell** - while a session is connected, every key that is not
+  an application shortcut goes to the device, bare Ctrl+letter combinations included (Ctrl+W
+  deletes a word in bash instead of closing the tab). Every shortcut is configurable in
+  *Preferences > Keyboard*; a *Window* menu, Alt+1..9 and Ctrl+PageUp/PageDown switch tabs.
 - **Auto-reconnect** - when the board reboots or the USB adapter is re-plugged the port vanishes;
   the session shows a dim system line and re-opens the port as soon as it comes back.
 - **Built-in device simulator** - four `SIM:` pseudo-ports (`SIM:loopback`, `SIM:linux`,
@@ -250,6 +259,21 @@ Output is paced to the selected baud rate (pick 1500000 to see a boot log fly by
 watch bytes trickle). Uncheck *Preferences > Connection > Show simulated devices* to hide
 them.
 
+### Finding the baud rate automatically
+
+Pick **Auto** at the top of the baud list and press Connect. The tool opens the port at the
+last known rate and, while the board talks, listens at each candidate rate (Preferences >
+Connection: default 115200, 1500000, 921600, 460800, 230400, 57600, 38400, 19200, 9600, about
+1.5 s each) until the output reads as text; the terminal stays quiet meanwhile and then shows
+"--- baud rate 1500000 detected ---" followed by the live output. A silent board cannot be
+detected (nothing to listen to): the previous rate is kept and the status bar says so - reset
+the board or press Enter on its console and try *Session > Detect Baud Rate* (Ctrl+Shift+B),
+which works for a fixed rate as well. With Auto selected the session keeps watching: when the
+output turns into garbage because the board switched rates, it re-detects by itself (switch this
+off in Preferences > Connection). The `SIM:linux` / `SIM:uboot` simulators talk at 1 500 000 and
+`SIM:mcu` at 115200 and produce real-looking garbage at any other rate, so you can try it without
+hardware.
+
 ### Connecting to a Rockchip board
 
 1. Plug the USB-UART adapter in (CH343 / CP2102 on the debug header) and press **Ctrl+T** for
@@ -306,9 +330,10 @@ luckfox                     a Host alias from ~/.ssh/config (user, port, key and
   key and connect* (after ticking the checkbox) updates the stored key.
 - **Authentication** - automatic order: ssh-agent (Linux / macOS), the profile's key file,
   `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, then a password or keyboard-interactive prompt. A
-  key passphrase or password is asked in a dialog (three attempts); for a stored profile you can
-  tick *Remember* - on Windows it is encrypted with DPAPI for your user account, elsewhere it is
-  only obfuscated and the dialog says so.
+  key passphrase or password is asked in a dialog (three attempts); tick *Remember* and it is
+  stored for that target (`user@host:port`) or that key file, so the next connection - profile or
+  ad-hoc - needs no typing. On Windows the secret is encrypted with DPAPI for your user account,
+  elsewhere it is only obfuscated and the dialog says so.
 - **Profiles** - the gear button or *Edit > SSH Profiles...* keeps named targets with the
   authentication method, key file, saved password, a remote command instead of the shell, a
   startup command typed after login (`cd /oem && ls`), terminal type, keep-alive and timeout,
@@ -325,8 +350,10 @@ luckfox                     a Host alias from ~/.ssh/config (user, port, key and
   reconnecting.
 - **Files** - *Session > Upload File to Remote...* / *Download File from Remote...* transfer a
   file over the session's SFTP channel with progress and cancel; dropping a file on an SSH
-  terminal opens the upload dialog with that file. *Send File* still exists and pastes the file
-  into the shell like on a serial port.
+  terminal opens the upload dialog with that file. A board whose SSH server has no SFTP
+  (dropbear on a buildroot image) works too: the transfer falls back to plain shell commands
+  over a separate exec channel (`cat > file`, `cat file`, `wc -c`, `test -e`) and the dialog says
+  "via shell". *Send File* still exists and pastes the file into the shell like on a serial port.
 - Session tabs are restored on the next start with their target selected, never auto-connected.
   From the command line, `BuildAI-SerialUtility --ssh root@192.168.100.2` opens an SSH tab with
   that target (add `--connect` to connect immediately).
@@ -428,9 +455,11 @@ applies first and the queued output then continues on the empty screen.
 
 | Shortcut | Action |
 |---|---|
-| Ctrl+T / Ctrl+W | New session tab / close tab |
+| Ctrl+T / Ctrl+Shift+W | New session tab / close tab (Ctrl+W goes to the device: it deletes a word in a shell) |
 | Ctrl+Shift+T | New SSH session tab |
-| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PageDown / Ctrl+PageUp | Next / previous tab |
+| Alt+1 .. Alt+9 | Select tab 1..9 (also in the *Window* menu); a middle click on a tab closes it |
+| Ctrl+Shift+B | Detect the serial baud rate |
 | F2 / F3 | Connect / disconnect |
 | F5 | Refresh port list |
 | Ctrl+Shift+L | Clear (screen, scrollback and hex view) |
@@ -448,10 +477,12 @@ applies first and the queued output then continues on the empty screen.
 | Ctrl+Shift+Q | Quit |
 | Shift+PageUp / PageDown, mouse wheel | Scroll the scrollback |
 
-Everything else - Tab, arrows, Home / End, F-keys, Ctrl+letter - is sent to the device
-(see `docs/TERMINAL_EMULATION.md` for the exact byte sequences). Exceptions: F3 and F5 always
-belong to the application (Disconnect / Refresh Ports) and are never sent; F2 is Connect while
-disconnected and reaches the device (`ESC O Q`) only while connected.
+Every shortcut above is configurable in *Preferences > Keyboard*. While a session is
+connected the rule is simple: a key that is one of the application's shortcuts goes to the
+application, everything else - Tab, arrows, Home / End, F-keys, every bare Ctrl+letter - is sent
+to the device (see `docs/TERMINAL_EMULATION.md` for the exact byte sequences). F2 / F3 / F5 are
+therefore application keys only because Connect / Disconnect / Refresh Ports use them; reassign
+those actions and the keys reach the shell.
 
 ## Architecture
 

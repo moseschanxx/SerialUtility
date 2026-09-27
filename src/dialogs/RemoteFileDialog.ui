@@ -26,7 +26,7 @@
      <item>
       <widget class="QRadioButton" name="radioUpload">
        <property name="toolTip">
-        <string>Copy a local file to the remote host (SFTP)</string>
+        <string>Copy a local file to the remote host (SFTP, or the remote shell when the server has no SFTP)</string>
        </property>
        <property name="text">
         <string>&amp;Upload to remote</string>
@@ -39,7 +39,7 @@
      <item>
       <widget class="QRadioButton" name="radioDownload">
        <property name="toolTip">
-        <string>Copy a remote file to this computer (SFTP)</string>
+        <string>Copy a remote file to this computer (SFTP, or the remote shell when the server has no SFTP)</string>
        </property>
        <property name="text">
         <string>&amp;Download from remote</string>
@@ -103,7 +103,7 @@
      <item row="1" column="1">
       <widget class="QLineEdit" name="editRemotePath">
        <property name="placeholderText">
-        <string>Absolute path on the remote host, or a directory ending in /</string>
+        <string>Path on the remote host: ~ is the home, a directory ending in / keeps the file name</string>
        </property>
        <property name="clearButtonEnabled">
         <bool>true</bool>
@@ -236,7 +236,7 @@
      <item>
       <widget class="QPushButton" name="buttonClose">
        <property name="text">
-        <string>Cl&amp;ose</string>
+        <string>Clos&amp;e</string>
        </property>
        <property name="autoDefault">
         <bool>false</bool>

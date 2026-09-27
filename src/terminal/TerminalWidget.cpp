@@ -107,8 +107,46 @@ int xtermModifierParam(Qt::KeyboardModifiers mods)
     return value;
 }
 
-/// Keys that belong to the main window's QActions even while the terminal has focus.
-bool isPassThroughShortcut(int key, Qt::KeyboardModifiers mods)
+/// Modifier-only key presses and unknown keys: never a reserved shortcut.
+bool isModifierKey(int key)
+{
+    switch (key) {
+    case 0:
+    case Qt::Key_unknown:
+    case Qt::Key_Shift:
+    case Qt::Key_Control:
+    case Qt::Key_Alt:
+    case Qt::Key_AltGr:
+    case Qt::Key_Meta:
+    case Qt::Key_Super_L:
+    case Qt::Key_Super_R:
+    case Qt::Key_Hyper_L:
+    case Qt::Key_Hyper_R:
+    case Qt::Key_CapsLock:
+    case Qt::Key_NumLock:
+    case Qt::Key_ScrollLock:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// The modifiers a QKeySequence can express (Keypad / GroupSwitch never take part in a match).
+constexpr Qt::KeyboardModifiers kSequenceModifiers =
+    Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier;
+
+/// Key families that always belong to the application while the terminal has focus, whatever
+/// the reserved list says: the tab accelerators Alt+0..9 and the Ctrl+Shift+<anything> family
+/// the main window's actions live in (Copy, Paste, Hex View, Find, Send File, Clear, Replay Log,
+/// Quit, Close Session, Previous Tab, ...). A key from these families that no action claims
+/// comes back to keyPressEvent() and is mapped like any other key (Ctrl+Shift+A -> 0x01,
+/// Alt+0 -> ESC 0). Alt+<letter> is NOT a family: readline's Alt+F / Alt+B / Alt+D / Alt+L /
+/// Alt+U / Alt+. must reach the shell, and the menu bar's mnemonics (Alt+F opens File, ...)
+/// would otherwise claim seven of them for good; while a connected terminal has focus the
+/// menu bar is reached with a bare Alt tap (QMenuBar's Alt navigation) or the mouse, and an
+/// action given an Alt+<letter> shortcut in Preferences > Keyboard reserves that key as usual.
+/// Ctrl+Alt is AltGr on Windows and carries text: never passed through.
+bool isApplicationModifierFamily(Qt::KeyboardModifiers mods, int key)
 {
     if (mods.testFlag(Qt::MetaModifier)) {
         return true;
@@ -116,24 +154,10 @@ bool isPassThroughShortcut(int key, Qt::KeyboardModifiers mods)
     const bool ctrl = mods.testFlag(Qt::ControlModifier);
     const bool shift = mods.testFlag(Qt::ShiftModifier);
     const bool alt = mods.testFlag(Qt::AltModifier);
-    if (!ctrl && !alt) {
-        return key == Qt::Key_F2 || key == Qt::Key_F3 || key == Qt::Key_F5;   // Connect / Disconnect / Refresh
+    if (ctrl && shift) {
+        return true;
     }
-    if (ctrl && !alt) {
-        if (key == Qt::Key_Tab || key == Qt::Key_Backtab) {
-            return true;   // Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab
-        }
-        if (!shift && (key == Qt::Key_T || key == Qt::Key_W || key == Qt::Key_Comma)) {
-            return true;   // New session / Close session / Preferences
-        }
-        if (shift && key >= Qt::Key_A && key <= Qt::Key_Z) {
-            // Ctrl+Shift+<letter>: main-window actions (Copy, Paste, Hex View, Find, Send File,
-            // Clear, Replay Log, Quit). When no action claims the key it comes back to
-            // keyPressEvent() and is sent as the Ctrl+<letter> control byte.
-            return true;
-        }
-    }
-    return false;
+    return alt && !ctrl && key >= Qt::Key_0 && key <= Qt::Key_9;
 }
 
 /// Widget-local shortcuts that never produce bytes for the device.
@@ -192,15 +216,14 @@ LocalAction localActionFor(const QKeyEvent* event)
     return LocalAction::None;
 }
 
-/// True when the key press should reach keyPressEvent() instead of the application's
-/// shortcut map (QEvent::ShortcutOverride decision).
+/// True when the key press maps to bytes for the device and should therefore reach
+/// keyPressEvent() instead of the application's shortcut map (QEvent::ShortcutOverride
+/// decision). The caller has already excluded the reserved shortcuts and the application's
+/// modifier families (TerminalWidget::passesToApplication()).
 bool wantsKeyAsInput(const QKeyEvent* event)
 {
     const int key = event->key();
     const Qt::KeyboardModifiers mods = event->modifiers();
-    if (isPassThroughShortcut(key, mods)) {
-        return false;
-    }
     switch (key) {
     case Qt::Key_Tab:
     case Qt::Key_Backtab:
@@ -257,7 +280,13 @@ bool wantsKeyAsInput(const QKeyEvent* event)
             return mods.testFlag(Qt::AltModifier) && !event->text().isEmpty();
         }
     }
-    return !event->text().isEmpty();   // plain / Shift / Alt + printable
+    if (mods.testFlag(Qt::AltModifier) && key >= 0x20 && key < 0x7F) {
+        // Alt+<printable> -> ESC + key (keyToBytes() derives the character from the key code
+        // when the platform attaches no text), so it is claimed with or without text: a menu
+        // mnemonic must not take Alt+F from a shell that expects it.
+        return true;
+    }
+    return !event->text().isEmpty();   // plain / Shift + printable
 }
 
 /// Selection boundaries covering the cells from `anchorCell` to `cell` inclusive, in either
@@ -597,6 +626,55 @@ void TerminalWidget::setInputEnabled(bool on)
 bool TerminalWidget::inputEnabled() const
 {
     return m_inputEnabled;
+}
+
+void TerminalWidget::setReservedShortcuts(const QList<QKeySequence>& sequences)
+{
+    m_reservedShortcuts.clear();
+    m_reservedCombos.clear();
+    for (const QKeySequence& sequence : sequences) {
+        // Only single-chord sequences can match one key press; multi-chord ones are kept in the
+        // getter for completeness but never claim a key.
+        if (sequence.isEmpty() || m_reservedShortcuts.contains(sequence)) {
+            continue;
+        }
+        m_reservedShortcuts.append(sequence);
+        if (sequence.count() == 1) {
+            m_reservedCombos.insert(sequence[0].toCombined());
+        }
+    }
+    qCDebug(lcUi) << "terminal reserves" << m_reservedCombos.size() << "application shortcut(s)";
+}
+
+QList<QKeySequence> TerminalWidget::reservedShortcuts() const
+{
+    return m_reservedShortcuts;
+}
+
+bool TerminalWidget::isReservedShortcut(const QKeyEvent* event) const
+{
+    if (m_reservedCombos.isEmpty()) {
+        return false;
+    }
+    const int key = event->key();
+    if (isModifierKey(key)) {
+        return false;
+    }
+    const Qt::KeyboardModifiers mods = event->modifiers() & kSequenceModifiers;
+    if (m_reservedCombos.contains(QKeyCombination(mods, static_cast<Qt::Key>(key)).toCombined())) {
+        return true;
+    }
+    // Shift+Tab arrives as Key_Backtab; a sequence written "Shift+Tab" (or "Ctrl+Shift+Tab")
+    // stores Key_Tab with the Shift modifier.
+    if (key == Qt::Key_Backtab) {
+        return m_reservedCombos.contains(QKeyCombination(mods | Qt::ShiftModifier, Qt::Key_Tab).toCombined());
+    }
+    return false;
+}
+
+bool TerminalWidget::passesToApplication(const QKeyEvent* event) const
+{
+    return isApplicationModifierFamily(event->modifiers(), event->key()) || isReservedShortcut(event);
 }
 
 void TerminalWidget::setPauseWhileSelecting(bool on)
@@ -1549,10 +1627,12 @@ bool TerminalWidget::event(QEvent* event)
 {
     if (event->type() == QEvent::ShortcutOverride) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
-        // Main-window actions (Ctrl+Shift+<letter>, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+, F2/F3/F5...)
-        // keep working while the terminal has focus; everything else the terminal wants is
-        // claimed here so QAction shortcuts such as Ctrl+L or Ctrl+C cannot steal it.
-        if (!isPassThroughShortcut(keyEvent->key(), keyEvent->modifiers())) {
+        // The application's shortcuts (the reserved list pushed by MainWindow, plus the
+        // Ctrl+Shift and Alt+digit families) keep working while the terminal has focus;
+        // everything else the terminal wants is claimed here so a QAction shortcut (or a menu
+        // mnemonic such as Alt+F) cannot steal it. A modifier pressed alone maps to nothing and
+        // is never claimed, so a bare Alt tap still reaches the menu bar.
+        if (!passesToApplication(keyEvent)) {
             LocalAction action = localActionFor(keyEvent);
             if (action == LocalAction::CopyIfSelection && !hasSelection()) {
                 action = LocalAction::None;
@@ -1664,6 +1744,12 @@ void TerminalWidget::keyPressEvent(QKeyEvent* event)
     //     focus-chain navigation and moves the focus away (DESIGN.md 4.7: Tab never does).
     if (!m_inputEnabled) {
         event->accept();
+        return;
+    }
+    // (2b) a reserved application shortcut that came back from the shortcut map (its action is
+    //      disabled right now): it belongs to the application, never to the device.
+    if (isReservedShortcut(event)) {
+        event->ignore();
         return;
     }
     // (3)-(6) key -> bytes

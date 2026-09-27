@@ -6,8 +6,10 @@
 .DESCRIPTION
     Complements the offscreen Qt Test suites: this exercises the shipped executable with a real
     window, real focus handling and the built-in simulated devices. Scenarios:
-      linux    - SIM:linux boot, login, uname/color/chinese/ls/top/progress/dmesg, reboot + auto-reconnect
-      uboot    - SIM:uboot autoboot interrupt, help/printenv/bdinfo, boot into Linux
+      linux    - SIM:linux boot (--baud auto: the board talks at 1500000, the app detects it), login,
+                 uname/color/chinese/ls/top/progress/dmesg, reboot + auto-reconnect
+      uboot    - SIM:uboot at its native 1500000 (--baud 1500000: the autoboot countdown must be interrupted
+                 before a detection could finish), help/printenv/bdinfo, boot into Linux
       mcu      - SIM:mcu help, AT / AT+GMR, adc, telemetry stream
       menus    - every menu, Preferences / About / Version / Quick Commands dialogs, zh_CN <-> en_US, tabs
       hardware - connect to a real port with a TX-RX loopback jumper and check the echo
@@ -19,6 +21,12 @@
                  hex view, Clear, disconnect + reconnect (host already known), "exit" closes the channel.
                  The app is pointed at a temporary known_hosts file for the run (registry value ssh\knownHostsFile,
                  restored afterwards) so the user's ~/.ssh/known_hosts is never touched.
+      sshfiles - file transfer against the same real OpenSSH server: connect as in 'ssh', open Session > Upload File
+                 to Remote through the menu bar (Alt+S, U), paste a local 3 MB file whose name has a space and a
+                 non-ASCII character and the remote directory "/tmp/", Start (Alt+S), screenshot the finished state,
+                 verify the file in WSL (-WslDistro, sha256sum), upload a 60 MB file and Cancel it half-way (Alt+C)
+                 with a progress screenshot, download the 3 MB file back (Alt+D, Alt+R, Alt+T) and compare hashes,
+                 try a remote file that does not exist (red error line), close the dialog (Alt+E) and exit.
     Screenshots land in <OutDir>\<scenario>-NN-<label>.png. Keep the desktop free while it runs:
     keystrokes go to the foreground window (the script refocuses the app before every key group).
 
@@ -28,14 +36,17 @@
     .\scripts\gui-smoke.ps1 -Scenario hardware -HardwarePort COM6
 .EXAMPLE
     .\scripts\gui-smoke.ps1 -Scenario ssh -SshTarget sshprobe@localhost -SshPasswordFile build\wf-core\probe-credentials.txt
+.EXAMPLE
+    .\scripts\gui-smoke.ps1 -Scenario sshfiles -SshPasswordFile build\wf-core\probe-credentials.txt -WslDistro Ubuntu-22.04
 #>
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode', 'ssh')][string]$Scenario,
+    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode', 'ssh', 'sshfiles')][string]$Scenario,
     [string]$Exe = '',      # default: <repo>\dist\Release\bin\BuildAI-SerialUtility.exe
     [string]$OutDir = '',   # default: <repo>\build\gui-run
     [string]$HardwarePort = 'COM6',
-    [string]$SshTarget = 'sshprobe@localhost',   # ssh scenario: user@host[:port] of a reachable OpenSSH server
-    [string]$SshPasswordFile = ''                # ssh scenario: text file whose first line is that user's password
+    [string]$SshTarget = 'sshprobe@localhost',   # ssh / sshfiles scenarios: user@host[:port] of a reachable OpenSSH server
+    [string]$SshPasswordFile = '',               # ssh / sshfiles scenarios: text file whose first line is that user's password
+    [string]$WslDistro = 'Ubuntu-22.04'          # sshfiles scenario: the WSL distribution running that server ('' = skip the WSL check)
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot   # $PSScriptRoot is not usable inside param() defaults on PowerShell 5.1
@@ -54,6 +65,7 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, IntPtr extra);
   public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, RIGHTDOWN = 0x0008, RIGHTUP = 0x0010;
@@ -62,6 +74,7 @@ public static class Win32 {
 "@
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $script:step = 0
+$script:failures = 0   # Check() failures (sshfiles); a non-zero count makes the script exit with 1
 function Log($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss.fff'), $m) }
 function Shot($label, [switch]$Screen) {
     $script:step++
@@ -140,7 +153,9 @@ function CloseApp() {
 
 switch ($Scenario) {
   'linux' {
-    StartApp @('--connect', 'SIM:linux')
+    # v0.4: SIM:linux talks at 1500000; "--baud auto" selects the bar's Auto rate, so the app opens at 115200,
+    # hears garbage, tries the candidates and replays the boot log once 1500000 is found (a few seconds).
+    StartApp @('--connect', 'SIM:linux', '--baud', 'auto')
     Start-Sleep -Seconds 7; Shot 'boot-login'
     Keys 'root{ENTER}' 600; Keys '{ENTER}' 900; Shot 'shell-prompt'
     Keys 'uname -a{ENTER}' 800; Shot 'uname'
@@ -155,7 +170,9 @@ switch ($Scenario) {
     CloseApp
   }
   'uboot' {
-    StartApp @('--connect', 'SIM:uboot')
+    # The countdown is interrupted 300 ms after start: the app must listen at the board's rate from the first
+    # byte (a detection needs the 1.5 s sample at 115200 first, during which typed keys are dropped).
+    StartApp @('--connect', 'SIM:uboot', '--baud', '1500000')
     Keys ' ' 300; Shot 'interrupted'
     Keys 'help{ENTER}' 900; Shot 'help'
     Keys 'printenv{ENTER}' 900; Shot 'printenv'
@@ -311,6 +328,128 @@ switch ($Scenario) {
       if ($null -ne $oldKnownHosts) { Set-ItemProperty -Path $regKey -Name knownHostsFile -Value $oldKnownHosts } else { Remove-ItemProperty -Path $regKey -Name knownHostsFile -ErrorAction SilentlyContinue }
     }
   }
+  'sshfiles' {
+    # Upload / download through Session > Upload File to Remote... against the real OpenSSH server.
+    # Paths go into the fields through the clipboard (Ctrl+A, Ctrl+V): SendKeys cannot type the
+    # non-ASCII file name and a pasted path is exactly what a user does with a long one.
+    function EscapeKeys([string]$s) { return ($s -replace '([+^%~(){}\[\]])', '{$1}') }
+    # Keys meant for the modeless transfer dialog: another application's popup (a chat notification)
+    # can take the foreground at any moment, and Focus() would bring the main window up instead.
+    $dialogTitle = 'Remote File Transfer'
+    function FocusDialog() {
+        $h = [Win32]::FindWindow($null, $dialogTitle)
+        if ($h -eq [IntPtr]::Zero) { return $false }
+        [Win32]::SetForegroundWindow($h) | Out-Null
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate($dialogTitle) } catch {}
+        Start-Sleep -Milliseconds 250
+        return ((ForegroundTitle) -eq $dialogTitle)
+    }
+    function DialogKeys($k, $waitMs = 400) {
+        if ((ForegroundTitle) -ne $dialogTitle) {
+            Log "foreground is '$(ForegroundTitle)' - refocusing the transfer dialog"
+            if (-not (FocusDialog)) { Focus; FocusDialog | Out-Null }
+        }
+        [System.Windows.Forms.SendKeys]::SendWait($k); Start-Sleep -Milliseconds $waitMs
+    }
+    function Paste([string]$text, $waitMs = 500) { [System.Windows.Forms.Clipboard]::SetText($text); DialogKeys '^a' 150; DialogKeys '^v' $waitMs }
+    function RandomFile([string]$path, [int]$bytes) {
+        $buffer = New-Object byte[] $bytes; (New-Object System.Random).NextBytes($buffer)
+        [System.IO.File]::WriteAllBytes($path, $buffer)
+        return (Get-FileHash $path -Algorithm SHA256).Hash.ToLower()
+    }
+    function WslHashes() {   # "<hash>  <path>" lines for the smoke files in /tmp (world-readable there)
+        if (-not $WslDistro) { return @() }
+        try { return @(& wsl.exe -d $WslDistro -- sh -c 'sha256sum /tmp/smoke-*.bin /tmp/smoke\ *.bin 2>/dev/null' | ForEach-Object { "$_" }) } catch { Log "WSL check failed: $_"; return @() }
+    }
+    # Every failed check is counted; the script exits with 1 after the scenario (see the end).
+    function Check([bool]$ok, [string]$what) { if ($ok) { Log "OK: $what" } else { $script:failures++; Log "FAIL: $what" } }
+    if (-not $SshPasswordFile -or -not (Test-Path $SshPasswordFile)) { throw "sshfiles scenario needs -SshPasswordFile <file with the password on its first line>" }
+    $password = (Get-Content $SshPasswordFile -TotalCount 1).Trim()
+    if (-not $password) { throw "empty password in $SshPasswordFile" }
+    $regKey = 'HKCU:\Software\BuildAI\SerialUtility\ssh'
+    if (-not (Test-Path $regKey)) { New-Item -Path $regKey -Force | Out-Null }
+    $oldKnownHosts = (Get-ItemProperty -Path $regKey -Name knownHostsFile -ErrorAction SilentlyContinue).knownHostsFile
+    $tmpKnownHosts = Join-Path $OutDir 'smoke_known_hosts'
+    Remove-Item $tmpKnownHosts -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regKey -Name knownHostsFile -Value $tmpKnownHosts
+    # The dialog remembers its last paths in the same registry hive: keep the user's own.
+    $pathsKey = 'HKCU:\Software\BuildAI\SerialUtility\remoteFile'
+    $oldPaths = Get-ItemProperty -Path $pathsKey -ErrorAction SilentlyContinue
+    # The local files: a 3 MB one with a space and a non-ASCII character in its name, a 60 MB one to cancel.
+    $smallName = "smoke upload " + [char]0x00FC + ".bin"
+    $small = Join-Path $OutDir $smallName
+    $big = Join-Path $OutDir 'smoke-big.bin'
+    $smallHash = RandomFile $small (3 * 1024 * 1024)
+    $bigHash = RandomFile $big (60 * 1024 * 1024)
+    $downloaded = Join-Path $OutDir ('downloaded ' + $smallName)
+    Remove-Item $downloaded -ErrorAction SilentlyContinue
+    Log "local files: $small ($smallHash), $big"
+    if ($WslDistro) { try { & wsl.exe -d $WslDistro -- sh -c 'rm -f /tmp/smoke-*.bin /tmp/smoke\ *.bin' | Out-Null } catch {} }
+    try {
+      StartApp @()
+      Keys '^+t' 800; Shot 'new-ssh-tab'
+      Keys ((EscapeKeys $SshTarget) + '{ENTER}') 2500
+      Shot 'hostkey-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"
+      Keys '{ENTER}' 1500
+      Shot 'password-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"   # v0.4: "Remember password for user@host:22" (left unchecked)
+      Keys ((EscapeKeys $password) + '{ENTER}') 3000
+      Shot 'shell'
+      # Session > Upload File to Remote... through the menu bar: Alt+S opens the menu, U is the accelerator.
+      Keys '%s' 700; Shot 'session-menu' -Screen
+      Keys 'u' 1500; Shot 'upload-dialog' -Screen; Log "foreground: '$(ForegroundTitle)'"
+      DialogKeys '%l' 300; Paste $small 600                 # Alt+L: the local file field
+      DialogKeys '%r' 600; Shot 'upload-default-remote' -Screen   # leaving the field derived <remote home>/<name>
+      Paste '/tmp/' 400                                # an explicit directory with a trailing slash
+      DialogKeys '%s' 300                                    # Alt+S = Start upload (from the field: no editingFinished)
+      Start-Sleep -Milliseconds 1500; Shot 'upload-3mb-finished' -Screen   # "Uploaded ... (3.1 MB, SFTP)", remote path completed with the name
+      $hashes = WslHashes; Log ("WSL: " + ($hashes -join ' | '))
+      Check (($hashes | Where-Object { $_ -like "$smallHash*" }).Count -ge 1) "3 MB upload verified in WSL by sha256sum"
+      # A 60 MB upload cancelled half-way: progress line with the method, then "Transfer cancelled" in red.
+      DialogKeys '%l' 300; Paste $big 600
+      DialogKeys '%r' 400; Paste '/tmp/' 400
+      DialogKeys '%s' 200
+      Start-Sleep -Milliseconds 1200; Shot 'upload-60mb-progress' -Screen
+      DialogKeys '%c' 1200; Shot 'upload-cancelled' -Screen   # Alt+C = Cancel
+      # Download the 3 MB file back: Alt+D (direction), Alt+R (remote file), Alt+T (save to), Alt+S.
+      # (Alt+A is WeChat's global screenshot hotkey: it froze the whole desktop in an earlier run.)
+      DialogKeys '%d' 600
+      DialogKeys '%r' 300; Paste "/tmp/$smallName" 500
+      DialogKeys '%t' 300; Paste $downloaded 500; Shot 'download-dialog' -Screen
+      DialogKeys '%s' 300
+      Start-Sleep -Milliseconds 2000; Shot 'download-finished' -Screen
+      if (Test-Path $downloaded) {
+        $downHash = (Get-FileHash $downloaded -Algorithm SHA256).Hash.ToLower()
+        Check ($downHash -eq $smallHash) "downloaded file matches the upload ($downHash)"
+      } else { Check $false "$downloaded was written" }
+      Check (-not (Test-Path "$downloaded.part")) "no .part file left behind"
+      # A remote file that does not exist: the error in red, the dialog still usable.
+      DialogKeys '%r' 300; Paste '/tmp/smoke-does-not-exist.bin' 500
+      DialogKeys '%s' 300
+      Start-Sleep -Milliseconds 1500; Shot 'download-missing-error' -Screen
+      # Cancel a large download half-way (the 60 MB upload may have been partial: whatever /tmp/smoke-big.bin holds).
+      DialogKeys '%r' 300; Paste '/tmp/smoke-big.bin' 500
+      DialogKeys '%t' 300; Paste (Join-Path $OutDir 'downloaded-big.bin') 500
+      DialogKeys '%s' 200
+      Start-Sleep -Milliseconds 800; Shot 'download-60mb-progress' -Screen
+      DialogKeys '%c' 1200; Shot 'download-cancelled' -Screen
+      Check (-not (Test-Path (Join-Path $OutDir 'downloaded-big.bin.part'))) "no .part after the cancelled download"
+      DialogKeys '%e' 800; Shot 'dialog-closed'              # Alt+E = Close
+      Keys 'ls -l /tmp/smoke*{ENTER}' 1200; Shot 'ls-remote'
+      Keys 'rm -f /tmp/smoke*{ENTER}' 800
+      Keys 'exit{ENTER}' 2000; Shot 'after-exit'
+      CloseApp
+    } finally {
+      if ($null -ne $oldKnownHosts) { Set-ItemProperty -Path $regKey -Name knownHostsFile -Value $oldKnownHosts } else { Remove-ItemProperty -Path $regKey -Name knownHostsFile -ErrorAction SilentlyContinue }
+      foreach ($name in @('lastLocalPath', 'lastRemotePath')) {
+        if ($null -ne $oldPaths -and $null -ne $oldPaths.$name) { Set-ItemProperty -Path $pathsKey -Name $name -Value $oldPaths.$name }
+        elseif (Test-Path $pathsKey) { Remove-ItemProperty -Path $pathsKey -Name $name -ErrorAction SilentlyContinue }
+      }
+    }
+  }
   default { throw "unknown scenario $Scenario" }
+}
+if ($script:failures -gt 0) {
+  Log ("done with {0} failed check(s)" -f $script:failures)
+  exit 1
 }
 Log "done"

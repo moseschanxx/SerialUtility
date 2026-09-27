@@ -105,6 +105,7 @@
     <addaction name="actionDownloadFile"/>
     <addaction name="actionSendBreak"/>
     <addaction name="actionSyncTerminalSize"/>
+    <addaction name="actionDetectBaudRate"/>
     <addaction name="separator"/>
     <addaction name="actionRefreshPorts"/>
    </widget>
@@ -137,9 +138,24 @@
     <addaction name="actionZoomIn"/>
     <addaction name="actionZoomOut"/>
     <addaction name="actionZoomReset"/>
-    <addaction name="separator"/>
+   </widget>
+   <widget class="QMenu" name="menuWindow">
+    <property name="title">
+     <string>&amp;Window</string>
+    </property>
     <addaction name="actionNextTab"/>
     <addaction name="actionPreviousTab"/>
+    <addaction name="separator"/>
+    <addaction name="actionSelectTab1"/>
+    <addaction name="actionSelectTab2"/>
+    <addaction name="actionSelectTab3"/>
+    <addaction name="actionSelectTab4"/>
+    <addaction name="actionSelectTab5"/>
+    <addaction name="actionSelectTab6"/>
+    <addaction name="actionSelectTab7"/>
+    <addaction name="actionSelectTab8"/>
+    <addaction name="actionSelectTab9"/>
+    <addaction name="separator"/>
    </widget>
    <widget class="QMenu" name="menuLanguage">
     <property name="title">
@@ -161,6 +177,7 @@
    <addaction name="menuSession"/>
    <addaction name="menuEdit"/>
    <addaction name="menuView"/>
+   <addaction name="menuWindow"/>
    <addaction name="menuLanguage"/>
    <addaction name="menuHelp"/>
   </widget>
@@ -251,7 +268,7 @@
     <string>Close the current session tab</string>
    </property>
    <property name="shortcut">
-    <string>Ctrl+W</string>
+    <string>Ctrl+Shift+W</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -421,7 +438,7 @@
   </action>
   <action name="actionDownloadFile">
    <property name="text">
-    <string>&amp;Download File from Remote...</string>
+    <string>Do&amp;wnload File from Remote...</string>
    </property>
    <property name="iconText">
     <string>Download</string>
@@ -450,6 +467,23 @@
    </property>
    <property name="toolTip">
     <string>Send &quot;stty cols/rows&quot; so the remote shell matches the window</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionDetectBaudRate">
+   <property name="text">
+    <string>De&amp;tect Baud Rate</string>
+   </property>
+   <property name="iconText">
+    <string>Detect Baud Rate</string>
+   </property>
+   <property name="toolTip">
+    <string>Listen at the candidate baud rates until the output reads as text and apply the one that works (serial sessions)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+B</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>
@@ -698,6 +732,132 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+Tab</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab1">
+   <property name="text">
+    <string>Tab &amp;1</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 1</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+1</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab2">
+   <property name="text">
+    <string>Tab &amp;2</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 2</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+2</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab3">
+   <property name="text">
+    <string>Tab &amp;3</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 3</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+3</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab4">
+   <property name="text">
+    <string>Tab &amp;4</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 4</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+4</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab5">
+   <property name="text">
+    <string>Tab &amp;5</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 5</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+5</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab6">
+   <property name="text">
+    <string>Tab &amp;6</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 6</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+6</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab7">
+   <property name="text">
+    <string>Tab &amp;7</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 7</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+7</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab8">
+   <property name="text">
+    <string>Tab &amp;8</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 8</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+8</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionSelectTab9">
+   <property name="text">
+    <string>Tab &amp;9</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to session tab 9</string>
+   </property>
+   <property name="shortcut">
+    <string>Alt+9</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>

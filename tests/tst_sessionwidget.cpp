@@ -33,7 +33,9 @@
 #include <memory>
 
 #include "app/AppSettings.h"
+#include "core/BaudRateDetector.h"
 #include "core/CommandHistory.h"
+#include "core/DeviceSimulator.h"
 #include "core/LineEnding.h"
 #include "core/QuickCommand.h"
 #include "core/SerialConnection.h"
@@ -97,7 +99,29 @@ private:
 
 const QString kLoopback = QStringLiteral("SIM:loopback");
 const QString kLinux = QStringLiteral("SIM:linux");
+const QString kMcu = QStringLiteral("SIM:mcu");
 const QString kGroupKey = QStringLiteral("ui/quickCommandGroup");
+/// The simulated boards talk at a native rate since v0.4; a session at another rate hears garbage.
+const qint32 kLinuxBaud = DeviceSimulator::nativeBaudRate(DeviceSimulator::Kind::Linux);   // 1500000
+const qint32 kMcuBaud = DeviceSimulator::nativeBaudRate(DeviceSimulator::Kind::Mcu);       // 115200
+constexpr qint32 kAutoBaud = -1;   ///< connectTo(): select the bar's "Auto" rate
+const QString kDetectingLine = QStringLiteral("--- detecting baud rate ---");
+const QString kRedetectingLine = QStringLiteral("--- output unreadable, re-detecting baud rate ---");
+const QString kCancelledLine = QStringLiteral("--- baud rate detection cancelled ---");
+
+QString detectedLine(qint32 baud)
+{
+    return QStringLiteral("--- baud rate %1 detected ---").arg(baud);
+}
+
+QStringList messagesOf(const QSignalSpy& statusSpy)
+{
+    QStringList messages;
+    for (const QList<QVariant>& args : statusSpy) {
+        messages.append(args.at(0).toString());
+    }
+    return messages;
+}
 
 /// Every line of the terminal (scrollback followed by the visible screen), joined with '\n'.
 QString allText(const TerminalWidget* terminal)
@@ -253,6 +277,19 @@ private slots:
     // ---- SessionWidget over SIM:linux -----------------------------------------------
     void linuxLoginUnameReboot();
 
+    // ---- Automatic baud-rate detection (v0.4) -----------------------------------------
+    void autoBaudConnectDetectsLinux();
+    void autoBaudWatchdogRedetects();
+    void manualDetectOnFixedRate();
+    void detectBaudRateRefusals();
+    void autoBaudSwitchAndCancel();
+    void barAutoBaudItem();
+    void autoBaudEndToEndWithPreferences();
+    void autoFromFixedKeepsLiveRate();
+    void manualDetectionSurvivesBarRepeat();
+    void detectBaudRateRefusedDuringFileSend();
+    void autoBaudWatchdogHoldsOnUnknownRate();
+
     // ---- Log replay -----------------------------------------------------------------
     void replayRawFile();
     void replayRefusedWhileConnected();
@@ -308,7 +345,8 @@ private slots:
 private:
     std::unique_ptr<SessionWidget> newSession();
     std::unique_ptr<SessionWidget> newSshSession(SshProfileStore* profiles = nullptr);
-    bool connectTo(SessionWidget* session, const QString& port);
+    /// `baud` > 0 selects that fixed rate in the bar first, kAutoBaud selects "Auto", 0 keeps the bar as is.
+    bool connectTo(SessionWidget* session, const QString& port, qint32 baud = 0);
     QString tempPath(const QString& name) const;
     static bool roundTrips(ConnectionBar& bar, const SerialSettings& settings);
 
@@ -372,6 +410,11 @@ void Tst_sessionwidget::init()
     app.setEncoding(QStringLiteral("UTF-8"));
     app.setPauseWhileSelecting(true);
     app.setRightClickPastes(true);
+    // Baud-rate detection: few candidates and short samples keep the searches quick.
+    app.setAutoBaudCandidates({115200, 921600, 1500000});
+    app.setAutoBaudSampleMs(400);
+    app.setAutoBaudWatchdog(true);
+    app.setDefaultSerialSettings(SerialSettings());   // a fixed 115200 for new sessions (autoBaudEndToEndWithPreferences sets Auto)
 }
 
 std::unique_ptr<SessionWidget> Tst_sessionwidget::newSession()
@@ -396,12 +439,23 @@ std::unique_ptr<SessionWidget> Tst_sessionwidget::newSshSession(SshProfileStore*
     return session;
 }
 
-bool Tst_sessionwidget::connectTo(SessionWidget* session, const QString& port)
+bool Tst_sessionwidget::connectTo(SessionWidget* session, const QString& port, qint32 baud)
 {
     session->setPortName(port);
     if (session->portName() != port) {
         qWarning() << "port not selected:" << session->portName();
         return false;
+    }
+    if (baud != 0) {
+        SerialSettings settings = session->connectionBar()->settings();
+        settings.portName = port;
+        if (baud == kAutoBaud) {
+            settings.autoBaud = true;   // the effective rate stays what the bar had (115200)
+        } else {
+            settings.autoBaud = false;
+            settings.baudRate = baud;
+        }
+        session->connectionBar()->setSettings(settings);
     }
     if (!session->connectPort()) {
         qWarning() << "connectPort() failed for" << port;
@@ -1629,7 +1683,7 @@ void Tst_sessionwidget::reconnectWhilePausedQueuesSystemLines()
     connect(session.get(), &SessionWidget::connectionStateChanged, this,
             [&states](State state) { states.append(static_cast<int>(state)); });
 
-    QVERIFY(connectTo(session.get(), kLinux));
+    QVERIFY(connectTo(session.get(), kLinux, kLinuxBaud));
     QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
     QTest::keyClicks(terminal, QStringLiteral("root"));
     QTest::keyClick(terminal, Qt::Key_Return);
@@ -1685,8 +1739,9 @@ void Tst_sessionwidget::linuxLoginUnameReboot()
             [&states](State state) { states.append(static_cast<int>(state)); });
     QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
 
-    QVERIFY(connectTo(session.get(), kLinux));
+    QVERIFY(connectTo(session.get(), kLinux, kLinuxBaud));   // the board talks at 1500000
     QCOMPARE(session->title(), kLinux);
+    QCOMPARE(session->connection()->settings().baudRate, kLinuxBaud);
 
     // Boot log, then the login prompt.
     QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
@@ -1741,8 +1796,747 @@ void Tst_sessionwidget::linuxLoginUnameReboot()
 }
 
 // =======================================================================================
+// Automatic baud-rate detection (v0.4)
+// =======================================================================================
+
+void Tst_sessionwidget::autoBaudConnectDetectsLinux()
+{
+    AppSettings::instance().setAutoLog(true);
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    auto* baudCombo = child<QComboBox>(bar, "baudCombo");
+    QVERIFY(baudCombo);
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    QSignalSpy titleSpy(session.get(), &SessionWidget::titleChanged);
+
+    // "Auto": the port opens at the effective rate (115200) and the search starts at once.
+    QVERIFY(connectTo(session.get(), kLinux, kAutoBaud));
+    QCOMPARE(baudCombo->currentIndex(), 0);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QVERIFY(bar->settings().autoBaud);
+    QCOMPARE(bar->settings().baudRate, 115200);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (115200) 8N1"));
+    QVERIFY(!session->isLogging());   // the auto-log waits for the rate so its header can name it
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Trying 115200..."));
+
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(1500000)), kSimTimeoutMs);
+    QString text = allText(terminal);
+    const qsizetype detecting = text.indexOf(kDetectingLine);
+    const qsizetype detected = text.indexOf(detectedLine(1500000));
+    QVERIFY2(detecting >= 0 && detected > detecting, qPrintable(text.left(500)));
+    // Nothing at all - in particular no garbage heard at 115200 / 921600 - between the two lines.
+    const QString between = text.mid(detecting + kDetectingLine.size(), detected - detecting - kDetectingLine.size());
+    QVERIFY2(between.trimmed().isEmpty(), qPrintable(between));
+    QVERIFY(!text.left(detected).contains(QChar(0xFFFD)));
+
+    // Every candidate was announced, in order, and the result reported.
+    const QStringList messages = messagesOf(statusSpy);
+    const qsizetype t1 = messages.indexOf(QStringLiteral("Trying 115200..."));
+    const qsizetype t2 = messages.indexOf(QStringLiteral("Trying 921600..."));
+    const qsizetype t3 = messages.indexOf(QStringLiteral("Trying 1500000..."));
+    QVERIFY2(t1 >= 0 && t2 > t1 && t3 > t2, qPrintable(messages.join(QLatin1String(" | "))));
+    const qsizetype reported = messages.indexOf(QStringLiteral("Baud rate 1500000 detected (Auto (1500000) 8N1)"));
+    QVERIFY2(reported > t3, qPrintable(messages.join(QLatin1String(" | "))));
+    // The deferred auto-log announces itself right after the result.
+    QVERIFY2(messages.last().startsWith(QStringLiteral("Logging to ")), qPrintable(messages.last()));
+
+    // Applied to the connection and the device, shown by the bar (which still says "Auto").
+    QCOMPARE(session->connection()->settings().baudRate, 1500000);
+    QVERIFY(session->connection()->settings().autoBaud);
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    QCOMPARE(sim->baudRate(), 1500000);
+    QVERIFY(sim->baudRateMatches());
+    QCOMPARE(baudCombo->currentIndex(), 0);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(bar->effectiveBaudRate(), 1500000);
+    QCOMPARE(bar->settings().baudRate, 1500000);
+    QVERIFY(bar->settings().autoBaud);
+    QCOMPARE(bar->settings().summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QVERIFY2(baudCombo->toolTip().contains(QStringLiteral("Auto (1500000)")), qPrintable(baudCombo->toolTip()));
+    QVERIFY(baudCombo->itemData(0, Qt::ToolTipRole).toString().contains(QStringLiteral("Auto (1500000)")));
+    QVERIFY(titleSpy.count() >= 1);   // MainWindow refreshes its status bar from the summary
+    QVERIFY(session->isConnected());
+
+    // The boot log follows as text: what arrived at 1500000 during the search is replayed first.
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
+    text = allText(terminal);
+    const QString after = text.mid(text.indexOf(detectedLine(1500000)));
+    QVERIFY2(after.count(QStringLiteral("[    ")) >= 10, qPrintable(after.left(600)));   // kernel lines
+    QVERIFY(after.contains(QStringLiteral("Freeing unused kernel memory")));
+    QVERIFY(!after.contains(QChar(0xFFFD)));
+    QVERIFY(!text.left(text.indexOf(detectedLine(1500000))).contains(QStringLiteral("[    ")));
+
+    // The auto-log started after the detection and names the detected rate.
+    QVERIFY(session->isLogging());
+    const QString logPath = session->logFilePath();
+    QVERIFY2(QFileInfo(logPath).fileName().startsWith(QStringLiteral("SIM_linux_")), qPrintable(logPath));
+    session->stopLogging();
+    const QString header = QString::fromUtf8(readFile(logPath)).section(QLatin1Char('\n'), 0, 0);
+    QVERIFY2(header.startsWith(QStringLiteral("# BuildAI Serial Utility log - SIM:linux Auto (1500000) 8N1")),
+             qPrintable(header));
+    QVERIFY(QString::fromUtf8(readFile(logPath)).contains(QStringLiteral("rv1106 login:")));
+
+    // And the console works at the detected rate.
+    QTest::keyClicks(terminal, QStringLiteral("root"));
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Password:")), kSimTimeoutMs);
+}
+
+void Tst_sessionwidget::autoBaudWatchdogRedetects()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    QVERIFY(connectTo(session.get(), kLinux, kAutoBaud));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(1500000)), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
+    QTest::keyClicks(terminal, QStringLiteral("root"));
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Password:")), kSimTimeoutMs);
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("[root@rv1106:~]#")), kSimTimeoutMs);
+
+    // A command that keeps the console busy for ~3 s, then "the board switches to 115200".
+    session->commandInput()->setText(QStringLiteral("progress"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Downloading firmware")), kSimTimeoutMs);
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    QCOMPARE(sim->nativeBaudRate(), 1500000);
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    sim->setNativeBaudRate(115200);
+
+    // The watchdog notices the garbage, the session re-detects and follows the board.
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(kRedetectingLine), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(115200)), kSimTimeoutMs);
+    QString text = allText(terminal);
+    QVERIFY(text.indexOf(kRedetectingLine) < text.indexOf(detectedLine(115200)));
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(sim->baudRate(), 115200);
+    QVERIFY(sim->baudRateMatches());
+    QCOMPARE(bar->effectiveBaudRate(), 115200);
+    QCOMPARE(bar->settings().summary(), QStringLiteral("Auto (115200) 8N1"));
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (115200) 8N1"));
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Trying 1500000...")));   // the current rate first
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Trying 115200...")));
+    QVERIFY(session->isConnected());
+
+    // The console is readable again: the download finishes as text and the shell answers.
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200)))
+                                 .contains(QStringLiteral("Download complete")),
+                             kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200)))
+                                 .contains(QStringLiteral("[root@rv1106:~]#")),
+                             kSimTimeoutMs);
+    session->commandInput()->setText(QStringLiteral("uname -a"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Linux rv1106 5.10.160")), kSimTimeoutMs);
+
+    // Bounded: another switch right away is noticed but not acted upon within the quiet period.
+    session->commandInput()->setText(QStringLiteral("progress"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).count(QStringLiteral("Downloading firmware")) >= 2, kSimTimeoutMs);
+    sim->setNativeBaudRate(1500000);
+    QTest::qWait(1500);
+    QCOMPARE(allText(terminal).count(kRedetectingLine), 1);
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    sim->setNativeBaudRate(115200);   // back in step for the teardown
+}
+
+void Tst_sessionwidget::manualDetectOnFixedRate()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    auto* baudCombo = child<QComboBox>(bar, "baudCombo");
+    QVERIFY(baudCombo);
+
+    // A fixed 9600 on a firmware that talks at 115200: the banner is garbage.
+    QVERIFY(connectTo(session.get(), kMcu, 9600));
+    QVERIFY(!bar->settings().autoBaud);
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("9600 8N1"));
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    QCOMPARE(sim->nativeBaudRate(), kMcuBaud);
+    QTRY_VERIFY_WITH_TIMEOUT(session->connection()->bytesReceived() > 100, kSimTimeoutMs);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("BuildAI MCU shell")));
+
+    // Make the firmware chatty (telemetry every 100 ms), then let it talk at its own rate again.
+    sim->setNativeBaudRate(9600);
+    session->sendBytes(QByteArrayLiteral("telemetry on 100\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Telemetry enabled (every 100 ms)")),
+                             kSimTimeoutMs);
+    sim->setNativeBaudRate(kMcuBaud);
+    QVERIFY(!sim->baudRateMatches());
+
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    session->detectBaudRate();
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Trying 9600..."));   // the current rate first
+    session->detectBaudRate();                                                     // while it runs: refused
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Baud rate detection is already running"));
+
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(115200)), kSimTimeoutMs);
+    // A fixed-rate session: the rate found is the new fixed rate, in the combo too.
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QVERIFY(!session->connection()->settings().autoBaud);
+    QCOMPARE(bar->settings().baudRate, 115200);
+    QVERIFY(!bar->settings().autoBaud);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("115200"));
+    QCOMPARE(baudCombo->currentIndex(), baudCombo->findData(115200));
+    QCOMPARE(session->transport()->summary(), QStringLiteral("115200 8N1"));
+    QCOMPARE(sim->baudRate(), 115200);
+    QVERIFY2(messagesOf(statusSpy).last().startsWith(QStringLiteral("Baud rate 115200 detected (115200 8N1)")),
+             qPrintable(messagesOf(statusSpy).last()));
+    QVERIFY(session->isConnected());
+
+    // Readable now: telemetry lines show, the shell answers.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200))).contains(QStringLiteral("temp=")),
+        kSimTimeoutMs);
+    session->sendBytes(QByteArrayLiteral("telemetry off\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Telemetry disabled")), kSimTimeoutMs);
+
+    // A second manual run on the (now right) rate confirms it without changing anything.
+    statusSpy.clear();
+    session->sendBytes(QByteArrayLiteral("telemetry on 100\r"));
+    session->detectBaudRate();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).count(detectedLine(115200)) == 2, kSimTimeoutMs);
+    QCOMPARE(messagesOf(statusSpy).first(), QStringLiteral("Trying 115200..."));
+    QVERIFY(!messagesOf(statusSpy).contains(QStringLiteral("Trying 921600...")));
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("115200"));
+    session->sendBytes(QByteArrayLiteral("telemetry off\r"));
+}
+
+void Tst_sessionwidget::detectBaudRateRefusals()
+{
+    // SSH sessions have no baud rate.
+    auto ssh = newSshSession();
+    QVERIFY(ssh);
+    ssh->setSshTarget(QStringLiteral("root@10.0.0.24"));
+    QSignalSpy sshStatus(ssh.get(), &SessionWidget::statusMessage);
+    ssh->detectBaudRate();
+    QCOMPARE(sshStatus.count(), 1);
+    QCOMPARE(sshStatus.at(0).at(0).toString(), QStringLiteral("Not available for SSH sessions"));
+    QVERIFY(!allText(ssh->terminal()).contains(QStringLiteral("detecting")));
+
+    // A serial session that is not connected.
+    auto session = newSession();
+    QVERIFY(session);
+    session->setPortName(kLoopback);
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    session->detectBaudRate();
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(statusSpy.at(0).at(0).toString(), QStringLiteral("Not connected"));
+    QVERIFY(!allText(session->terminal()).contains(QStringLiteral("detecting")));
+    QVERIFY(!session->isConnected());
+
+    // Connected, but the device stays silent: the original rate is kept and reported.
+    QVERIFY(connectTo(session.get(), kLoopback, 9600));
+    statusSpy.clear();
+    session->detectBaudRate();
+    QVERIFY(allText(session->terminal()).contains(kDetectingLine));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(session->terminal()).contains(QStringLiteral("--- no readable output at any baud rate, keeping 9600 ---")),
+        kSimTimeoutMs);
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("No output from the device, keeping 9600"));
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+    QCOMPARE(session->connectionBar()->settings().baudRate, 9600);
+    QVERIFY(session->isConnected());
+    // The terminal is live again: the loopback echo shows.
+    session->sendBytes(QByteArrayLiteral("still here"));
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(session->terminal()).contains(QStringLiteral("still here")), kSimTimeoutMs);
+}
+
+void Tst_sessionwidget::autoBaudSwitchAndCancel()
+{
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    auto* baudCombo = child<QComboBox>(bar, "baudCombo");
+    QVERIFY(baudCombo);
+
+    // A fixed, wrong rate on the Linux board: garbage in the terminal (the user "sees it").
+    QVERIFY(connectTo(session.get(), kLinux, 115200));
+    QTRY_VERIFY_WITH_TIMEOUT(session->connection()->bytesReceived() > 200, kSimTimeoutMs);
+    QVERIFY(!allText(terminal).contains(QStringLiteral("Booting Linux")));
+
+    // Choosing "Auto" while connected runs the search right away.
+    baudCombo->setCurrentIndex(0);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(1500000)), kSimTimeoutMs);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QCOMPARE(bar->settings().summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
+
+    // A fixed rate chosen while a search runs cancels it; the chosen rate wins.
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    session->detectBaudRate();
+    QCOMPARE(allText(terminal).count(kDetectingLine), 2);
+    baudCombo->setCurrentIndex(baudCombo->findData(9600));
+    QVERIFY(allText(terminal).contains(kCancelledLine));
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Baud rate detection cancelled")));
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+    QVERIFY(!session->connection()->settings().autoBaud);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("9600 8N1"));
+    QTest::qWait(500);
+    QCOMPARE(allText(terminal).count(detectedLine(1500000)), 1);   // the cancelled search reports nothing more
+
+    // Disconnecting during a search cancels it as well; nothing is detected afterwards.
+    baudCombo->setCurrentIndex(0);   // "Auto" again -> a new search
+    QCOMPARE(allText(terminal).count(kDetectingLine), 3);
+    session->disconnectPort();
+    QVERIFY(!session->isConnected());
+    QCOMPARE(allText(terminal).count(kCancelledLine), 2);
+    QTest::qWait(500);
+    QCOMPARE(allText(terminal).count(detectedLine(1500000)), 1);
+    QVERIFY(bar->settings().autoBaud);   // the bar keeps the user's choice for the next connect
+}
+
+void Tst_sessionwidget::barAutoBaudItem()
+{
+    QList<SerialSettings> changes;
+    ConnectionBar bar;
+    QVERIFY(expose(&bar));
+    bar.setPorts({makeEntry(QStringLiteral("COM8"))});
+    bar.selectPort(QStringLiteral("COM8"));
+    auto* baudCombo = child<QComboBox>(&bar, "baudCombo");
+    QVERIFY(baudCombo);
+    connect(&bar, &ConnectionBar::settingsChanged, this,
+            [&changes](const SerialSettings& settings) { changes.append(settings); });
+
+    // "Auto" is the first item (data 0); a fresh bar starts at 115200, not at "Auto".
+    QCOMPARE(baudCombo->itemText(0), QStringLiteral("Auto"));
+    QCOMPARE(baudCombo->itemData(0).toInt(), 0);
+    QCOMPARE(baudCombo->itemData(1).toInt(), 300);
+    QCOMPARE(baudCombo->count(), SerialSettings::standardBaudRates().size() + 1);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("115200"));
+    QVERIFY(!bar.settings().autoBaud);
+    QCOMPARE(bar.effectiveBaudRate(), 115200);   // AppSettings' first candidate
+
+    // Selecting it is a user change: autoBaud with the effective rate.
+    baudCombo->setCurrentIndex(0);
+    QCOMPARE(changes.size(), qsizetype(1));
+    QVERIFY(changes.last().autoBaud);
+    QCOMPARE(changes.last().baudRate, 115200);
+    QCOMPARE(changes.last().portName, QStringLiteral("COM8"));
+    QCOMPARE(bar.settings().summary(), QStringLiteral("Auto (115200) 8N1"));
+    QVERIFY(baudCombo->toolTip().contains(QStringLiteral("Auto (115200)")));
+
+    // setEffectiveBaudRate(): tooltips and settings() follow, the selection stays, nothing is emitted.
+    bar.setEffectiveBaudRate(1500000);
+    QCOMPARE(changes.size(), qsizetype(1));
+    QCOMPARE(baudCombo->currentIndex(), 0);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(bar.effectiveBaudRate(), 1500000);
+    QVERIFY(bar.settings().autoBaud);
+    QCOMPARE(bar.settings().baudRate, 1500000);
+    QCOMPARE(bar.settings().summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QVERIFY2(baudCombo->toolTip().contains(QStringLiteral("Auto (1500000)")), qPrintable(baudCombo->toolTip()));
+    QVERIFY(baudCombo->itemData(0, Qt::ToolTipRole).toString().contains(QStringLiteral("Auto (1500000)")));
+    bar.setEffectiveBaudRate(0);   // invalid: ignored
+    bar.setEffectiveBaudRate(20000000);
+    QCOMPARE(bar.effectiveBaudRate(), 1500000);
+
+    // setSettings(): autoBaud selects "Auto" and remembers the effective rate; a fixed rate is fixed.
+    SerialSettings s;
+    s.portName = QStringLiteral("COM8");
+    s.baudRate = 921600;
+    s.autoBaud = true;
+    QVERIFY(roundTrips(bar, s));
+    QCOMPARE(baudCombo->currentIndex(), 0);
+    QCOMPARE(bar.effectiveBaudRate(), 921600);
+    s.autoBaud = false;
+    s.baudRate = 9600;
+    QVERIFY(roundTrips(bar, s));
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("9600"));
+    QCOMPARE(bar.effectiveBaudRate(), 921600);   // still remembered behind "Auto"
+    QVERIFY(!baudCombo->toolTip().contains(QStringLiteral("Auto (")));
+    s.baudRate = 250000;                             // non-standard: edit text only
+    QVERIFY(roundTrips(bar, s));
+    QCOMPARE(baudCombo->currentIndex(), -1);
+    QCOMPARE(changes.size(), qsizetype(1));   // programmatic changes emit nothing
+
+    // The validator is still a QIntValidator over the baud range, and it accepts "Auto".
+    const QValidator* validator = baudCombo->validator();
+    QVERIFY(qobject_cast<const QIntValidator*>(validator));
+    int pos = 0;
+    QString text = QStringLiteral("auto");
+    QCOMPARE(validator->validate(text, pos), QValidator::Acceptable);
+    text = QStringLiteral("AUTO");
+    QCOMPARE(validator->validate(text, pos), QValidator::Acceptable);
+    text = QStringLiteral("Au");
+    QCOMPARE(validator->validate(text, pos), QValidator::Intermediate);
+    text = QStringLiteral("xyz");
+    QCOMPARE(validator->validate(text, pos), QValidator::Invalid);
+    text = QStringLiteral("115200");
+    QCOMPARE(validator->validate(text, pos), QValidator::Acceptable);
+    text = QStringLiteral("999999999");   // more digits than kMaxBaudRate has
+    QCOMPARE(validator->validate(text, pos), QValidator::Invalid);
+    text = QStringLiteral("20");          // could still become 200
+    QCOMPARE(validator->validate(text, pos), QValidator::Intermediate);
+
+    // Typing "auto" and pressing Enter means "Auto" (with the remembered effective rate) ...
+    QLineEdit* edit = baudCombo->lineEdit();
+    QVERIFY(edit);
+    edit->clear();
+    QTest::keyClicks(edit, QStringLiteral("auto"));
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(bar.settings().autoBaud);
+    QCOMPARE(bar.settings().baudRate, 921600);
+    QVERIFY(changes.size() >= 2);
+    QVERIFY(changes.last().autoBaud);
+    // ... and a typed number is a fixed rate again.
+    edit->clear();
+    QTest::keyClicks(edit, QStringLiteral("250000"));
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(!bar.settings().autoBaud);
+    QCOMPARE(bar.settings().baudRate, 250000);
+    QVERIFY(!changes.last().autoBaud);
+    QCOMPARE(changes.last().baudRate, 250000);
+    // Garbage in the edit still falls back to a fixed 115200.
+    edit->clear();
+    QVERIFY(!bar.settings().autoBaud);
+    QCOMPARE(bar.settings().baudRate, 115200);
+}
+
+void Tst_sessionwidget::autoBaudEndToEndWithPreferences()
+{
+    // The whole v0.4 serial flow with the values a user sets in Preferences (AppSettings): the
+    // default serial settings say "Auto" (Preferences > Connection > Default baud rate), the
+    // candidate list and sample time are the user's own, connectPort() detects the board's rate,
+    // the watchdog follows a rate switch with the same candidates, and a manual Detect Baud Rate
+    // (the slot behind Session > Detect Baud Rate) finds the board again when the watchdog's
+    // quiet period holds it back. Cross-package: autobaud + the keyboard package's
+    // Preferences fields + the simulator's native rates.
+    AppSettings& app = AppSettings::instance();
+    SerialSettings defaults;
+    defaults.autoBaud = true;                              // Preferences > Connection: Default baud rate = Auto
+    app.setDefaultSerialSettings(defaults);
+    app.setAutoBaudCandidates({9600, 1500000, 115200});    // Preferences > Connection: Auto baud candidates
+    app.setAutoBaudSampleMs(500);                          // Preferences > Connection: Auto baud sample time
+    app.setAutoBaudWatchdog(true);
+    QCOMPARE(app.autoBaudCandidates(), (QList<qint32>{9600, 1500000, 115200}));
+    QCOMPARE(app.autoBaudSampleMs(), 500);
+
+    auto session = newSession();
+    QVERIFY(session);
+    ConnectionBar* bar = session->connectionBar();
+    auto* baudCombo = child<QComboBox>(bar, "baudCombo");
+    QVERIFY(baudCombo);
+    // A new session starts on the bar's Auto item because the default says so.
+    QVERIFY(bar->settings().autoBaud);
+    QCOMPARE(baudCombo->currentIndex(), 0);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(bar->settings().baudRate, 115200);   // the starting rate
+    TerminalWidget* terminal = session->terminal();
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    const auto tryingMessages = [&statusSpy]() {
+        QStringList trying;
+        const QStringList messages = messagesOf(statusSpy);
+        for (const QString& message : messages) {
+            if (message.startsWith(QStringLiteral("Trying "))) {
+                trying.append(message);
+            }
+        }
+        return trying;
+    };
+
+    // connectPort() as the Connect button does it: the port opens at the starting rate and the
+    // search runs the current rate first, then the user's candidates (each once).
+    session->setPortName(kLinux);
+    QVERIFY(session->connectPort());
+    QVERIFY(session->isConnected());
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    QCOMPARE(sim->nativeBaudRate(), kLinuxBaud);
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(kLinuxBaud)), kSimTimeoutMs);
+    QCOMPARE(tryingMessages(), (QStringList{QStringLiteral("Trying 115200..."), QStringLiteral("Trying 9600..."),
+                                            QStringLiteral("Trying 1500000...")}));
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Baud rate 1500000 detected (Auto (1500000) 8N1)")));
+    QCOMPARE(session->connection()->settings().baudRate, kLinuxBaud);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(bar->effectiveBaudRate(), kLinuxBaud);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QVERIFY(sim->baudRateMatches());
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("rv1106 login:")), kBootTimeoutMs);
+    QVERIFY(!allText(terminal).contains(QChar(0xFFFD)));   // no garbage shown before or after
+
+    // Log in and keep the console talking, then "the board switches to 115200": the watchdog
+    // re-detects with the same candidates, the current rate first and 1500000 not twice.
+    QTest::keyClicks(terminal, QStringLiteral("root"));
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Password:")), kSimTimeoutMs);
+    QTest::keyClick(terminal, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("[root@rv1106:~]#")), kSimTimeoutMs);
+    session->commandInput()->setText(QStringLiteral("progress"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Downloading firmware")), kSimTimeoutMs);
+    statusSpy.clear();
+    sim->setNativeBaudRate(115200);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(kRedetectingLine), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(115200)), kSimTimeoutMs);
+    QCOMPARE(tryingMessages(), (QStringList{QStringLiteral("Trying 1500000..."), QStringLiteral("Trying 9600..."),
+                                            QStringLiteral("Trying 115200...")}));
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Baud rate 115200 detected (Auto (115200) 8N1)")));
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(bar->effectiveBaudRate(), 115200);
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (115200) 8N1"));
+    QVERIFY(sim->baudRateMatches());
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200)))
+                                 .contains(QStringLiteral("Download complete")),
+                             kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200)))
+                                 .contains(QStringLiteral("[root@rv1106:~]#")),
+                             kSimTimeoutMs);
+
+    // The board switches back within the watchdog's quiet period: the garbage shows, no second
+    // automatic run - Session > Detect Baud Rate (Ctrl+Shift+B) is the user's way out and finds
+    // 1500000 with the same candidate order.
+    session->commandInput()->setText(QStringLiteral("progress"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).count(QStringLiteral("Downloading firmware")) >= 2, kSimTimeoutMs);
+    statusSpy.clear();
+    sim->setNativeBaudRate(kLinuxBaud);
+    QVERIFY(!sim->baudRateMatches());
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).mid(allText(terminal).indexOf(detectedLine(115200))).contains(QChar(0xFFFD)), kSimTimeoutMs);
+    QCOMPARE(allText(terminal).count(kRedetectingLine), 1);
+    QCOMPARE(allText(terminal).count(kDetectingLine), 1);
+    session->detectBaudRate();
+    QCOMPARE(allText(terminal).count(kDetectingLine), 2);
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Trying 115200..."));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).count(detectedLine(kLinuxBaud)) == 2, kSimTimeoutMs);
+    QCOMPARE(tryingMessages(), (QStringList{QStringLiteral("Trying 115200..."), QStringLiteral("Trying 9600..."),
+                                            QStringLiteral("Trying 1500000...")}));
+    QVERIFY(messagesOf(statusSpy).contains(QStringLiteral("Baud rate 1500000 detected (Auto (1500000) 8N1)")));
+    QCOMPARE(allText(terminal).count(kRedetectingLine), 1);   // the watchdog stayed out of it
+    QCOMPARE(session->connection()->settings().baudRate, kLinuxBaud);
+    QVERIFY(session->connection()->settings().autoBaud);   // still Auto: the bar keeps its item
+    QCOMPARE(baudCombo->currentText(), QStringLiteral("Auto"));
+    QCOMPARE(bar->effectiveBaudRate(), kLinuxBaud);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (1500000) 8N1"));
+    QVERIFY(sim->baudRateMatches());
+    QVERIFY(session->isConnected());
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).count(QStringLiteral("Download complete")) >= 2, kSimTimeoutMs);
+    session->commandInput()->setText(QStringLiteral("uname -a"));
+    session->commandInput()->send();
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Linux rv1106 5.10.160")), kSimTimeoutMs);
+    app.setDefaultSerialSettings(SerialSettings());
+}
+
+// =======================================================================================
 // Log replay
 // =======================================================================================
+
+void Tst_sessionwidget::autoFromFixedKeepsLiveRate()
+{
+    // Header: choosing "Auto" while connected at a fixed rate searches from that rate - it is
+    // tried first and a quiet device keeps it - instead of the bar's stale effective rate
+    // (115200 on a fresh bar), which left a session that was readable at 9600 at 115200.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    auto* baudCombo = child<QComboBox>(bar, "baudCombo");
+    QVERIFY(baudCombo);
+    QCOMPARE(bar->effectiveBaudRate(), 115200);   // what the fresh bar's "Auto" stands for
+
+    QVERIFY(connectTo(session.get(), kMcu, 9600));
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    sim->setNativeBaudRate(9600);   // a firmware built for 9600: readable at the fixed rate
+    session->sendBytes(QByteArrayLiteral("AT\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("OK")), kSimTimeoutMs);
+    QTest::qWait(300);   // idle at its prompt: the device says nothing on its own
+
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    baudCombo->setCurrentIndex(0);   // "Auto"
+    // The search starts from the live rate, which is now the effective rate behind "Auto".
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+    QCOMPARE(bar->effectiveBaudRate(), 9600);
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Trying 9600..."));
+    // A quiet device: nothing at any rate, the live rate is kept - and shown as the Auto rate.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).contains(QStringLiteral("--- no readable output at any baud rate, keeping 9600 ---")),
+        kSimTimeoutMs);
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("No output from the device, keeping 9600"));
+    QVERIFY(!messagesOf(statusSpy).contains(QStringLiteral("Trying 115200...")) ||
+            messagesOf(statusSpy).indexOf(QStringLiteral("Trying 9600...")) <
+                messagesOf(statusSpy).indexOf(QStringLiteral("Trying 115200...")));
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+    QVERIFY(session->connection()->settings().autoBaud);
+    QCOMPARE(session->transport()->summary(), QStringLiteral("Auto (9600) 8N1"));
+    QCOMPARE(bar->settings().summary(), QStringLiteral("Auto (9600) 8N1"));
+    QCOMPARE(sim->baudRate(), 9600);
+    QVERIFY(sim->baudRateMatches());
+    QVERIFY(session->isConnected());
+    // Still readable afterwards.
+    session->sendBytes(QByteArrayLiteral("AT+GMR\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal)
+                                 .mid(allText(terminal).indexOf(QStringLiteral("keeping 9600")))
+                                 .contains(QStringLiteral("OK")),
+                             kSimTimeoutMs);
+}
+
+void Tst_sessionwidget::manualDetectionSurvivesBarRepeat()
+{
+    // Header: a re-emission of unchanged bar settings (the bar's duplicate filter is reset by a
+    // port list change, a focus change then repeats editingFinished) is not a user change and
+    // must not cancel a running detection on a fixed rate - although the connection is on
+    // another candidate at that moment, so the bar's settings differ from the connection's.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    ConnectionBar* bar = session->connectionBar();
+    QVERIFY(connectTo(session.get(), kLoopback, 115200));   // silent: the search visits every candidate
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    session->detectBaudRate();
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    // Wait until the search moved on to another candidate, then repeat the bar's settings.
+    QTRY_VERIFY_WITH_TIMEOUT(session->connection()->settings().baudRate != 115200, kSimTimeoutMs);
+    QCOMPARE(bar->settings().baudRate, 115200);   // the bar still shows the fixed rate
+    QVERIFY(!bar->settings().autoBaud);
+    emit bar->settingsChanged(bar->settings());
+    QVERIFY(!allText(terminal).contains(kCancelledLine));
+    QVERIFY(!messagesOf(statusSpy).contains(QStringLiteral("Baud rate detection cancelled")));
+    QVERIFY(session->connection()->settings().baudRate != 115200);   // the search goes on
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).contains(QStringLiteral("--- no readable output at any baud rate, keeping 115200 ---")),
+        kSimTimeoutMs);
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QCOMPARE(bar->settings().baudRate, 115200);
+    QVERIFY(!allText(terminal).contains(kCancelledLine));
+    QVERIFY(session->isConnected());
+    // A real change still cancels (autoBaudSwitchAndCancel covers the bar's own emission).
+    session->detectBaudRate();
+    QCOMPARE(allText(terminal).count(kDetectingLine), 2);
+    SerialSettings changed = bar->settings();
+    changed.baudRate = 9600;
+    emit bar->settingsChanged(changed);
+    QVERIFY(allText(terminal).contains(kCancelledLine));
+    QCOMPARE(session->connection()->settings().baudRate, 9600);
+}
+
+void Tst_sessionwidget::detectBaudRateRefusedDuringFileSend()
+{
+    // Header: no detection starts while the session's SendFileDialog is sending (the rest of the
+    // file would leave at the wrong rates, and 0.4.0's purge of the TX buffer between candidates
+    // even dropped chunks): the request is refused with a status message, the file arrives
+    // complete, and afterwards the detection runs as usual.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(connectTo(session.get(), kLoopback, 115200));
+    QByteArray lines;
+    for (int i = 1; i <= 20; ++i) {
+        lines += QStringLiteral("line %1\n").arg(i).toUtf8();
+    }
+    const QString filePath = tempPath(QStringLiteral("send-during-detect.txt"));
+    QVERIFY(writeFile(filePath, lines));
+    QByteArray received;
+    connect(session->connection(), &SerialConnection::dataReceived, this,
+            [&received](const QByteArray& bytes) { received += bytes; });
+
+    session->sendFile(filePath);
+    auto* dialog = session->findChild<SendFileDialog*>();
+    QVERIFY(dialog);
+    QVERIFY(QTest::qWaitForWindowExposed(dialog));
+    auto* lineDelay = child<QSpinBox>(dialog, "lineDelaySpin");
+    QVERIFY(lineDelay);
+    lineDelay->setValue(100);   // 20 lines x 100 ms: the send outlives the refusal below
+    auto* startButton = child<QPushButton>(dialog, "startButton");
+    QVERIFY(startButton);
+    QSignalSpy finishedSpy(dialog, &SendFileDialog::sendingFinished);
+    QTest::mouseClick(startButton, Qt::LeftButton);
+    QVERIFY(dialog->isSending());
+
+    QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
+    session->detectBaudRate();
+    QCOMPARE(messagesOf(statusSpy).last(), QStringLiteral("Cannot detect the baud rate while a file is being sent"));
+    QVERIFY(!allText(terminal).contains(kDetectingLine));
+    QVERIFY(dialog->isSending());
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, kSimTimeoutMs);
+    QVERIFY(finishedSpy.at(0).at(0).toBool());
+    QTRY_COMPARE_WITH_TIMEOUT(received.count("line "), qsizetype(20), kSimTimeoutMs);
+    QVERIFY(received.contains("line 20"));
+    // Now it runs.
+    session->detectBaudRate();
+    QVERIFY(allText(terminal).contains(kDetectingLine));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("keeping 115200")), kSimTimeoutMs);
+    dialog->close();
+}
+
+void Tst_sessionwidget::autoBaudWatchdogHoldsOnUnknownRate()
+{
+    // Header: a watchdog re-detection that finds nothing readable at any candidate (the board
+    // talks at a rate outside the list) holds the watchdog - no further search, so the terminal
+    // is not muted every quiet period for a rate it cannot find - until readable output arrives;
+    // a later switch to a listed rate is followed again.
+    auto session = newSession();
+    QVERIFY(session);
+    TerminalWidget* terminal = session->terminal();
+    QVERIFY(connectTo(session.get(), kMcu, kAutoBaud));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(115200)), kSimTimeoutMs);
+    auto* sim = session->connection()->findChild<DeviceSimulator*>();
+    QVERIFY(sim);
+    session->sendBytes(QByteArrayLiteral("telemetry on 100\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Telemetry enabled (every 100 ms)")),
+                             kSimTimeoutMs);
+
+    // The board switches to a rate outside the candidate list: garbage, one re-detection, nothing.
+    sim->setNativeBaudRate(250000);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(kRedetectingLine), kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).contains(QStringLiteral("--- no readable output at any baud rate, keeping 115200 ---")),
+        kSimTimeoutMs);
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+    QVERIFY(session->connection()->settings().autoBaud);
+    // Bounded for good, not only for the 5 s quiet period: the garbage keeps flowing, no second search.
+    const quint64 before = session->connection()->bytesReceived();
+    QTest::qWait(7000);
+    QCOMPARE(allText(terminal).count(kRedetectingLine), 1);
+    QVERIFY(session->connection()->bytesReceived() > before + 512);
+    QCOMPARE(session->connection()->settings().baudRate, 115200);
+
+    // Readable output releases the hold; the next switch, to a listed rate, is followed.
+    sim->setNativeBaudRate(115200);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        allText(terminal).mid(allText(terminal).lastIndexOf(QStringLiteral("keeping 115200"))).contains(QStringLiteral("temp=")),
+        kSimTimeoutMs);
+    QTest::qWait(1000);   // a full readable window
+    sim->setNativeBaudRate(1500000);
+    QTRY_COMPARE_WITH_TIMEOUT(allText(terminal).count(kRedetectingLine), 2, kSimTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(detectedLine(1500000)), kSimTimeoutMs);
+    QCOMPARE(session->connection()->settings().baudRate, 1500000);
+    QCOMPARE(sim->baudRate(), 1500000);
+    QVERIFY(sim->baudRateMatches());
+    session->sendBytes(QByteArrayLiteral("telemetry off\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(allText(terminal).contains(QStringLiteral("Telemetry disabled")), kSimTimeoutMs);
+}
 
 void Tst_sessionwidget::replayRawFile()
 {

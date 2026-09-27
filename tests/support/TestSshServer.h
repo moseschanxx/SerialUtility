@@ -32,6 +32,23 @@
  *    Every byte received from the client is appended to receivedShellInput(). exec runs the
  *    same command interpreter once (no welcome, no prompt) and exits with status 0, or n
  *    for "exit n".
+ *  - exec file commands (what SshConnection's non-SFTP transfer fallback needs; paths are
+ *    single-quoted shell words - the '\'' idiom works - resolved relative to Options::rootDir
+ *    (absolute paths are used as given, like the SFTP handler), ".." refused, exit status 1 on
+ *    error with a message on stderr): `cat > 'p'` (stdin until EOF -> file, exit 0; with
+ *    Options::execUploadLimit >= 0 only that many bytes reach the file, the rest is dropped and
+ *    the command ends with "cat: write error: No space left on device" and exit status 1, like
+ *    a full flash), `: > 'p'` (create / truncate, what the fallback runs before `cat >` to learn
+ *    whether the file can be written at all), `cat 'p'` (file -> stdout, streamed in 64 KiB
+ *    pieces as the window allows), `wc -c < 'p'` (size + LF), `test -e 'p'` (exit 0 / 1),
+ *    `chmod NNN 'p'`, `rm -f 'p'`, `mkdir -p 'p'`, `mv 'a' 'b'`, `pwd` (the canonical rootDir +
+ *    LF, what the fallback's remote-home lookup runs); commands may be joined with " && " (stop
+ *    at the first failure, whose status is the exit status). Any other first word runs the
+ *    scripted shell command once, as before. Options::sendExecExitStatus = false ends the data
+ *    commands `cat > 'p'` and `cat 'p'` with EOF and close but no exit-status message (a
+ *    server whose status for the long command is late or never comes; the fallback then
+ *    verifies an upload's size with `wc -c`) - the short helper commands keep their status.
+ *    Options::allowSftp = false refuses the sftp subsystem (sftpRequested() still fires).
  *  - SFTP: a small built-in SFTP v3 server (tests/support/TestSftpHandler.h) serving the
  *    real file system: relative paths, "." and "~" resolve against Options::rootDir (a
  *    temporary directory the tests keep their files in), absolute paths are used as given.
@@ -67,7 +84,15 @@ public:
         QString kbdintPrompt = QStringLiteral("Token: ");
         QString kbdintAnswer = QStringLiteral("424242");
         QString banner;                    ///< pre-auth banner text (empty = none)
-        QString rootDir;                   ///< SFTP root (must exist)
+        QString rootDir;                   ///< SFTP root (must exist); also the working directory of the exec file commands
+        /// false = the "sftp" subsystem request is refused (a dropbear-like server), so clients
+        /// must fall back to the exec channel commands (see the class comment).
+        bool allowSftp = true;
+        /// false = the data commands (`cat > 'p'`, `cat 'p'`) end without an exit-status message
+        /// (EOF + close only); the helper commands keep theirs (see the class comment).
+        bool sendExecExitStatus = true;
+        /// >= 0: bytes a `cat > 'p'` upload may store before "No space left on device" (see above).
+        qint64 execUploadLimit = -1;
         quint16 port = 0;                  ///< 0 = ephemeral
         /// >0: seconds of idle after which the server stops answering (keep-alive tests).
         /// libssh gives a server no hook for SSH_MSG_IGNORE, so keep-alives cannot be counted:

@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -44,6 +45,37 @@ QString defaultPrompt(const SshConnection::AuthPrompt& prompt)
     return AuthPromptDialog::tr("Response:");
 }
 
+/// "user@host" (or whichever part is known) - the headline of the dialog.
+QString targetText(const SshConnection::AuthPrompt& prompt)
+{
+    if (prompt.user.isEmpty()) {
+        return prompt.host;
+    }
+    return prompt.host.isEmpty() ? prompt.user : QStringLiteral("%1@%2").arg(prompt.user, prompt.host);
+}
+
+/// The caption of the Remember checkbox: what the answer is saved for (class comment).
+QString rememberLabel(const SshConnection::AuthPrompt& prompt)
+{
+    const QString rememberTarget = prompt.rememberTarget.trimmed();
+    const QString target = rememberTarget.isEmpty() ? targetText(prompt) : rememberTarget;
+    switch (prompt.kind) {
+    case SshConnection::PromptKind::Password:
+        return target.isEmpty() ? AuthPromptDialog::tr("Remember password")
+                                : AuthPromptDialog::tr("Remember password for %1").arg(target);
+    case SshConnection::PromptKind::Passphrase: {
+        const QString file = rememberTarget.isEmpty() ? prompt.keyFile : rememberTarget;
+        const QString name = QFileInfo(file).fileName();
+        return name.isEmpty() ? AuthPromptDialog::tr("Remember passphrase")
+                              : AuthPromptDialog::tr("Remember passphrase for %1").arg(name);
+    }
+    case SshConnection::PromptKind::KeyboardInteractive:
+        return target.isEmpty() ? AuthPromptDialog::tr("Remember answer")
+                                : AuthPromptDialog::tr("Remember answer for %1").arg(target);
+    }
+    return AuthPromptDialog::tr("Remember password");
+}
+
 /// Smaller, dimmed text for secondary information (where the secret would be stored).
 void makeSubtle(QLabel* label)
 {
@@ -66,10 +98,7 @@ AuthPromptDialog::AuthPromptDialog(const SshConnection::AuthPrompt& prompt, QWid
     setWindowTitle(prompt.title.trimmed().isEmpty() ? defaultTitle(prompt) : prompt.title.trimmed());
 
     // user@host
-    QString target = prompt.host;
-    if (!prompt.user.isEmpty()) {
-        target = prompt.host.isEmpty() ? prompt.user : QStringLiteral("%1@%2").arg(prompt.user, prompt.host);
-    }
+    const QString target = targetText(prompt);
     ui->labelTarget->setText(target);
     ui->labelTarget->setVisible(!target.isEmpty());
 
@@ -100,9 +129,11 @@ AuthPromptDialog::AuthPromptDialog(const SshConnection::AuthPrompt& prompt, QWid
         ui->buttonShow->setText(show ? tr("Hide") : tr("Show"));
     });
 
-    // Remember (SecretStore under the profile id) - only when the connection has a profile id.
+    // Remember (SecretStore under the profile id, the ad-hoc target or the key file - the
+    // connection decides; the caption names what the answer is saved for). Never pre-checked.
     const QString note = SecretStore::storageDescription();
     ui->checkRemember->setChecked(false);
+    ui->checkRemember->setText(rememberLabel(prompt));
     ui->checkRemember->setVisible(prompt.canRemember);
     ui->checkRemember->setToolTip(note);
     ui->labelNote->setText(note);
@@ -116,7 +147,8 @@ AuthPromptDialog::AuthPromptDialog(const SshConnection::AuthPrompt& prompt, QWid
 
     ui->editResponse->setFocus(Qt::OtherFocusReason);
     adjustSize();
-    qCDebug(lcSsh) << "auth prompt shown:" << static_cast<int>(prompt.kind) << target << "attempt" << prompt.attempt;
+    qCDebug(lcSsh) << "auth prompt shown:" << static_cast<int>(prompt.kind) << target << "attempt" << prompt.attempt
+                   << "remember:" << prompt.canRemember << prompt.rememberTarget;
 }
 
 AuthPromptDialog::~AuthPromptDialog()

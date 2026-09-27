@@ -266,6 +266,7 @@ private slots:
     void inputDisabledSuppressesDsrReplies();
     void shiftPageKeysScrollInsteadOfSending();
     void shortcutOverrideClaimsTerminalKeysWhileConnected();
+    void reservedShortcutsSemantics();
     void shortcutOverrideWhileDisconnected();
     void ctrlShiftLetterWithoutActionSendsControlByte();
 
@@ -815,9 +816,10 @@ void Tst_terminalwidget::shiftPageKeysScrollInsteadOfSending()
 void Tst_terminalwidget::shortcutOverrideClaimsTerminalKeysWhileConnected()
 {
     // Header "Input mapping": while the terminal is connected and focused, the keys it maps to
-    // bytes (Ctrl+<letter>, Tab, F1, Esc, ...) are claimed in event(QEvent::ShortcutOverride) so
-    // an ancestor's QAction with the same shortcut cannot steal them; the main window's
-    // shortcuts (Ctrl+Shift+<letter>, Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+, F2/F3/F5) pass through.
+    // bytes (Ctrl+<letter> - Ctrl+T and Ctrl+W included -, Tab, Ctrl+Tab, F1, F2, Esc, ...) are
+    // claimed in event(QEvent::ShortcutOverride) so an ancestor's QAction with the same shortcut
+    // cannot steal them, unless the key is reserved (setReservedShortcuts()); the Ctrl+Shift and
+    // Alt families always pass through, and so does Ctrl+, (it maps to no byte).
     QWidget container;
     auto* layout = new QVBoxLayout(&container);
     auto* term = new TerminalWidget;
@@ -828,6 +830,7 @@ void Tst_terminalwidget::shortcutOverrideClaimsTerminalKeysWhileConnected()
     QTRY_VERIFY(term->hasFocus());
     term->setInputEnabled(true);
     QVERIFY(!term->hasSelection());
+    QVERIFY(term->reservedShortcuts().isEmpty());
 
     struct Probe
     {
@@ -837,19 +840,21 @@ void Tst_terminalwidget::shortcutOverrideClaimsTerminalKeysWhileConnected()
     };
     const Probe claimed[] = {{Qt::Key_L, Qt::ControlModifier, QByteArray(1, '\x0c')},
                              {Qt::Key_C, Qt::ControlModifier, QByteArray(1, '\x03')},   // no selection: ETX
+                             {Qt::Key_T, Qt::ControlModifier, QByteArray(1, '\x14')},
+                             {Qt::Key_W, Qt::ControlModifier, QByteArray(1, '\x17')},
                              {Qt::Key_Tab, Qt::NoModifier, QByteArray("\t")},
+                             {Qt::Key_Tab, Qt::ControlModifier, QByteArray("\t")},
                              {Qt::Key_F1, Qt::NoModifier, esc("OP")},
+                             {Qt::Key_F2, Qt::NoModifier, esc("OQ")},
+                             {Qt::Key_F3, Qt::NoModifier, esc("OR")},
+                             {Qt::Key_F5, Qt::NoModifier, esc("[15~")},
                              {Qt::Key_Escape, Qt::NoModifier, QByteArray("\x1b")}};
-    // F2 is listed in functionKeys() as ESC O Q: that mapping only applies when no action owns it.
     const Probe passThrough[] = {{Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier, {}},
-                                 {Qt::Key_T, Qt::ControlModifier, {}},
-                                 {Qt::Key_W, Qt::ControlModifier, {}},
-                                 {Qt::Key_Comma, Qt::ControlModifier, {}},
-                                 {Qt::Key_Tab, Qt::ControlModifier, {}},
-                                 {Qt::Key_F2, Qt::NoModifier, {}},
-                                 {Qt::Key_F3, Qt::NoModifier, {}},
-                                 {Qt::Key_F5, Qt::NoModifier, {}}};
+                                 {Qt::Key_Tab, Qt::ControlModifier | Qt::ShiftModifier, {}},
+                                 {Qt::Key_1, Qt::AltModifier, {}},
+                                 {Qt::Key_Comma, Qt::ControlModifier, {}}};
 
+    // The actions registered here stay alive for the reserved pass below.
     for (const Probe& p : claimed) {
         QAction* action = addWindowAction(&container, p.key, p.mods);
         QSignalSpy triggered(action, &QAction::triggered);
@@ -870,6 +875,138 @@ void Tst_terminalwidget::shortcutOverrideClaimsTerminalKeysWhileConnected()
                  qPrintable(keyName(p.key, p.mods) + QStringLiteral(" did not reach the action")));
         QVERIFY2(send.count() == 0, qPrintable(keyName(p.key, p.mods) + QStringLiteral(" was sent to the device")));
     }
+
+    // Reserve the main window's classic keys: the same presses now reach the actions registered
+    // above and nothing is sent, exactly what the old hard-coded list did.
+    const QList<QKeySequence> reserved = {QKeySequence(QStringLiteral("Ctrl+T")), QKeySequence(QStringLiteral("Ctrl+W")),
+                                          QKeySequence(QStringLiteral("Ctrl+Tab")), QKeySequence(QStringLiteral("F2")),
+                                          QKeySequence(QStringLiteral("F3")), QKeySequence(QStringLiteral("F5"))};
+    term->setReservedShortcuts(reserved);
+    QCOMPARE(term->reservedShortcuts(), reserved);
+    const QList<QAction*> actions = container.findChildren<QAction*>();
+    for (const Probe& p : claimed) {
+        if (p.key == Qt::Key_L || p.key == Qt::Key_C || p.key == Qt::Key_F1 || p.key == Qt::Key_Escape ||
+            (p.key == Qt::Key_Tab && p.mods == Qt::NoModifier)) {
+            continue;   // not reserved: still claimed (checked again below for Tab and Ctrl+L)
+        }
+        const QKeySequence sequence(QKeyCombination(p.mods, p.key));
+        QAction* action = nullptr;
+        for (QAction* candidate : actions) {
+            if (candidate->shortcut() == sequence) {
+                action = candidate;
+            }
+        }
+        QVERIFY2(action != nullptr, qPrintable(keyName(p.key, p.mods)));
+        QSignalSpy triggered(action, &QAction::triggered);
+        QSignalSpy send(term, &TerminalWidget::sendData);
+        QTest::keyClick(term, p.key, p.mods);
+        QVERIFY2(triggered.count() == 1,
+                 qPrintable(keyName(p.key, p.mods) + QStringLiteral(" did not reach the action once reserved")));
+        QVERIFY2(send.count() == 0, qPrintable(keyName(p.key, p.mods) + QStringLiteral(" was sent although reserved")));
+    }
+    {
+        QSignalSpy send(term, &TerminalWidget::sendData);
+        QTest::keyClick(term, Qt::Key_Tab);
+        QTest::keyClick(term, Qt::Key_L, Qt::ControlModifier);
+        QCOMPARE(sentBytes(send), QByteArray("\t\x0c"));
+        QCOMPARE(QApplication::focusWidget(), term);
+    }
+}
+
+void Tst_terminalwidget::reservedShortcutsSemantics()
+{
+    // Header setReservedShortcuts(): while input is enabled a key press equal to a reserved
+    // sequence is left to the application (ShortcutOverride not accepted, no bytes; keyPressEvent
+    // ignores it when it comes back because no enabled action owns it); an unreserved Ctrl+X
+    // sends 0x18; Ctrl+Shift+X always passes; F2 goes to the device unless reserved; Tab stays
+    // with the device. The fixture has no QActions, so a passed-through key always comes back.
+    QVERIFY(m_term->inputEnabled());
+    QVERIFY(m_term->reservedShortcuts().isEmpty());
+
+    // The ShortcutOverride decision for a key (the text is irrelevant for the probed keys).
+    const auto overrideAccepted = [this](Qt::Key key, Qt::KeyboardModifiers mods) {
+        QKeyEvent probe(QEvent::ShortcutOverride, key, mods);
+        probe.ignore();
+        QApplication::sendEvent(m_term, &probe);
+        return probe.isAccepted();
+    };
+
+    // Nothing reserved: Ctrl+X, F2 and Tab are claimed and sent.
+    QVERIFY(overrideAccepted(Qt::Key_X, Qt::ControlModifier));
+    QCOMPARE(bytesFor(Qt::Key_X, Qt::ControlModifier), QByteArray(1, '\x18'));
+    QVERIFY(overrideAccepted(Qt::Key_F2, Qt::NoModifier));
+    QCOMPARE(bytesFor(Qt::Key_F2), esc("OQ"));
+    QVERIFY(overrideAccepted(Qt::Key_Tab, Qt::NoModifier));
+    QCOMPARE(bytesFor(Qt::Key_Tab), QByteArray("\t"));
+    // Ctrl+Shift+X passes (family rule) and, unclaimed, comes back as the control byte.
+    QVERIFY(!overrideAccepted(Qt::Key_X, Qt::ControlModifier | Qt::ShiftModifier));
+    QCOMPARE(bytesFor(Qt::Key_X, Qt::ControlModifier | Qt::ShiftModifier), QByteArray(1, '\x18'));
+
+    // Reserve Ctrl+X and F2 (duplicates and empty sequences are dropped by the setter).
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("Ctrl+X")), QKeySequence(), QKeySequence(QStringLiteral("F2")),
+                                  QKeySequence(QStringLiteral("Ctrl+X"))});
+    QCOMPARE(m_term->reservedShortcuts(),
+             (QList<QKeySequence>{QKeySequence(QStringLiteral("Ctrl+X")), QKeySequence(QStringLiteral("F2"))}));
+    QVERIFY(!overrideAccepted(Qt::Key_X, Qt::ControlModifier));
+    QVERIFY(bytesFor(Qt::Key_X, Qt::ControlModifier).isEmpty());   // came back unclaimed: ignored
+    QVERIFY(!overrideAccepted(Qt::Key_F2, Qt::NoModifier));
+    QVERIFY(bytesFor(Qt::Key_F2).isEmpty());
+    QVERIFY(!overrideAccepted(Qt::Key_X, Qt::ControlModifier | Qt::ShiftModifier));
+    QCOMPARE(bytesFor(Qt::Key_X, Qt::ControlModifier | Qt::ShiftModifier), QByteArray(1, '\x18'));
+    // Neighbours are untouched: Ctrl+Y, F3, Tab and Shift+Tab still go to the device.
+    QVERIFY(overrideAccepted(Qt::Key_Y, Qt::ControlModifier));
+    QCOMPARE(bytesFor(Qt::Key_Y, Qt::ControlModifier), QByteArray(1, '\x19'));
+    QCOMPARE(bytesFor(Qt::Key_F3), esc("OR"));
+    QCOMPARE(bytesFor(Qt::Key_Tab), QByteArray("\t"));
+    QCOMPARE(bytesFor(Qt::Key_Backtab, Qt::ShiftModifier), esc("[Z"));
+    QCOMPARE(QApplication::focusWidget(), m_term);
+
+    // A reserved "Shift+Tab" matches the Key_Backtab press Qt delivers for it.
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("Shift+Tab"))});
+    QVERIFY(!overrideAccepted(Qt::Key_Backtab, Qt::ShiftModifier));
+    QVERIFY(bytesFor(Qt::Key_Backtab, Qt::ShiftModifier).isEmpty());
+    QCOMPARE(QApplication::focusWidget(), m_term);   // the ignored key never moved the focus
+    QCOMPARE(bytesFor(Qt::Key_Tab), QByteArray("\t"));
+
+    // Multi-chord sequences are kept by the getter but never match a single key press.
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("Ctrl+K, Ctrl+X"))});
+    QCOMPARE(m_term->reservedShortcuts().size(), qsizetype(1));
+    QCOMPARE(bytesFor(Qt::Key_K, Qt::ControlModifier), QByteArray(1, '\x0b'));
+    QCOMPARE(bytesFor(Qt::Key_X, Qt::ControlModifier), QByteArray(1, '\x18'));
+
+    // Back to nothing reserved: Ctrl+X is claimed again.
+    m_term->setReservedShortcuts({});
+    QVERIFY(m_term->reservedShortcuts().isEmpty());
+    QVERIFY(overrideAccepted(Qt::Key_X, Qt::ControlModifier));
+    QCOMPARE(bytesFor(Qt::Key_X, Qt::ControlModifier), QByteArray(1, '\x18'));
+
+    // Alt+<letter> belongs to the shell (readline's Alt+F / Alt+B): claimed and sent as ESC +
+    // letter, so a menu bar mnemonic cannot take it while connected. Only Alt+<digit> (the tab
+    // accelerators) is a pass-through family, a bare Alt tap is never claimed (the menu bar's
+    // Alt navigation still works), and an action that reserves Alt+F does get it.
+    QVERIFY(overrideAccepted(Qt::Key_F, Qt::AltModifier));
+    QCOMPARE(bytesFor(Qt::Key_F, Qt::AltModifier), esc("f"));
+    QCOMPARE(bytesFor(Qt::Key_L, Qt::AltModifier), esc("l"));
+    QVERIFY(!overrideAccepted(Qt::Key_1, Qt::AltModifier));
+    QVERIFY(!overrideAccepted(Qt::Key_9, Qt::AltModifier));
+    QVERIFY(!overrideAccepted(Qt::Key_Alt, Qt::AltModifier));
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("Alt+F"))});
+    QVERIFY(!overrideAccepted(Qt::Key_F, Qt::AltModifier));
+    QVERIFY(bytesFor(Qt::Key_F, Qt::AltModifier).isEmpty());   // came back unclaimed: ignored
+    QVERIFY(overrideAccepted(Qt::Key_B, Qt::AltModifier));
+    QCOMPARE(bytesFor(Qt::Key_B, Qt::AltModifier), esc("b"));
+    m_term->setReservedShortcuts({});
+    QVERIFY(overrideAccepted(Qt::Key_F, Qt::AltModifier));
+
+    // While input is disabled the reserved list changes nothing: every key is swallowed (or
+    // left to the application) exactly as before.
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("Ctrl+X"))});
+    m_term->setInputEnabled(false);
+    QVERIFY(!overrideAccepted(Qt::Key_X, Qt::ControlModifier));
+    QVERIFY(!overrideAccepted(Qt::Key_Y, Qt::ControlModifier));
+    QVERIFY(bytesFor(Qt::Key_X, Qt::ControlModifier).isEmpty());
+    QVERIFY(bytesFor(Qt::Key_Y, Qt::ControlModifier).isEmpty());
+    QCOMPARE(QApplication::focusWidget(), m_term);
 }
 
 void Tst_terminalwidget::shortcutOverrideWhileDisconnected()
@@ -1593,13 +1730,19 @@ void Tst_terminalwidget::keysAndPastesSwallowedWhilePaused()
     QVERIFY(m_term->isOutputPaused());
     QCOMPARE(m_term->selectedText(), QStringLiteral("text"));
 
-    // Application shortcuts still pass through to the window's actions.
+    // Application shortcuts still pass through to the window's actions: the Ctrl+Shift family
+    // always, F5 once it is reserved (MainWindow pushes its actions' shortcuts); an unreserved
+    // F5 is an ordinary key and swallowed like the rest.
     QAction* hexView = addWindowAction(m_term, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
     QSignalSpy hexSpy(hexView, &QAction::triggered);
     QTest::keyClick(m_term, Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
     QCOMPARE(hexSpy.count(), qsizetype(1));
     QAction* refresh = addWindowAction(m_term, Qt::Key_F5);
     QSignalSpy refreshSpy(refresh, &QAction::triggered);
+    QTest::keyClick(m_term, Qt::Key_F5);
+    QCOMPARE(refreshSpy.count(), qsizetype(0));
+    QVERIFY(m_term->isOutputPaused());
+    m_term->setReservedShortcuts({QKeySequence(QStringLiteral("F5"))});
     QTest::keyClick(m_term, Qt::Key_F5);
     QCOMPARE(refreshSpy.count(), qsizetype(1));
     QVERIFY(m_term->isOutputPaused());

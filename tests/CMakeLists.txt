@@ -53,6 +53,7 @@ su_add_test(tst_serialsettings    tst_serialsettings.cpp)
 su_add_test(tst_devicesimulator   tst_devicesimulator.cpp)
 su_add_test(tst_logreplayer       tst_logreplayer.cpp)
 su_add_test(tst_sessionlogger     tst_sessionlogger.cpp)
+su_add_test(tst_bauddetector      tst_bauddetector.cpp)
 su_add_test(tst_sshprofile        tst_sshprofile.cpp)
 su_add_test(tst_secretstore       tst_secretstore.cpp)
 # SSH end to end against the in-process server (tests/support/TestSshServer.h).
@@ -68,6 +69,8 @@ su_add_gui_test(tst_sessionwidget  tst_sessionwidget.cpp)
 # One SessionWidget case connects to the in-process SSH server (tests/support/TestSshServer.h).
 target_link_libraries(tst_sessionwidget PRIVATE su_testsupport)
 su_add_gui_test(tst_mainwindow     tst_mainwindow.cpp)
+# The keyboard rules on a connected SSH tab are checked against the in-process server too.
+target_link_libraries(tst_mainwindow PRIVATE su_testsupport)
 su_add_gui_test(tst_dialogs        tst_dialogs.cpp)
 su_add_gui_test(tst_sshdialogs     tst_sshdialogs.cpp)
 su_add_gui_test(tst_sshsession     tst_sshsession.cpp)

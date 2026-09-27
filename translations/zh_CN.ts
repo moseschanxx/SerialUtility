@@ -59,7 +59,7 @@
     <name>AuthPromptDialog</name>
     <message>
         <location filename="../src/dialogs/AuthPromptDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+27"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+28"/>
         <location line="+2"/>
         <source>Authentication</source>
         <translation>身份验证</translation>
@@ -77,17 +77,19 @@
     </message>
     <message>
         <location line="+3"/>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+64"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="+92"/>
         <source>Show</source>
         <translation>显示</translation>
     </message>
     <message>
         <location line="+15"/>
-        <source>Remember in this profile</source>
-        <translation>在此配置文件中记住</translation>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-65"/>
+        <location line="+12"/>
+        <source>Remember password</source>
+        <translation>记住密码</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-77"/>
+        <location filename="../src/dialogs/AuthPromptDialog.cpp" line="-52"/>
         <source>Password</source>
         <translation>密码</translation>
     </message>
@@ -113,7 +115,32 @@
         <translation>响应：</translation>
     </message>
     <message>
-        <location line="+37"/>
+        <location line="+20"/>
+        <source>Remember password for %1</source>
+        <translation>记住 %1 的密码</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Remember passphrase</source>
+        <translation>记住口令</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember passphrase for %1</source>
+        <translation>记住 %1 的口令</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Remember answer</source>
+        <translation>记住回答</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remember answer for %1</source>
+        <translation>记住 %1 的回答</translation>
+    </message>
+    <message>
+        <location line="+36"/>
         <source>Authentication failed, try again (attempt %1 of %2)</source>
         <translation>身份验证失败，请重试（第 %1 次，共 %2 次）</translation>
     </message>
@@ -195,12 +222,12 @@
 <context>
     <name>ConnectionBar</name>
     <message>
-        <location filename="../src/ui/ConnectionBar.cpp" line="+54"/>
+        <location filename="../src/ui/ConnectionBar.cpp" line="+89"/>
         <source>unavailable</source>
         <translation>不可用</translation>
     </message>
     <message>
-        <location line="+194"/>
+        <location line="+205"/>
         <source>Port:</source>
         <translation>端口：</translation>
     </message>
@@ -230,12 +257,13 @@
         <translation>刷新端口列表</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Baud rate (type a custom value and press Enter)</source>
-        <translation>波特率（可输入自定义值并按 Enter）</translation>
+        <location line="+5"/>
+        <location line="+4"/>
+        <source>Auto</source>
+        <translation>自动</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>Data bits</source>
         <translation>数据位</translation>
     </message>
@@ -300,7 +328,27 @@
         <translation>发送 BREAK 信号（250 ms）</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+105"/>
+        <source>Auto (%1)</source>
+        <translation>自动（%1）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Detect the baud rate automatically</source>
+        <translation>自动检测波特率</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The baud rate is detected automatically; this is the current one</source>
+        <translation>波特率为自动检测；这是当前使用的波特率</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Baud rate (type a custom value and press Enter, or choose Auto)</source>
+        <translation>波特率（输入自定义值并按 Enter，或选择“自动”）</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>%1 is not currently available</source>
         <translation>%1 当前不可用</translation>
     </message>
@@ -348,24 +396,24 @@
 <context>
     <name>DeviceSimulator</name>
     <message>
-        <location filename="../src/core/DeviceSimulator.cpp" line="+620"/>
-        <source>Simulated loopback (echoes every byte)</source>
-        <translation>模拟回环设备（原样回显每个字节）</translation>
+        <location filename="../src/core/DeviceSimulator.cpp" line="+644"/>
+        <source>Simulated loopback (echoes every byte, any baud rate)</source>
+        <translation>模拟回环（回显每个字节，任意波特率）</translation>
     </message>
     <message>
         <location line="+2"/>
-        <source>Simulated Rockchip Linux console</source>
-        <translation>模拟 Rockchip Linux 控制台</translation>
+        <source>Simulated Rockchip Linux console (%1 baud)</source>
+        <translation>模拟 Rockchip Linux 控制台（波特率 %1）</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Simulated U-Boot prompt (boots into Linux)</source>
-        <translation>模拟 U-Boot 提示符（可引导进入 Linux）</translation>
+        <location line="+3"/>
+        <source>Simulated U-Boot prompt, boots into Linux (%1 baud)</source>
+        <translation>模拟 U-Boot 提示符，可引导进入 Linux（波特率 %1）</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Simulated MCU firmware shell</source>
-        <translation>模拟 MCU 固件 shell</translation>
+        <location line="+5"/>
+        <source>Simulated MCU firmware shell (%1 baud)</source>
+        <translation>模拟 MCU 固件 shell（波特率 %1）</translation>
     </message>
 </context>
 <context>
@@ -609,7 +657,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>会话(&amp;S)</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>&amp;Edit</source>
         <translation>编辑(&amp;E)</translation>
     </message>
@@ -619,7 +667,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>视图(&amp;V)</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+34"/>
         <source>&amp;Language</source>
         <translation>语言(&amp;L)</translation>
     </message>
@@ -629,7 +677,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>帮助(&amp;H)</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
         <source>Main Toolbar</source>
         <translation>主工具栏</translation>
     </message>
@@ -659,12 +707,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>关闭当前会话标签页</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Ctrl+W</source>
-        <translation>Ctrl+W</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Start &amp;Logging...</source>
         <translation>开始记录日志(&amp;L)...</translation>
     </message>
@@ -759,7 +802,12 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>Ctrl+Shift+O</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+22"/>
+        <source>Do&amp;wnload File from Remote...</source>
+        <translation>从远程下载文件(&amp;W)...</translation>
+    </message>
+    <message>
+        <location line="+100"/>
         <source>Ctrl+Shift+F</source>
         <translation>Ctrl+Shift+F</translation>
     </message>
@@ -769,12 +817,17 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>Ctrl+Shift+H</translation>
     </message>
     <message>
-        <location line="-229"/>
+        <location line="-246"/>
         <source>&amp;Connect</source>
         <translation>连接(&amp;C)</translation>
     </message>
     <message>
-        <location line="-109"/>
+        <location line="-213"/>
+        <source>&amp;Window</source>
+        <translation>窗口(&amp;W)</translation>
+    </message>
+    <message>
+        <location line="+104"/>
         <source>New &amp;SSH Session...</source>
         <translation>新建 SSH 会话(&amp;S)...</translation>
     </message>
@@ -794,7 +847,12 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>Ctrl+Shift+T</translation>
     </message>
     <message>
-        <location line="+103"/>
+        <location line="+14"/>
+        <source>Ctrl+Shift+W</source>
+        <translation>Ctrl+Shift+W</translation>
+    </message>
+    <message>
+        <location line="+89"/>
         <source>Open the selected serial port</source>
         <translation>打开所选串口</translation>
     </message>
@@ -864,12 +922,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>将本地文件复制到 SSH 服务器（SFTP）</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <source>&amp;Download File from Remote...</source>
-        <translation>从远程下载文件(&amp;D)...</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+11"/>
         <source>Download</source>
         <translation>下载</translation>
     </message>
@@ -897,6 +950,26 @@ Only replace the stored key if you are sure the change is expected.</source>
         <location line="+3"/>
         <source>Send &quot;stty cols/rows&quot; so the remote shell matches the window</source>
         <translation>发送 &quot;stty cols/rows&quot;，使远端 shell 与窗口大小一致</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>De&amp;tect Baud Rate</source>
+        <translation>检测波特率(&amp;T)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Detect Baud Rate</source>
+        <translation>检测波特率</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Listen at the candidate baud rates until the output reads as text and apply the one that works (serial sessions)</source>
+        <translation>依次以各候选波特率监听，直到输出可读为文本，并应用可用的波特率（串口会话）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+B</source>
+        <translation>Ctrl+Shift+B</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -1094,6 +1167,141 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>Ctrl+Shift+Tab</translation>
     </message>
     <message>
+        <location line="+8"/>
+        <source>Tab &amp;1</source>
+        <translation>标签页 &amp;1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 1</source>
+        <translation>切换到会话标签页 1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+1</source>
+        <translation>Alt+1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;2</source>
+        <translation>标签页 &amp;2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 2</source>
+        <translation>切换到会话标签页 2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+2</source>
+        <translation>Alt+2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;3</source>
+        <translation>标签页 &amp;3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 3</source>
+        <translation>切换到会话标签页 3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+3</source>
+        <translation>Alt+3</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;4</source>
+        <translation>标签页 &amp;4</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 4</source>
+        <translation>切换到会话标签页 4</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+4</source>
+        <translation>Alt+4</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;5</source>
+        <translation>标签页 &amp;5</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 5</source>
+        <translation>切换到会话标签页 5</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+5</source>
+        <translation>Alt+5</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;6</source>
+        <translation>标签页 &amp;6</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 6</source>
+        <translation>切换到会话标签页 6</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+6</source>
+        <translation>Alt+6</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;7</source>
+        <translation>标签页 &amp;7</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 7</source>
+        <translation>切换到会话标签页 7</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+7</source>
+        <translation>Alt+7</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;8</source>
+        <translation>标签页 &amp;8</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 8</source>
+        <translation>切换到会话标签页 8</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+8</source>
+        <translation>Alt+8</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Tab &amp;9</source>
+        <translation>标签页 &amp;9</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Switch to session tab 9</source>
+        <translation>切换到会话标签页 9</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Alt+9</source>
+        <translation>Alt+9</translation>
+    </message>
+    <message>
         <location line="+11"/>
         <source>English</source>
         <translation>English</translation>
@@ -1119,13 +1327,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>BuildAI 主页(&amp;H)</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+105"/>
-        <location line="+409"/>
-        <source>New Session (Ctrl+T)</source>
-        <translation>新建会话 (Ctrl+T)</translation>
-    </message>
-    <message>
-        <location line="-56"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+515"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>会话 %1 仍处于连接状态。
@@ -1170,20 +1372,20 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+51"/>
-        <location line="+824"/>
+        <location line="+54"/>
+        <location line="+1097"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-719"/>
-        <location line="+675"/>
+        <location line="-963"/>
+        <location line="+919"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-596"/>
+        <location line="-833"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -1196,12 +1398,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+350"/>
+        <location line="+585"/>
         <source>Cannot open %1</source>
         <translation>无法打开 %1</translation>
     </message>
     <message>
-        <location line="-307"/>
+        <location line="-542"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
@@ -1221,7 +1423,27 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>未找到</translation>
     </message>
     <message>
-        <location line="+349"/>
+        <location line="+129"/>
+        <source>Switch to %1</source>
+        <translation>切换到 %1</translation>
+    </message>
+    <message>
+        <location line="+89"/>
+        <source>New Session</source>
+        <translation>新建会话</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>New Session (%1)</source>
+        <translation>新建会话（%1）</translation>
+    </message>
+    <message>
+        <location line="+83"/>
+        <source>%1 menu</source>
+        <translation>%1 菜单</translation>
+    </message>
+    <message>
+        <location line="+284"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -1260,7 +1482,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+204"/>
         <source>Preferences</source>
         <translation>首选项</translation>
     </message>
@@ -1421,11 +1643,13 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+7"/>
+        <location line="+59"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+122"/>
         <source> ms</source>
         <translation> ms</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-40"/>
         <source>List the built-in simulated devices (SIM:loopback, SIM:linux, SIM:uboot, SIM:mcu) in the port list so the tool can be tried without hardware.</source>
         <translation>在端口列表中显示内置的模拟设备（SIM:loopback、SIM:linux、SIM:uboot、SIM:mcu），无需硬件即可试用本工具。</translation>
     </message>
@@ -1433,6 +1657,36 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <location line="+3"/>
         <source>Show simulated devices (SIM:...) in the port list</source>
         <translation>在端口列表中显示模拟设备 (SIM:...)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Auto baud candidates:</source>
+        <translation>自动波特率候选值：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated.</source>
+        <translation>波特率设为“自动”或运行“会话 &gt; 检测波特率”时，按此顺序尝试的波特率。以逗号分隔。</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Auto baud sample time:</source>
+        <translation>自动波特率采样时间：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long the detector listens at each candidate rate before judging the output.</source>
+        <translation>检测器在判断输出之前，以每个候选波特率监听的时长。</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>While a session runs with the Auto baud rate, run the detection again when the incoming bytes stop looking like text (the board switched rates, e.g. U-Boot at 1500000 and the kernel at 115200).</source>
+        <translation>会话以“自动”波特率运行时，若接收到的字节不再像文本，则重新运行检测（开发板切换了波特率，例如 U-Boot 使用 1500000 而内核使用 115200）。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Re-detect when the output turns into garbage</source>
+        <translation>输出变为乱码时重新检测</translation>
     </message>
     <message>
         <location line="+11"/>
@@ -1486,7 +1740,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+3"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+91"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+25"/>
         <source>Off</source>
         <translation>关闭</translation>
     </message>
@@ -1503,6 +1757,69 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+18"/>
+        <source>Keyboard</source>
+        <translation>键盘</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Select a row and press the new key combination in the field below.</source>
+        <translation>选择一行，然后在下方输入框中按下新的组合键。</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-20"/>
+        <source>Action</source>
+        <translation>操作</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+0"/>
+        <source>Shortcut</source>
+        <translation>快捷键</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+0"/>
+        <source>Default</source>
+        <translation>默认</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Shortcut:</source>
+        <translation>快捷键：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Press the key combination for the selected action.</source>
+        <translation>为所选操作按下组合键。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Remove the shortcut of the selected action.</source>
+        <translation>移除所选操作的快捷键。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Put the selected action back to its default shortcut.</source>
+        <translation>将所选操作恢复为默认快捷键。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Restore Default</source>
+        <translation>恢复默认</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>While a session is connected, every key that is not an application shortcut is sent to the device: bare Ctrl+letter combinations such as Ctrl+C or Ctrl+W reach the shell unless you assign them here.</source>
+        <translation>会话连接期间，所有不是应用程序快捷键的按键都会发送到设备：Ctrl+C、Ctrl+W 这类单独的 Ctrl+字母组合键会直接传给 shell，除非在此处将其分配为快捷键。</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Logging</source>
         <translation>日志</translation>
     </message>
@@ -1512,9 +1829,9 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>日志目录：</translation>
     </message>
     <message>
-        <location line="-107"/>
+        <location line="-215"/>
         <location line="+25"/>
-        <location line="+94"/>
+        <location line="+202"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
@@ -1549,7 +1866,18 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>启动时重新打开上次的会话标签页</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-27"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-53"/>
+        <location line="+4"/>
+        <source>Auto</source>
+        <translation>自动</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Detect the baud rate automatically when a session connects</source>
+        <translation>会话连接时自动检测波特率</translation>
+    </message>
+    <message>
+        <location line="+13"/>
         <source>None</source>
         <translation>无</translation>
     </message>
@@ -1574,7 +1902,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>传号 (Mark)</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+22"/>
+        <source>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated. Default: %1</source>
+        <translation>波特率设为“自动”或运行“会话 &gt; 检测波特率”时，按此顺序尝试的波特率。以逗号分隔。默认：%1</translation>
+    </message>
+    <message>
+        <location line="+34"/>
         <source>Raw bytes (replayable capture)</source>
         <translation>原始字节（可重放的捕获）</translation>
     </message>
@@ -1589,7 +1922,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>十六进制转储</translation>
     </message>
     <message>
-        <location line="+138"/>
+        <location line="+156"/>
         <source>Terminal Font</source>
         <translation>终端字体</translation>
     </message>
@@ -1617,6 +1950,21 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <location line="+0"/>
         <source>All files (*)</source>
         <translation>所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+207"/>
+        <source>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</source>
+        <translation>%1 不能用作快捷键：会话连接时它会被发送到设备。请使用 Ctrl、Alt 或 Meta 加按键，或使用 F 功能键。</translation>
+    </message>
+    <message>
+        <location line="+78"/>
+        <source>Conflict: &quot;%1&quot; and &quot;%2&quot; both use %3.</source>
+        <translation>冲突：&quot;%1&quot; 与 &quot;%2&quot; 均使用 %3。</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Conflict: &quot;%1&quot; uses %2, which is fixed for &quot;%3&quot;.</source>
+        <translation>冲突：&quot;%1&quot; 使用了 %2，而它是 &quot;%3&quot; 的固定快捷键。</translation>
     </message>
 </context>
 <context>
@@ -1946,8 +2294,8 @@ Nothing is saved until you press OK.</source>
     <name>RemoteFileDialog</name>
     <message>
         <location filename="../src/dialogs/RemoteFileDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+69"/>
-        <location line="+57"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+120"/>
+        <location line="+58"/>
         <source>Remote File Transfer</source>
         <translation>远程文件传输</translation>
     </message>
@@ -1957,28 +2305,18 @@ Nothing is saved until you press OK.</source>
         <translation>方向：</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Copy a local file to the remote host (SFTP)</source>
-        <translation>将本地文件复制到远程主机（SFTP）</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+10"/>
         <source>&amp;Upload to remote</source>
         <translation>上传到远程(&amp;U)</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Copy a remote file to this computer (SFTP)</source>
-        <translation>将远程文件复制到本机（SFTP）</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+13"/>
         <source>&amp;Download from remote</source>
         <translation>从远程下载(&amp;D)</translation>
     </message>
     <message>
         <location line="+24"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+252"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+305"/>
         <source>&amp;Local file:</source>
         <translation>本地文件(&amp;L)：</translation>
     </message>
@@ -1999,9 +2337,19 @@ Nothing is saved until you press OK.</source>
         <translation>远程路径(&amp;R)：</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <source>Absolute path on the remote host, or a directory ending in /</source>
-        <translation>远程主机上的绝对路径，或以 / 结尾的目录</translation>
+        <location line="-67"/>
+        <source>Copy a local file to the remote host (SFTP, or the remote shell when the server has no SFTP)</source>
+        <translation>将本地文件复制到远程主机（SFTP；服务器不支持 SFTP 时使用远程 shell）</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Copy a remote file to this computer (SFTP, or the remote shell when the server has no SFTP)</source>
+        <translation>将远程文件复制到本机（SFTP；服务器不支持 SFTP 时使用远程 shell）</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Path on the remote host: ~ is the home, a directory ending in / keeps the file name</source>
+        <translation>远程主机上的路径：~ 表示主目录，以 / 结尾的目录将保留原文件名</translation>
     </message>
     <message>
         <location line="+10"/>
@@ -2030,7 +2378,7 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+41"/>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+109"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="+167"/>
         <source>Not connected.</source>
         <translation>未连接。</translation>
     </message>
@@ -2046,11 +2394,11 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+20"/>
-        <source>Cl&amp;ose</source>
-        <translation>关闭(&amp;O)</translation>
+        <source>Clos&amp;e</source>
+        <translation>关闭(&amp;E)</translation>
     </message>
     <message>
-        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="-179"/>
+        <location filename="../src/dialogs/RemoteFileDialog.cpp" line="-250"/>
         <source>Select File to Upload</source>
         <translation>选择要上传的文件</translation>
     </message>
@@ -2066,7 +2414,7 @@ Nothing is saved until you press OK.</source>
         <translation>下载文件另存为</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+14"/>
         <source>Resolving the remote home directory...</source>
         <translation>正在解析远程主目录...</translation>
     </message>
@@ -2076,22 +2424,12 @@ Nothing is saved until you press OK.</source>
         <translation>会话连接后才能获知远程主目录。</translation>
     </message>
     <message>
-        <location line="+47"/>
+        <location line="+63"/>
         <source>The file to upload</source>
         <translation>要上传的文件</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Where to write it on the remote host (a directory ending in / keeps the file name)</source>
-        <translation>在远程主机上的写入位置（以 / 结尾的目录将保留原文件名）</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>&amp;Save as:</source>
-        <translation>另存为(&amp;S)：</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+9"/>
         <source>&amp;Remote file:</source>
         <translation>远程文件(&amp;R)：</translation>
     </message>
@@ -2101,32 +2439,27 @@ Nothing is saved until you press OK.</source>
         <translation>下载文件的写入位置（已存在的目录将保留原文件名）</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>The remote file to download</source>
-        <translation>要下载的远程文件</translation>
-    </message>
-    <message>
-        <location line="-6"/>
+        <location line="-7"/>
         <source>&amp;Start upload</source>
         <translation>开始上传(&amp;S)</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+9"/>
         <source>&amp;Start download</source>
         <translation>开始下载(&amp;S)</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+20"/>
         <source>Enter both the local and the remote path.</source>
         <translation>请同时输入本地路径和远程路径。</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+13"/>
         <source>Local file not found: %1</source>
         <translation>找不到本地文件：%1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+4"/>
         <source>%1 already exists (enable Overwrite to replace it).</source>
         <translation>%1 已存在（启用“覆盖”以替换它）。</translation>
     </message>
@@ -2136,24 +2469,52 @@ Nothing is saved until you press OK.</source>
         <translation>无法开始传输（未连接，或另一个传输正在进行）。</translation>
     </message>
     <message>
-        <location line="+5"/>
-        <location line="+17"/>
-        <source>Uploading %1...</source>
-        <translation>正在上传 %1...</translation>
+        <location line="-440"/>
+        <source>SFTP</source>
+        <translation>SFTP</translation>
     </message>
     <message>
-        <location line="-16"/>
-        <location line="+17"/>
-        <source>Downloading %1...</source>
-        <translation>正在下载 %1...</translation>
+        <location line="+3"/>
+        <source>shell (cat)</source>
+        <translation>shell (cat)</translation>
     </message>
     <message>
-        <location line="-8"/>
+        <location line="+338"/>
+        <source>The remote home directory could not be resolved; a relative path is written to the login directory.</source>
+        <translation>无法解析远程主目录；相对路径将写入登录目录。</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Where to write it on the remote host (a directory ending in / keeps the file name; ~ is the remote home)</source>
+        <translation>在远程主机上的写入位置（以 / 结尾的目录将保留原文件名；~ 表示远程主目录）</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Save &amp;to:</source>
+        <translation>保存到(&amp;T)：</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The remote file to download (~ is the remote home)</source>
+        <translation>要下载的远程文件（~ 表示远程主目录）</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 looks like a Windows path. Enter a path on the remote host, for example /tmp/ or ~/.</source>
+        <translation>%1 看起来是 Windows 路径。请输入远程主机上的路径，例如 /tmp/ 或 ~/。</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 is a folder. Select a single file to upload (folders are not supported yet).</source>
+        <translation>%1 是一个文件夹。请选择单个文件上传（暂不支持文件夹）。</translation>
+    </message>
+    <message>
+        <location line="+36"/>
         <source>Cancelling...</source>
         <translation>正在取消...</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+55"/>
         <source>Transfer complete.</source>
         <translation>传输完成。</translation>
     </message>
@@ -2163,12 +2524,32 @@ Nothing is saved until you press OK.</source>
         <translation>传输失败。</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+35"/>
         <source>Ready.</source>
         <translation>就绪。</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+19"/>
+        <source>Uploading %1</source>
+        <translation>正在上传 %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Uploading %1 via %2</source>
+        <translation>正在通过 %2 上传 %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Downloading %1</source>
+        <translation>正在下载 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Downloading %1 via %2</source>
+        <translation>正在通过 %2 下载 %1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
         <source>A transfer is already running.</source>
         <translation>已有传输正在进行。</translation>
     </message>
@@ -2425,37 +2806,37 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SerialConnection</name>
     <message>
-        <location filename="../src/core/SerialConnection.cpp" line="+279"/>
-        <location line="+461"/>
+        <location filename="../src/core/SerialConnection.cpp" line="+288"/>
+        <location line="+470"/>
         <source>baud rate %1</source>
         <translation>波特率 %1</translation>
     </message>
     <message>
-        <location line="-457"/>
-        <location line="+460"/>
+        <location line="-466"/>
+        <location line="+469"/>
         <source>data bits %1</source>
         <translation>数据位 %1</translation>
     </message>
     <message>
-        <location line="-455"/>
-        <location line="+458"/>
+        <location line="-464"/>
+        <location line="+467"/>
         <source>parity %1</source>
         <translation>校验位 %1</translation>
     </message>
     <message>
-        <location line="-453"/>
-        <location line="+456"/>
+        <location line="-462"/>
+        <location line="+465"/>
         <source>stop bits %1</source>
         <translation>停止位 %1</translation>
     </message>
     <message>
-        <location line="-451"/>
-        <location line="+454"/>
+        <location line="-460"/>
+        <location line="+463"/>
         <source>flow control %1</source>
         <translation>流控制 %1</translation>
     </message>
     <message>
-        <location line="-447"/>
+        <location line="-455"/>
         <source>Cannot apply %1 to %2: %3</source>
         <translation>无法将 %1 应用到 %2：%3</translation>
     </message>
@@ -2471,13 +2852,13 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+337"/>
+        <location line="+345"/>
         <location line="+5"/>
         <source>Port %1 not found</source>
         <translation>找不到端口 %1</translation>
     </message>
     <message>
-        <location line="-339"/>
+        <location line="-347"/>
         <source>Cannot open %1: %2</source>
         <translation>无法打开 %1：%2</translation>
     </message>
@@ -2507,7 +2888,7 @@ Nothing is saved until you press OK.</source>
         <translation>无法在 %1 上发送 BREAK：%2</translation>
     </message>
     <message>
-        <location line="+235"/>
+        <location line="+243"/>
         <source>Port %1 disconnected</source>
         <translation>端口 %1 已断开</translation>
     </message>
@@ -2621,6 +3002,14 @@ Nothing is saved until you press OK.</source>
     </message>
 </context>
 <context>
+    <name>SerialSettings</name>
+    <message>
+        <location filename="../src/core/SerialConnection.cpp" line="-640"/>
+        <source>Auto (%1)</source>
+        <translation>自动（%1）</translation>
+    </message>
+</context>
+<context>
     <name>SessionLogger</name>
     <message>
         <location filename="../src/core/SessionLogger.cpp" line="+35"/>
@@ -2647,17 +3036,23 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SessionWidget</name>
     <message>
-        <location filename="../src/ui/SessionWidget.cpp" line="+1216"/>
+        <location filename="../src/ui/SessionWidget.cpp" line="+1293"/>
         <source>Output paused while selecting - Enter copies, Esc cancels</source>
         <translation>选择文本时已暂停输出 - 按 Enter 复制，Esc 取消</translation>
     </message>
     <message>
-        <location line="-1068"/>
+        <location line="-1112"/>
         <source>Output resumed: %1 arrived while the display was paused</source>
         <translation>输出已恢复：暂停期间收到了 %1 数据</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="-46"/>
+        <location line="+12"/>
+        <source>Trying %1...</source>
+        <translation>正在尝试 %1...</translation>
+    </message>
+    <message>
+        <location line="+79"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
@@ -2667,7 +3062,7 @@ Nothing is saved until you press OK.</source>
         <translation>日志已关闭：%1（%2 字节）</translation>
     </message>
     <message>
-        <location line="+151"/>
+        <location line="+157"/>
         <source>Replay: %1</source>
         <translation>回放：%1</translation>
     </message>
@@ -2682,7 +3077,7 @@ Nothing is saved until you press OK.</source>
         <translation>新建会话</translation>
     </message>
     <message>
-        <location line="+178"/>
+        <location line="+179"/>
         <source>Select a serial port first</source>
         <translation>请先选择串口</translation>
     </message>
@@ -2692,7 +3087,7 @@ Nothing is saved until you press OK.</source>
         <translation>已连接到 %1（%2）</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+18"/>
         <source>Enter a target such as user@host</source>
         <translation>请输入目标，例如 user@host</translation>
     </message>
@@ -2733,12 +3128,12 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+529"/>
+        <location line="+562"/>
         <source>Log files (*.log *.txt);;All files (*)</source>
         <translation>日志文件 (*.log *.txt);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="-506"/>
+        <location line="-539"/>
         <source>(no port)</source>
         <translation>（无端口）</translation>
     </message>
@@ -2757,16 +3152,18 @@ Nothing is saved until you press OK.</source>
         <location line="+56"/>
         <location line="+22"/>
         <location line="+13"/>
+        <location line="+471"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
     <message>
-        <location line="-39"/>
+        <location line="-510"/>
+        <location line="+506"/>
         <source>Not available for SSH sessions</source>
         <translation>不适用于 SSH 会话</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="-494"/>
         <source>BREAK sent</source>
         <translation>已发送 BREAK</translation>
     </message>
@@ -2836,7 +3233,7 @@ Nothing is saved until you press OK.</source>
         <translation>已重新连接到 %1</translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+141"/>
         <source>Authenticated (%1)</source>
         <translation>已通过身份验证（%1）</translation>
     </message>
@@ -2905,11 +3302,71 @@ Nothing is saved until you press OK.</source>
         <source>Replay the file at:</source>
         <translation>以此速度回放文件：</translation>
     </message>
+    <message>
+        <location line="+29"/>
+        <source>Baud rate detection is already running</source>
+        <translation>波特率检测已在进行中</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Cannot detect the baud rate while a file is being sent</source>
+        <translation>发送文件期间无法检测波特率</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>output unreadable, re-detecting baud rate</source>
+        <translation>输出不可读，正在重新检测波特率</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>detecting baud rate</source>
+        <translation>正在检测波特率</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Cannot detect the baud rate now</source>
+        <translation>当前无法检测波特率</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>baud rate detection cancelled</source>
+        <translation>波特率检测已取消</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Baud rate detection cancelled</source>
+        <translation>波特率检测已取消</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>baud rate %1 detected</source>
+        <translation>检测到波特率 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Baud rate %1 detected (%2)</source>
+        <translation>检测到波特率 %1（%2）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no readable output at any baud rate, keeping %1</source>
+        <translation>所有波特率下均无可读输出，保持 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No readable output at any baud rate, keeping %1</source>
+        <translation>所有波特率下均无可读输出，保持 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No output from the device, keeping %1</source>
+        <translation>设备无输出，保持 %1</translation>
+    </message>
 </context>
 <context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+421"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+431"/>
         <source>No SSH host given</source>
         <translation>未指定 SSH 主机</translation>
     </message>
@@ -2919,7 +3376,12 @@ Nothing is saved until you press OK.</source>
         <translation>%1 的 SSH 端口无效</translation>
     </message>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+295"/>
+        <location line="+78"/>
+        <source>Transfer aborted: the connection was closed</source>
+        <translation>传输中止：连接已关闭</translation>
+    </message>
+    <message>
+        <location filename="../src/ssh/SshWorker.cpp" line="+305"/>
         <source>unknown size</source>
         <translation>大小未知</translation>
     </message>
@@ -3481,72 +3943,91 @@ You will be asked for it when connecting.</source>
 <context>
     <name>SshWorker</name>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+254"/>
-        <location line="+100"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+279"/>
+        <location line="+99"/>
+        <location line="+1760"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
     <message>
-        <location line="-96"/>
+        <location line="-1855"/>
         <source>Another transfer is still running</source>
         <translation>另一个传输仍在进行</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
+        <location line="+1925"/>
         <source>Local file not found: %1</source>
         <translation>找不到本地文件：%1</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="-1917"/>
+        <location line="+1930"/>
         <source>Remote file already exists: %1</source>
         <translation>远程文件已存在：%1</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <location line="+1362"/>
+        <location line="-1923"/>
+        <location line="+1465"/>
+        <location line="+464"/>
+        <location line="+99"/>
         <source>Cannot read %1: %2</source>
         <translation>无法读取 %1：%2</translation>
     </message>
     <message>
-        <location line="-1357"/>
+        <location line="-2023"/>
+        <location line="+1941"/>
+        <location line="+6"/>
         <source>Cannot create remote file %1: %2</source>
         <translation>无法创建远程文件 %1：%2</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-1942"/>
+        <location line="+1947"/>
         <source>Local file already exists: %1</source>
         <translation>本地文件已存在：%1</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-1942"/>
+        <location line="+1958"/>
         <source>Remote file not found: %1 (%2)</source>
         <translation>找不到远程文件：%1（%2）</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="-1945"/>
+        <location line="+1959"/>
         <source>Cannot open remote file %1: %2</source>
         <translation>无法打开远程文件 %1：%2</translation>
     </message>
     <message>
-        <location line="+9"/>
-        <location line="+1354"/>
-        <location line="+31"/>
+        <location line="-1950"/>
+        <location line="+1490"/>
+        <location line="+86"/>
+        <location line="+367"/>
+        <location line="+84"/>
+        <location line="+120"/>
         <source>Cannot write %1: %2</source>
         <translation>无法写入 %1：%2</translation>
     </message>
     <message>
-        <location line="-1364"/>
-        <location line="+1293"/>
+        <location line="-2126"/>
+        <location line="+1388"/>
         <source>Transfer cancelled</source>
         <translation>传输已取消</translation>
     </message>
     <message>
-        <location line="-1273"/>
+        <location line="-1372"/>
+        <location line="+30"/>
         <source>Cannot resolve the remote home directory: %1</source>
         <translation>无法解析远程主目录：%1</translation>
     </message>
     <message>
-        <location line="+70"/>
+        <location line="-4"/>
+        <source>&apos;%1&apos; printed &quot;%2&quot;</source>
+        <translation>&apos;%1&apos; 输出了 &quot;%2&quot;</translation>
+    </message>
+    <message>
+        <location line="+76"/>
         <source>Cannot create an SSH session</source>
         <translation>无法创建 SSH 会话</translation>
     </message>
@@ -3576,7 +4057,7 @@ You will be asked for it when connecting.</source>
         <translation>已拒绝 %1 的主机密钥</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+66"/>
         <source>Authentication with %1 failed: %2</source>
         <translation>使用 %1 进行身份验证失败：%2</translation>
     </message>
@@ -3596,7 +4077,7 @@ You will be asked for it when connecting.</source>
         <translation>所有方式均被拒绝</translation>
     </message>
     <message>
-        <location line="+56"/>
+        <location line="+71"/>
         <source>Cannot read the key %1</source>
         <translation>无法读取密钥 %1</translation>
     </message>
@@ -3621,7 +4102,7 @@ You will be asked for it when connecting.</source>
         <translation>请输入密钥 &apos;%1&apos; 的口令：</translation>
     </message>
     <message>
-        <location line="+53"/>
+        <location line="+67"/>
         <source>Wrong password for %1</source>
         <translation>%1 的密码错误</translation>
     </message>
@@ -3641,12 +4122,12 @@ You will be asked for it when connecting.</source>
         <translation>%1 的密码：</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+53"/>
         <source>Keyboard-interactive authentication did not finish</source>
         <translation>键盘交互身份验证未完成</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+21"/>
         <source>%1 asks for interactive input - reconnect cancelled</source>
         <translation>%1 要求交互式输入 - 重连已取消</translation>
     </message>
@@ -3661,17 +4142,18 @@ You will be asked for it when connecting.</source>
         <translation>响应：</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+31"/>
         <source>Keyboard-interactive authentication failed for %1</source>
         <translation>%1 的键盘交互身份验证失败</translation>
     </message>
     <message>
         <location line="+32"/>
+        <location line="+840"/>
         <source>Cannot create a channel: %1</source>
         <translation>无法创建通道：%1</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-836"/>
         <source>Cannot open the session channel on %1: %2</source>
         <translation>无法在 %1 上打开会话通道：%2</translation>
     </message>
@@ -3692,27 +4174,30 @@ You will be asked for it when connecting.</source>
     </message>
     <message>
         <location line="+29"/>
+        <location line="+904"/>
         <source>Connection to %1 cancelled</source>
         <translation>到 %1 的连接已取消</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="-901"/>
         <source>No answer within 5 minutes - connection to %1 cancelled</source>
         <translation>5 分钟内无应答 - 到 %1 的连接已取消</translation>
     </message>
     <message>
         <location line="+115"/>
+        <location line="+778"/>
         <source>Connection to %1 lost: %2</source>
         <translation>与 %1 的连接已断开：%2</translation>
     </message>
     <message>
-        <location line="+17"/>
-        <location line="+347"/>
+        <location line="-761"/>
+        <location line="+375"/>
+        <location line="+67"/>
         <source>Write to %1 failed: %2</source>
         <translation>写入 %1 失败：%2</translation>
     </message>
     <message>
-        <location line="-316"/>
+        <location line="-411"/>
         <source>Connection to %1 lost</source>
         <translation>与 %1 的连接已断开</translation>
     </message>
@@ -3737,47 +4222,128 @@ You will be asked for it when connecting.</source>
         <translation>端口转发 %2 的绑定地址 &quot;%1&quot; 无效</translation>
     </message>
     <message>
-        <location line="+155"/>
-        <source>Cannot start SFTP on %1: %2</source>
-        <translation>无法在 %1 上启动 SFTP：%2</translation>
+        <location line="+345"/>
+        <source>Uploaded %1 to %2 (%3, SFTP)</source>
+        <translation>已将 %1 上传到 %2（%3，SFTP）</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>SFTP initialisation on %1 failed: %2 (code %3)</source>
-        <translation>在 %1 上初始化 SFTP 失败：%2（代码 %3）</translation>
+        <location line="+22"/>
+        <source>Downloaded %1 to %2 (%3, SFTP)</source>
+        <translation>已将 %1 下载到 %2（%3，SFTP）</translation>
     </message>
     <message>
-        <location line="+48"/>
+        <location line="+124"/>
+        <source>Cannot open a channel on %1: %2</source>
+        <translation>无法在 %1 上打开通道：%2</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Cannot run a command on %1: %2</source>
+        <translation>无法在 %1 上运行命令：%2</translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <location line="+131"/>
+        <location line="+26"/>
+        <location line="+173"/>
+        <source>exit status %1</source>
+        <translation>退出状态 %1</translation>
+    </message>
+    <message>
+        <location line="-328"/>
+        <source>the remote command ended without an exit status</source>
+        <translation>远程命令结束但未返回退出状态</translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>&apos;%1&apos; on %2 did not finish within %3 s</source>
+        <translation>%2 上的 &apos;%1&apos; 在 %3 秒内未完成</translation>
+    </message>
+    <message>
+        <location line="+88"/>
+        <source>unexpected size &quot;%1&quot;</source>
+        <translation>意外的大小 &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <location line="+27"/>
+        <location line="+104"/>
+        <source>Upload to %1 failed: %2</source>
+        <translation>上传到 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="-109"/>
+        <source>Connection to %1 lost during the upload of %2</source>
+        <translation>上传 %2 期间与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Connection to %1 lost during the download of %2</source>
+        <translation>下载 %2 期间与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Connection to %1 lost during the transfer of %2</source>
+        <translation>传输 %2 期间与 %1 的连接已断开</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>%1 of %2 written</source>
+        <translation>已写入 %1 / %2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the remote command did not finish (%1)</source>
+        <translation>远程命令未完成（%1）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Download of %1 failed: %2</source>
+        <translation>下载 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Uploaded %1 to %2 (%3, via shell)</source>
+        <translation>已将 %1 上传到 %2（%3，通过 shell）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Download of %1 ended after %2 of %3</source>
+        <translation>%1 的下载在收到 %2（共 %3）后中止</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Downloaded %1 to %2 (%3, via shell)</source>
+        <translation>已将 %1 下载到 %2（%3，通过 shell）</translation>
+    </message>
+    <message>
+        <location line="-697"/>
+        <location line="+19"/>
+        <location line="+19"/>
+        <location line="+30"/>
+        <location line="+509"/>
         <source>Read from %1 failed: %2</source>
         <translation>从 %1 读取失败：%2</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="-476"/>
         <source>Closing %1 failed: %2</source>
         <translation>关闭 %1 失败：%2</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>Uploaded %1 to %2 (%3)</source>
-        <translation>已将 %1 上传到 %2（%3）</translation>
-    </message>
-    <message>
-        <location line="+11"/>
+        <location line="+17"/>
+        <location line="+571"/>
         <source>Cannot replace %1</source>
         <translation>无法替换 %1</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-567"/>
+        <location line="+571"/>
         <source>Cannot rename %1 to %2</source>
         <translation>无法将 %1 重命名为 %2</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Downloaded %1 to %2 (%3)</source>
-        <translation>已将 %1 下载到 %2（%3）</translation>
-    </message>
-    <message>
-        <location line="+109"/>
+        <location line="+61"/>
         <source>end of file</source>
         <translation>文件结束</translation>
     </message>
@@ -3945,12 +4511,12 @@ You will be asked for it when connecting.</source>
 <context>
     <name>TerminalWidget</name>
     <message>
-        <location filename="../src/terminal/TerminalWidget.cpp" line="+1238"/>
+        <location filename="../src/terminal/TerminalWidget.cpp" line="+1316"/>
         <source>⏸ Output paused  %1 waiting   Enter: copy  Esc: cancel</source>
         <translation>⏸ 输出已暂停  %1 待显示   Enter: 复制  Esc: 取消</translation>
     </message>
     <message>
-        <location line="+920"/>
+        <location line="+928"/>
         <source>&amp;Copy</source>
         <translation>复制(&amp;C)</translation>
     </message>

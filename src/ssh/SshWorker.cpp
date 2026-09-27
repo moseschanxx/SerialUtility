@@ -27,6 +27,11 @@ constexpr int kMaxReadPerTick = 1024 * 1024;
 constexpr int kTransferChunk = 64 * 1024;
 constexpr qint64 kTransferBytesPerTick = 1024 * 1024;
 constexpr qint64 kTransferMsPerTick = 50;
+/// SFTP requests kept in flight per transfer (libssh's aio API): 16 x 64 KiB = the tick's byte
+/// budget, so a LAN link is no longer bounded by one round trip per chunk. The replies are
+/// collected oldest first through m_readBuffer, which must hold one whole request.
+constexpr int kSftpRequestsInFlight = 16;
+static_assert(kReadChunk >= kTransferChunk, "an SFTP read reply must fit into m_readBuffer");
 constexpr qint64 kProgressIntervalMs = 100;
 constexpr qint64 kAnswerTimeoutMs = 5 * 60 * 1000;
 constexpr int kMaxAuthAttempts = 3;
@@ -34,6 +39,11 @@ constexpr int kMaxInteractiveRounds = 12;
 constexpr int kReconnectFirstSeconds = 2;
 constexpr int kReconnectMaxSeconds = 30;
 constexpr int kKeepAliveMaxFailures = 3;
+constexpr int kExecTimeoutMs = 60 * 1000;        ///< bounded wait of a synchronous helper command
+constexpr int kCleanupExecTimeoutMs = 10 * 1000; ///< the `rm -f` of a broken upload (SshWorker::ExecMode::Cleanup)
+constexpr int kExecExitTimeoutMs = 30 * 1000;    ///< exit status after EOF of a data command
+constexpr int kExecPollMs = 50;                  ///< read slice of a synchronous helper command
+constexpr qsizetype kExecStderrCap = 8 * 1024;   ///< stderr text kept per exec channel
 const char kKeepAlivePayload[] = "keepalive@buildai";
 
 // The free helpers below translate through QCoreApplication::translate() with an explicit
@@ -348,6 +358,22 @@ struct SshWorker::ForwardListener
     QList<Bridge> bridges;
 };
 
+/// One exec channel of the shell fallback: a command run without a PTY, its exit state (delivered
+/// by the channel callbacks while any packet is handled), the stderr text it printed (capped) and
+/// the stdout bytes when the caller collects them.
+struct SshWorker::ExecRun
+{
+    ssh_channel channel = nullptr;
+    struct ssh_channel_callbacks_struct callbacks {};
+    bool callbacksSet = false;
+    ExitState exit;
+    QByteArray stderrText;
+    QByteArray stdoutText;
+    bool eofSent = false;             ///< upload: every byte was written and EOF sent
+    bool exitDeadlineArmed = false;
+    QDeadlineTimer exitDeadline;      ///< armed once the data phase ended: how long to wait for the exit status
+};
+
 struct SshWorker::Transfer
 {
     SshConnection::TransferRequest request;
@@ -359,6 +385,14 @@ struct SshWorker::Transfer
     unsigned remoteMode = 0;
     bool haveRemoteMode = false;
     QElapsedTimer progressTimer;
+    // SFTP: the requests in flight, oldest first; aioSizes[i] = bytes requested by aio[i].
+    QList<sftp_aio> aio;
+    QList<qint64> aioSizes;
+    bool remoteEof = false;           ///< download: the server answered EOF, no more reads are issued
+    // Shell fallback
+    bool viaShell = false;
+    std::unique_ptr<ExecRun> exec;    ///< the data command (`cat > 'p'` / `cat 'p'`)
+    QByteArray pending;               ///< upload: bytes read from the local file the channel has not taken yet
 };
 
 struct SshWorker::Live
@@ -366,6 +400,7 @@ struct SshWorker::Live
     ssh_session session = nullptr;
     ssh_channel channel = nullptr;
     sftp_session sftp = nullptr;
+    bool sftpProbed = false;          ///< the "sftp" subsystem was tried once (sftp != nullptr when it works)
     struct ssh_channel_callbacks_struct channelCallbacks {};
     bool callbacksSet = false;
     bool ptyOpen = false;
@@ -503,8 +538,8 @@ void SshWorker::open(const SshWorker::OpenRequest& request)
     }
     m_request = request;
     m_generation = request.generation;
-    m_password = request.savedPassword;
-    m_passphrase = request.savedPassphrase;
+    m_password.clear();
+    m_passphrases.clear();
     m_acceptedKeyLine.clear();
     m_cols = request.cols > 0 ? request.cols : 80;
     m_rows = request.rows > 0 ? request.rows : 24;
@@ -583,9 +618,8 @@ void SshWorker::startTransfer(const SshConnection::TransferRequest& request)
         fail(tr("Another transfer is still running"));
         return;
     }
-    QString error;
-    if (!ensureSftp(&error)) {
-        fail(error);
+    if (!probeSftp()) {
+        startShellTransfer(request);
         return;
     }
 
@@ -680,20 +714,48 @@ void SshWorker::requestRemoteHome()
         emit remoteHomeReceived(gen, QString());
         return;
     }
-    QString error;
-    if (!ensureSftp(&error)) {
-        emit errorOccurred(gen, error);
-        emit remoteHomeReceived(gen, QString());
-        return;
+    QString home;
+    if (probeSftp()) {
+        char* path = sftp_canonicalize_path(m_live->sftp, ".");
+        if (!path) {
+            emit errorOccurred(gen, tr("Cannot resolve the remote home directory: %1").arg(sftpError()));
+            emit remoteHomeReceived(gen, QString());
+            return;
+        }
+        home = QString::fromUtf8(path);
+        ssh_string_free_char(path);
+    } else {
+        // No SFTP: the working directory of a login shell is the home directory; "echo ~" is
+        // the fallback for a shell whose pwd is missing or prints nothing.
+        QString failure;
+        for (const char* command : {"pwd", "echo ~"}) {
+            QByteArray output;
+            QString errorText;
+            int status = -1;
+            QString error;
+            if (!runExec(QLatin1String(command), &output, &errorText, &status, &error)) {
+                failure = error;
+                break;
+            }
+            // One non-empty line is a path (a real server prints "/root"; the in-process test
+            // server prints its root directory); a literal "~" means the shell did not expand it.
+            const QString text = QString::fromUtf8(output).trimmed();
+            if (status == 0 && !text.isEmpty() && text != QLatin1String("~") && !text.contains(QLatin1Char('\n'))) {
+                home = text;
+                break;
+            }
+            failure = errorText.trimmed().isEmpty() ? tr("'%1' printed \"%2\"").arg(QLatin1String(command), text.left(80))
+                                                    : errorText.trimmed();
+        }
+        if (home.isEmpty()) {
+            emit errorOccurred(gen, tr("Cannot resolve the remote home directory: %1").arg(failure));
+            emit remoteHomeReceived(gen, QString());
+            return;
+        }
+        if (!m_live) {   // the link dropped inside runExec
+            return;
+        }
     }
-    char* path = sftp_canonicalize_path(m_live->sftp, ".");
-    if (!path) {
-        emit errorOccurred(gen, tr("Cannot resolve the remote home directory: %1").arg(sftpError()));
-        emit remoteHomeReceived(gen, QString());
-        return;
-    }
-    const QString home = QString::fromUtf8(path);
-    ssh_string_free_char(path);
     {
         QMutexLocker lock(&m_shared->mutex);
         m_shared->remoteHome = home;
@@ -1053,8 +1115,17 @@ SshConnection::AuthPrompt SshWorker::makePrompt(SshConnection::PromptKind kind, 
     prompt.attempt = attempt;
     prompt.user = m_live ? m_live->user : m_request.profile.user;
     prompt.host = m_request.profile.host.trimmed();
-    prompt.canRemember = !m_request.profile.id.isEmpty();
+    // Every password / passphrase prompt can be remembered (under the profile id, the target or
+    // the key file - see the class comment); keyboard-interactive callers decide per prompt.
+    prompt.canRemember = kind != SshConnection::PromptKind::KeyboardInteractive;
+    prompt.rememberTarget = m_request.profile.displayTarget();
     return prompt;
+}
+
+QString SshWorker::rememberPasswordKey() const
+{
+    const QString idKey = profilePasswordKey(m_request.profile);
+    return idKey.isEmpty() ? targetPasswordKey(m_request.profile) : idKey;
 }
 
 SshWorker::Step SshWorker::authenticate(bool reconnect, QString* error)
@@ -1205,14 +1276,23 @@ SshWorker::Step SshWorker::authenticateWithKey(const QString& keyFile, bool reco
         return Step::Denied;
     }
     const bool profileKey = (keyFile == expandHome(m_request.profile.identityFile));
+    const QString normalized = normalizedKeyPath(keyFile);
     const QByteArray fileUtf8 = keyFile.toUtf8();
 
-    QString passphrase = profileKey ? m_passphrase : QString();
-    bool fromStore = !passphrase.isEmpty() && passphrase == m_request.savedPassphrase;
+    // Candidates in order: the passphrase that opened this key earlier in the session
+    // (reconnects), then the saved ones (profile id first, then the key-path entry), then the user.
+    QList<SavedSecret> saved = m_request.savedPassphrases.value(normalized);
+    QString passphrase = m_passphrases.value(normalized);
+    QString fromStoreKey;
     bool remember = false;
     int attempt = 0;
     ssh_key privateKey = nullptr;
     for (;;) {
+        if (passphrase.isEmpty() && !saved.isEmpty()) {
+            const SavedSecret candidate = saved.takeFirst();
+            passphrase = candidate.value;
+            fromStoreKey = candidate.key;
+        }
         bool needsPassphrase = false;
         const QByteArray pass = passphrase.toUtf8();
         const int rc = ssh_pki_import_privkey_file(fileUtf8.constData(), pass.isEmpty() ? nullptr : pass.constData(),
@@ -1228,12 +1308,18 @@ SshWorker::Step SshWorker::authenticateWithKey(const QString& keyFile, bool reco
         if (!pass.isEmpty()) {
             // A passphrase was supplied and rejected.
             qCInfo(lcSsh) << "passphrase for" << keyFile << "rejected";
-            if (fromStore) {
-                emit secretRejected(m_generation, passphraseSecretKey());
-                m_passphrase.clear();
-                fromStore = false;
+            if (!fromStoreKey.isEmpty()) {
+                emit secretRejected(m_generation, fromStoreKey);
+                fromStoreKey.clear();
             }
+            if (m_passphrases.value(normalized) == passphrase) {
+                m_passphrases.remove(normalized);
+            }
+            passphrase.clear();
             ++attempt;
+            if (!saved.isEmpty()) {
+                continue;   // the next saved candidate, no question yet
+            }
         } else if (!needsPassphrase) {
             qCWarning(lcSsh) << "cannot import identity file" << keyFile << ":" << libsshError();
             *error = tr("Cannot read the key %1").arg(QDir::toNativeSeparators(keyFile));
@@ -1251,11 +1337,11 @@ SshWorker::Step SshWorker::authenticateWithKey(const QString& keyFile, bool reco
         prompt.title = tr("Key passphrase");
         prompt.prompt = tr("Enter passphrase for key '%1':").arg(QDir::toNativeSeparators(keyFile));
         prompt.keyFile = keyFile;
+        prompt.rememberTarget = normalized;
         const Step step = askPrompt(prompt, &passphrase, &remember, error);
         if (step != Step::Ok) {
             return step;
         }
-        fromStore = false;
         if (passphrase.isEmpty()) {
             ++attempt;
         }
@@ -1276,10 +1362,15 @@ SshWorker::Step SshWorker::authenticateWithKey(const QString& keyFile, bool reco
     ssh_key_free(privateKey);
     if (rc == SSH_AUTH_SUCCESS) {
         qCInfo(lcSsh) << "authenticated with key" << keyFile;
-        if (profileKey && !passphrase.isEmpty()) {
-            m_passphrase = passphrase;
-            if (remember && m_request.profile.id.size() > 0) {
-                emit storeSecret(m_generation, passphraseSecretKey(), passphrase);
+        if (!passphrase.isEmpty()) {
+            m_passphrases.insert(normalized, passphrase);
+            if (remember) {
+                // The profile's own key also goes under the profile id; every key goes under its
+                // path so the next target using it asks nothing.
+                if (profileKey && !m_request.profile.id.isEmpty()) {
+                    emit storeSecret(m_generation, profilePassphraseKey(m_request.profile), passphrase);
+                }
+                emit storeSecret(m_generation, keyPassphraseKey(keyFile), passphrase);
             }
         }
         setAuthMethod(QStringLiteral("publickey"));
@@ -1294,13 +1385,22 @@ SshWorker::Step SshWorker::authenticateWithKey(const QString& keyFile, bool reco
 
 SshWorker::Step SshWorker::authenticateWithPassword(bool reconnect, QString* error)
 {
+    // Candidates in order: the password that worked earlier in this session (reconnects), the
+    // saved ones (profile id first, then the target entry), then the user.
+    QList<SavedSecret> saved = m_request.savedPasswords;
+    if (!m_password.isEmpty()) {
+        saved.prepend({QString(), m_password});
+    }
     int attempt = 0;
-    QString password = m_password;
-    bool havePassword = !password.isEmpty();
-    bool fromStore = havePassword && password == m_request.savedPassword;
+    QString password;
+    QString fromStoreKey;
     bool remember = false;
     for (;;) {
-        if (!havePassword) {
+        if (!saved.isEmpty()) {
+            const SavedSecret candidate = saved.takeFirst();
+            password = candidate.value;
+            fromStoreKey = candidate.key;
+        } else {
             if (attempt >= kMaxAuthAttempts) {
                 *error = tr("Wrong password for %1").arg(target());
                 return Step::Denied;
@@ -1316,15 +1416,14 @@ SshWorker::Step SshWorker::authenticateWithPassword(bool reconnect, QString* err
             if (step != Step::Ok) {
                 return step;
             }
-            havePassword = true;
-            fromStore = false;
+            fromStoreKey.clear();
         }
         const QByteArray utf8 = password.toUtf8();
         const int rc = ssh_userauth_password(m_live->session, nullptr, utf8.constData());
         if (rc == SSH_AUTH_SUCCESS) {
             m_password = password;
-            if (remember && !m_request.profile.id.isEmpty()) {
-                emit storeSecret(m_generation, passwordSecretKey(), password);
+            if (remember) {
+                emit storeSecret(m_generation, rememberPasswordKey(), password);
             }
             setAuthMethod(QStringLiteral("password"));
             return Step::Ok;
@@ -1334,12 +1433,14 @@ SshWorker::Step SshWorker::authenticateWithPassword(bool reconnect, QString* err
         }
         ++attempt;
         qCInfo(lcSsh) << "password rejected (attempt" << attempt << ")";
-        if (fromStore) {
-            emit secretRejected(m_generation, passwordSecretKey());
-            m_password.clear();
-            fromStore = false;
+        if (!fromStoreKey.isEmpty()) {
+            emit secretRejected(m_generation, fromStoreKey);
+            fromStoreKey.clear();
         }
-        havePassword = false;
+        if (password == m_password) {
+            m_password.clear();
+        }
+        password.clear();
     }
 }
 
@@ -1348,9 +1449,17 @@ SshWorker::Step SshWorker::authenticateInteractive(bool reconnect, QString* erro
     ssh_session session = m_live->session;
     int attempt = 1;
     int rounds = 0;
-    bool savedAvailable = !m_password.isEmpty();
+    // Saved answers for the first hidden prompt of a round, in lookup order (see
+    // authenticateWithPassword); a rejected round forgets the one it used.
+    QList<SavedSecret> saved = m_request.savedPasswords;
+    if (!m_password.isEmpty()) {
+        saved.prepend({QString(), m_password});
+    }
+    QString usedSavedKey;
+    QString usedSavedValue;
     bool usedSavedThisRound = false;
     bool savedWorked = false;
+    bool hiddenPromptAsked = false;
     QString rememberValue;
     int rc = ssh_userauth_kbdint(session, nullptr, nullptr);
     while (rc == SSH_AUTH_INFO) {
@@ -1362,14 +1471,17 @@ SshWorker::Step SshWorker::authenticateInteractive(bool reconnect, QString* erro
         const QString name = fromLibssh(ssh_userauth_kbdint_getname(session)).trimmed();
         const QString instruction = fromLibssh(ssh_userauth_kbdint_getinstruction(session)).trimmed();
         usedSavedThisRound = false;
+        hiddenPromptAsked = false;   // per round: the first hidden prompt is the password-like one
         for (int i = 0; i < count; ++i) {
             char echo = 0;
             const QString text = fromLibssh(ssh_userauth_kbdint_getprompt(session, static_cast<unsigned int>(i), &echo));
             QString response;
             bool remember = false;
-            if (savedAvailable && !echo) {
-                response = m_password;
-                savedAvailable = false;
+            if (!saved.isEmpty() && !echo && !usedSavedThisRound) {
+                const SavedSecret candidate = saved.takeFirst();
+                response = candidate.value;
+                usedSavedKey = candidate.key;
+                usedSavedValue = candidate.value;
                 usedSavedThisRound = true;
             } else {
                 if (reconnect) {
@@ -1381,11 +1493,16 @@ SshWorker::Step SshWorker::authenticateInteractive(bool reconnect, QString* erro
                 prompt.instruction = instruction;
                 prompt.prompt = text.isEmpty() ? tr("Response:") : text;
                 prompt.echo = echo != 0;
+                // Only the first hidden answer of a round (the password-like one) can be remembered.
+                prompt.canRemember = !echo && !hiddenPromptAsked;
+                if (!echo) {
+                    hiddenPromptAsked = true;
+                }
                 const Step step = askPrompt(prompt, &response, &remember, error);
                 if (step != Step::Ok) {
                     return step;
                 }
-                if (remember && !echo) {
+                if (remember && prompt.canRemember) {
                     rememberValue = response;
                 }
             }
@@ -1397,8 +1514,12 @@ SshWorker::Step SshWorker::authenticateInteractive(bool reconnect, QString* erro
         rc = ssh_userauth_kbdint(session, nullptr, nullptr);
         if (rc == SSH_AUTH_DENIED) {
             if (usedSavedThisRound) {
-                emit secretRejected(m_generation, passwordSecretKey());
-                m_password.clear();
+                if (!usedSavedKey.isEmpty()) {
+                    emit secretRejected(m_generation, usedSavedKey);
+                }
+                if (usedSavedValue == m_password) {
+                    m_password.clear();
+                }
             }
             if (++attempt > kMaxAuthAttempts) {
                 *error = tr("Keyboard-interactive authentication failed for %1").arg(target());
@@ -1413,10 +1534,10 @@ SshWorker::Step SshWorker::authenticateInteractive(bool reconnect, QString* erro
     if (rc == SSH_AUTH_SUCCESS) {
         if (!rememberValue.isEmpty()) {
             m_password = rememberValue;
-            if (!m_request.profile.id.isEmpty()) {
-                emit storeSecret(m_generation, passwordSecretKey(), rememberValue);
-            }
-        } else if (!savedWorked && usedSavedThisRound) {
+            emit storeSecret(m_generation, rememberPasswordKey(), rememberValue);
+        } else if (savedWorked) {
+            m_password = usedSavedValue;
+        } else if (usedSavedThisRound) {
             m_password.clear();
         }
         setAuthMethod(QStringLiteral("keyboard-interactive"));
@@ -1934,18 +2055,26 @@ void SshWorker::teardownForwards()
 // SFTP transfers
 // ---------------------------------------------------------------------------------------
 
-bool SshWorker::ensureSftp(QString* error)
+bool SshWorker::probeSftp()
 {
     if (m_live->sftp) {
         return true;
     }
+    if (m_live->sftpProbed) {
+        return false;   // refused earlier in this session: the shell fallback is in use
+    }
+    m_live->sftpProbed = true;
     sftp_session sftp = sftp_new(m_live->session);
     if (!sftp) {
-        *error = tr("Cannot start SFTP on %1: %2").arg(target(), libsshError());
+        // The "sftp" subsystem request was refused (dropbear without sftp-server, or an sshd
+        // without a Subsystem line); the file commands over exec channels take over.
+        qCInfo(lcSsh) << "no SFTP subsystem on" << target() << "(" << libsshError()
+                      << ") - file transfers use the shell fallback";
         return false;
     }
     if (sftp_init(sftp) != SSH_OK) {
-        *error = tr("SFTP initialisation on %1 failed: %2 (code %3)").arg(target(), libsshError()).arg(sftp_get_error(sftp));
+        qCInfo(lcSsh) << "SFTP on" << target() << "did not initialise (" << libsshError() << ", code" << sftp_get_error(sftp)
+                      << ") - file transfers use the shell fallback";
         sftp_free(sftp);
         return false;
     }
@@ -1964,6 +2093,14 @@ void SshWorker::serviceTransfer()
         finishTransfer(false, tr("Transfer cancelled"));
         return;
     }
+    if (transfer->viaShell) {
+        serviceShellTransfer();
+        return;
+    }
+    // Both directions keep up to kSftpRequestsInFlight requests outstanding and collect the
+    // replies oldest first: every sftp_aio_begin_*() sends one packet without waiting, only the
+    // wait for the oldest reply blocks - and by then the server has usually answered it while
+    // the later ones were on the wire.
     QElapsedTimer slice;
     slice.start();
     qint64 moved = 0;
@@ -1976,40 +2113,128 @@ void SshWorker::serviceTransfer()
                                                                        transfer->local.errorString()));
                     return;
                 }
+                while (!transfer->aio.isEmpty()) {   // the last acknowledgements, then close
+                    if (!awaitSftpWrite()) {
+                        return;
+                    }
+                }
                 completeTransfer();
                 return;
             }
             qsizetype offset = 0;
             while (offset < chunk.size()) {
-                const ssize_t n = sftp_write(transfer->remote, chunk.constData() + offset, static_cast<size_t>(chunk.size() - offset));
-                if (n <= 0) {
+                if (transfer->aio.size() >= kSftpRequestsInFlight && !awaitSftpWrite()) {
+                    return;
+                }
+                sftp_aio aio = nullptr;
+                // libssh caps one request at the server's max_write_length (32 KiB without the
+                // limits extension) and reports what it sent; the rest goes into the next one.
+                const ssize_t n = sftp_aio_begin_write(transfer->remote, chunk.constData() + offset,
+                                                       static_cast<size_t>(chunk.size() - offset), &aio);
+                if (n <= 0 || !aio) {
                     finishTransfer(false, tr("Write to %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
                     return;
                 }
+                transfer->aio.append(aio);
+                transfer->aioSizes.append(static_cast<qint64>(n));
                 offset += static_cast<qsizetype>(n);
             }
-            transfer->done += chunk.size();
-            moved += chunk.size();
+            moved += chunk.size();   // sent; `done` follows the acknowledgements
         } else {
-            const ssize_t n = sftp_read(transfer->remote, m_readBuffer.data(), static_cast<size_t>(kTransferChunk));
-            if (n < 0) {
-                finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
-                return;
+            while (!transfer->remoteEof && transfer->aio.size() < kSftpRequestsInFlight) {
+                sftp_aio aio = nullptr;
+                const ssize_t n = sftp_aio_begin_read(transfer->remote, static_cast<size_t>(kTransferChunk), &aio);
+                if (n <= 0 || !aio) {
+                    finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
+                    return;
+                }
+                transfer->aio.append(aio);
+                transfer->aioSizes.append(static_cast<qint64>(n));
             }
-            if (n == 0) {
+            if (transfer->aio.isEmpty()) {   // EOF seen and every reply collected
                 completeTransfer();
                 return;
             }
-            if (transfer->local.write(m_readBuffer.constData(), static_cast<qint64>(n)) != static_cast<qint64>(n)) {
+            qint64 n = 0;
+            qint64 requested = 0;
+            if (!awaitSftpRead(&n, &requested)) {
+                return;
+            }
+            if (n == 0) {
+                // EOF: the requests behind this one started past the end and answer EOF too.
+                transfer->remoteEof = true;
+                if (!discardSftpReplies()) {
+                    finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
+                    return;
+                }
+                completeTransfer();
+                return;
+            }
+            if (transfer->local.write(m_readBuffer.constData(), n) != n) {
                 finishTransfer(false, tr("Cannot write %1: %2").arg(QDir::toNativeSeparators(transfer->partPath),
                                                                     transfer->local.errorString()));
                 return;
             }
-            transfer->done += static_cast<qint64>(n);
-            moved += static_cast<qint64>(n);
+            transfer->done += n;
+            moved += n;
+            if (n < requested) {
+                // A short read (the last block of the file, or a server that reads less than
+                // asked): the requests behind it were issued for offsets beyond it, so their
+                // data would leave a gap. Drop them and continue from the byte after this one.
+                if (!discardSftpReplies() ||
+                    sftp_seek64(transfer->remote, static_cast<uint64_t>(transfer->done)) != SSH_OK) {
+                    finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
+                    return;
+                }
+            }
         }
     }
     emitProgress(false);
+}
+
+bool SshWorker::awaitSftpWrite()
+{
+    Transfer* transfer = m_live->transfer.get();
+    sftp_aio aio = transfer->aio.takeFirst();
+    transfer->aioSizes.removeFirst();
+    const ssize_t n = sftp_aio_wait_write(&aio);   // frees the handle whatever the outcome
+    if (n < 0) {
+        finishTransfer(false, tr("Write to %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
+        return false;
+    }
+    transfer->done += static_cast<qint64>(n);
+    return true;
+}
+
+bool SshWorker::awaitSftpRead(qint64* bytes, qint64* requested)
+{
+    Transfer* transfer = m_live->transfer.get();
+    sftp_aio aio = transfer->aio.takeFirst();
+    *requested = transfer->aioSizes.takeFirst();
+    const ssize_t n = sftp_aio_wait_read(&aio, m_readBuffer.data(), static_cast<size_t>(m_readBuffer.size()));
+    if (n < 0) {
+        finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, sftpError()));
+        return false;
+    }
+    *bytes = static_cast<qint64>(n);
+    return true;
+}
+
+bool SshWorker::discardSftpReplies()
+{
+    Transfer* transfer = m_live->transfer.get();
+    const bool upload = transfer->request.direction == SshConnection::TransferDirection::Upload;
+    bool ok = true;
+    while (!transfer->aio.isEmpty()) {
+        sftp_aio aio = transfer->aio.takeFirst();
+        transfer->aioSizes.removeFirst();
+        const ssize_t rc = upload ? sftp_aio_wait_write(&aio)
+                                  : sftp_aio_wait_read(&aio, m_readBuffer.data(), static_cast<size_t>(m_readBuffer.size()));
+        if (rc < 0) {
+            ok = false;   // keep collecting: every reply must be taken off the queue
+        }
+    }
+    return ok;
 }
 
 void SshWorker::completeTransfer()
@@ -2027,7 +2252,7 @@ void SshWorker::completeTransfer()
     }
     if (request.direction == SshConnection::TransferDirection::Upload) {
         transfer->local.close();
-        finishTransfer(true, tr("Uploaded %1 to %2 (%3)")
+        finishTransfer(true, tr("Uploaded %1 to %2 (%3, SFTP)")
                                  .arg(QFileInfo(request.localPath).fileName(), request.remotePath, sizeText(done)));
         return;
     }
@@ -2049,7 +2274,7 @@ void SshWorker::completeTransfer()
     if (request.preservePermissions && transfer->haveRemoteMode) {
         QFile::setPermissions(request.localPath, permissionsFromMode(transfer->remoteMode & 0777u));
     }
-    finishTransfer(true, tr("Downloaded %1 to %2 (%3)")
+    finishTransfer(true, tr("Downloaded %1 to %2 (%3, SFTP)")
                              .arg(request.remotePath, QDir::toNativeSeparators(request.localPath), sizeText(done)));
 }
 
@@ -2060,9 +2285,46 @@ void SshWorker::finishTransfer(bool ok, const QString& message)
         return;
     }
     const quint64 gen = m_generation;
+    // An upload that was cancelled or failed after the remote file was created leaves a
+    // truncated file that looks complete on the board: remove it once the handle / data channel
+    // is closed. SFTP: sftp_unlink() while the session still has the file open for nobody else;
+    // shell fallback: `rm -f` on a fresh exec channel once `cat > 'p'` was started - the `: > 'p'`
+    // probe before it means the file is the transfer's own, never one it failed to open. Only on
+    // a live session - a dropped link cannot be asked, and would block the worker.
+    const bool upload = transfer->request.direction == SshConnection::TransferDirection::Upload;
+    const bool removeRemote = !ok && !transfer->viaShell && transfer->remote && upload;
+    const bool removeShellUpload = !ok && transfer->viaShell && transfer->exec && upload;
+    const QString remotePathText = transfer->request.remotePath;
+    if (!transfer->aio.isEmpty()) {
+        // Requests still in flight (a cancel or a failure in the middle of the pipeline): on a
+        // live link their replies are on their way, so collect them - at most
+        // kSftpRequestsInFlight small packets - and the close below finds a clean queue; on a
+        // dead link only the handles are released.
+        if (transfer->remote && m_live->session && ssh_is_connected(m_live->session)) {
+            discardSftpReplies();
+        } else {
+            for (sftp_aio aio : std::as_const(transfer->aio)) {
+                sftp_aio_free(aio);
+            }
+            transfer->aio.clear();
+            transfer->aioSizes.clear();
+        }
+    }
     if (transfer->remote) {
         sftp_close(transfer->remote);
         transfer->remote = nullptr;
+    }
+    if (removeRemote && m_live->sftp && m_live->session && ssh_is_connected(m_live->session)) {
+        const QByteArray remotePath = transfer->request.remotePath.toUtf8();
+        if (sftp_unlink(m_live->sftp, remotePath.constData()) == SSH_OK) {
+            qCInfo(lcSsh) << "removed the incomplete upload" << transfer->request.remotePath;
+        } else {
+            qCWarning(lcSsh) << "cannot remove the incomplete upload" << transfer->request.remotePath << ":" << sftpError();
+        }
+    }
+    if (transfer->exec) {
+        closeExec(*transfer->exec);
+        transfer->exec.reset();
     }
     if (transfer->local.isOpen()) {
         transfer->local.close();
@@ -2087,6 +2349,23 @@ void SshWorker::finishTransfer(bool ok, const QString& message)
         qCWarning(lcSsh) << "transfer failed:" << message;
     }
     emit transferFinished(gen, ok, message);
+    if (removeShellUpload && m_live && m_live->session && ssh_is_connected(m_live->session)) {
+        // After the data channel's close (sent above by closeExec()) so the rm reaches the server
+        // behind it; Cleanup mode: a close() in progress must not stop it, and a link found dead
+        // here is reported, not torn down (this may run inside teardownLive()).
+        QByteArray output;
+        QString errorText;
+        int status = -1;
+        QString error;
+        if (!runExec(QStringLiteral("rm -f ") + shellPath(remotePathText), &output, &errorText, &status, &error,
+                     ExecMode::Cleanup)) {
+            qCWarning(lcSsh) << "cannot remove the incomplete upload" << remotePathText << ":" << error;
+        } else if (status != 0) {
+            qCWarning(lcSsh) << "removing the incomplete upload" << remotePathText << "failed:" << errorText.trimmed();
+        } else {
+            qCInfo(lcSsh) << "removed the incomplete upload" << remotePathText;
+        }
+    }
 }
 
 void SshWorker::publishTransfer()
@@ -2103,6 +2382,468 @@ void SshWorker::publishTransfer()
     m_shared->transfer.remotePath = transfer->request.remotePath;
     m_shared->transfer.done = transfer->done;
     m_shared->transfer.total = transfer->total;
+    m_shared->transfer.method = transfer->viaShell ? QStringLiteral("shell") : QStringLiteral("sftp");
+}
+
+// ---------------------------------------------------------------------------------------
+// Shell fallback: transfers over exec channels (no SFTP subsystem)
+// ---------------------------------------------------------------------------------------
+
+std::unique_ptr<SshWorker::ExecRun> SshWorker::startExec(const QString& command, QString* error)
+{
+    ssh_session session = m_live->session;
+    ssh_channel channel = ssh_channel_new(session);
+    if (!channel) {
+        *error = tr("Cannot create a channel: %1").arg(libsshError());
+        return nullptr;
+    }
+    if (ssh_channel_open_session(channel) != SSH_OK) {
+        *error = tr("Cannot open a channel on %1: %2").arg(target(), libsshError());
+        ssh_channel_free(channel);
+        return nullptr;
+    }
+    auto run = std::make_unique<ExecRun>();
+    run->channel = channel;
+    ssh_callbacks_init(&run->callbacks);
+    run->callbacks.userdata = &run->exit;
+    run->callbacks.channel_exit_status_function = exitStatusCallback;
+    run->callbacks.channel_exit_signal_function = exitSignalCallback;
+    run->callbacksSet = ssh_set_channel_callbacks(channel, &run->callbacks) == SSH_OK;
+    const QByteArray utf8 = command.toUtf8();
+    if (ssh_channel_request_exec(channel, utf8.constData()) != SSH_OK) {
+        *error = tr("Cannot run a command on %1: %2").arg(target(), libsshError());
+        closeExec(*run);
+        return nullptr;
+    }
+    qCDebug(lcSsh) << "exec on" << target() << ":" << command;
+    return run;
+}
+
+void SshWorker::closeExec(ExecRun& run)
+{
+    if (!run.channel) {
+        return;
+    }
+    if (run.callbacksSet) {
+        ssh_remove_channel_callbacks(run.channel, &run.callbacks);
+        run.callbacksSet = false;
+    }
+    const bool connected = m_live && m_live->session && ssh_is_connected(m_live->session);
+    if (connected && ssh_channel_is_open(run.channel)) {
+        ssh_channel_close(run.channel);   // sends EOF first; the server ends the command
+    }
+    ssh_channel_free(run.channel);
+    run.channel = nullptr;
+}
+
+void SshWorker::pumpExecStderr(ExecRun& run)
+{
+    for (;;) {
+        const int n = ssh_channel_read_nonblocking(run.channel, m_readBuffer.data(),
+                                                   static_cast<uint32_t>(m_readBuffer.size()), 1);
+        if (n <= 0) {
+            return;
+        }
+        if (run.stderrText.size() < kExecStderrCap) {
+            run.stderrText.append(m_readBuffer.constData(), n);
+            run.stderrText.truncate(kExecStderrCap);
+        }
+    }
+}
+
+QString SshWorker::execFailureText(const ExecRun& run) const
+{
+    const QString text = QString::fromUtf8(run.stderrText).trimmed();
+    if (!text.isEmpty()) {
+        return text;
+    }
+    if (run.exit.received) {
+        return tr("exit status %1").arg(run.exit.status);
+    }
+    return tr("the remote command ended without an exit status");
+}
+
+bool SshWorker::runExec(const QString& command, QByteArray* output, QString* errorText, int* exitStatus, QString* error,
+                        ExecMode mode)
+{
+    output->clear();
+    errorText->clear();
+    *exitStatus = -1;
+    if (!m_live || !m_live->session || !ssh_is_connected(m_live->session)) {
+        *error = tr("Not connected");
+        return false;
+    }
+    std::unique_ptr<ExecRun> run = startExec(command, error);
+    if (!run) {
+        return false;
+    }
+    ssh_channel_send_eof(run->channel);   // no stdin for the helper commands
+    const bool cleanup = mode == ExecMode::Cleanup;
+    const QDeadlineTimer deadline(cleanup ? kCleanupExecTimeoutMs : kExecTimeoutMs);
+    bool eof = false;
+    bool transportError = false;
+    while (!deadline.hasExpired() && (cleanup || !aborted())) {
+        pumpExecStderr(*run);
+        const int n = ssh_channel_read_timeout(run->channel, m_readBuffer.data(),
+                                               static_cast<uint32_t>(m_readBuffer.size()), 0, kExecPollMs);
+        if (n > 0) {
+            output->append(m_readBuffer.constData(), n);
+            continue;
+        }
+        if (n == SSH_ERROR) {
+            transportError = !ssh_is_connected(m_live->session);
+            break;
+        }
+        if (n == 0) {
+            eof = true;
+            break;
+        }
+        // SSH_AGAIN: nothing yet
+    }
+    pumpExecStderr(*run);
+    if (eof && !run->exit.received) {
+        // The status follows the EOF (dropbear sends it when the process exits); this blocks
+        // until it - or the channel close - arrives, bounded by the session timeout.
+        uint32_t code = 0;
+        if (ssh_channel_get_exit_state(run->channel, &code, nullptr, nullptr) == SSH_OK) {
+            run->exit.received = true;
+            run->exit.status = static_cast<int>(code);
+        }
+        pumpExecStderr(*run);
+    }
+    *errorText = QString::fromUtf8(run->stderrText);
+    *exitStatus = run->exit.received ? run->exit.status : -1;
+    closeExec(*run);
+    if (m_live && m_live->session && !ssh_is_connected(m_live->session)) {
+        transportError = true;
+    }
+    if (transportError) {
+        *error = tr("Connection to %1 lost: %2").arg(target(), libsshError());
+        if (!cleanup) {
+            handleConnectionLost(*error);
+        }
+        return false;
+    }
+    if (!eof && *exitStatus < 0) {
+        *error = (aborted() && !cleanup)
+            ? tr("Connection to %1 cancelled").arg(target())
+            : tr("'%1' on %2 did not finish within %3 s")
+                  .arg(command.left(40), target())
+                  .arg((cleanup ? kCleanupExecTimeoutMs : kExecTimeoutMs) / 1000);
+        return false;
+    }
+    return true;
+}
+
+void SshWorker::startShellTransfer(const SshConnection::TransferRequest& request)
+{
+    const quint64 gen = m_generation;
+    auto fail = [this, gen](const QString& message) {
+        {
+            QMutexLocker lock(&m_shared->mutex);
+            m_shared->transfer.active = false;
+        }
+        qCWarning(lcSsh) << "transfer not started:" << message;
+        emit transferFinished(gen, false, message);
+    };
+    auto transfer = std::make_unique<Transfer>();
+    transfer->request = request;
+    transfer->viaShell = true;
+    const QString quoted = shellPath(request.remotePath);
+    QString error;
+    if (request.direction == SshConnection::TransferDirection::Upload) {
+        const QFileInfo info(request.localPath);
+        if (!info.isFile()) {
+            fail(tr("Local file not found: %1").arg(QDir::toNativeSeparators(request.localPath)));
+            return;
+        }
+        transfer->total = info.size();
+        if (!request.overwrite) {
+            QByteArray output;
+            QString errorText;
+            int status = -1;
+            if (!runExec(QStringLiteral("test -e ") + quoted, &output, &errorText, &status, &error)) {
+                fail(error);
+                return;
+            }
+            if (status == 0) {
+                fail(tr("Remote file already exists: %1").arg(request.remotePath));
+                return;
+            }
+        }
+        transfer->local.setFileName(request.localPath);
+        if (!transfer->local.open(QIODevice::ReadOnly)) {
+            fail(tr("Cannot read %1: %2").arg(QDir::toNativeSeparators(request.localPath), transfer->local.errorString()));
+            return;
+        }
+        {
+            // Create / truncate the file first, separately from the data command: a path that
+            // cannot be written fails here with the shell's reason (a missing directory, a
+            // read-only file, a directory) and is never touched; from now on the file belongs to
+            // this transfer, so finishTransfer() may remove it if the upload does not complete.
+            QByteArray output;
+            QString errorText;
+            int status = -1;
+            if (!runExec(QStringLiteral(": > ") + quoted, &output, &errorText, &status, &error)) {
+                fail(error);
+                return;
+            }
+            if (status != 0) {
+                const QString reason = errorText.trimmed().isEmpty() ? tr("exit status %1").arg(status) : errorText.trimmed();
+                fail(tr("Cannot create remote file %1: %2").arg(request.remotePath, reason));
+                return;
+            }
+        }
+        transfer->exec = startExec(QStringLiteral("cat > ") + quoted, &error);
+        if (!transfer->exec) {
+            fail(tr("Cannot create remote file %1: %2").arg(request.remotePath, error));
+            return;
+        }
+    } else {
+        if (!request.overwrite && QFileInfo::exists(request.localPath)) {
+            fail(tr("Local file already exists: %1").arg(QDir::toNativeSeparators(request.localPath)));
+            return;
+        }
+        QByteArray output;
+        QString errorText;
+        int status = -1;
+        if (!runExec(QStringLiteral("wc -c < ") + quoted, &output, &errorText, &status, &error)) {
+            fail(error);
+            return;
+        }
+        bool sizeOk = false;
+        const qint64 size = QString::fromUtf8(output).trimmed().toLongLong(&sizeOk);
+        if (status != 0 || !sizeOk || size < 0) {
+            const QString reason = errorText.trimmed().isEmpty()
+                ? (status != 0 ? tr("exit status %1").arg(status) : tr("unexpected size \"%1\"").arg(QString::fromUtf8(output).trimmed().left(40)))
+                : errorText.trimmed();
+            fail(tr("Remote file not found: %1 (%2)").arg(request.remotePath, reason));
+            return;
+        }
+        transfer->total = size;
+        transfer->partPath = request.localPath + QStringLiteral(".part");
+        transfer->local.setFileName(transfer->partPath);
+        if (!transfer->local.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            fail(tr("Cannot write %1: %2").arg(QDir::toNativeSeparators(transfer->partPath), transfer->local.errorString()));
+            return;
+        }
+        transfer->exec = startExec(QStringLiteral("cat ") + quoted, &error);
+        if (!transfer->exec) {
+            transfer->local.close();
+            QFile::remove(transfer->partPath);
+            fail(tr("Cannot open remote file %1: %2").arg(request.remotePath, error));
+            return;
+        }
+    }
+    transfer->progressTimer.start();
+    m_live->transfer = std::move(transfer);
+    m_live->cancelTransfer = false;
+    publishTransfer();
+    qCInfo(lcSsh) << (request.direction == SshConnection::TransferDirection::Upload ? "uploading" : "downloading")
+                  << request.localPath << "<->" << request.remotePath << "(" << m_live->transfer->total
+                  << "bytes, via shell )";
+    emit transferStarted(gen, request);
+    emit transferProgress(gen, 0, m_live->transfer->total);
+}
+
+void SshWorker::serviceShellTransfer()
+{
+    Transfer* transfer = m_live->transfer.get();
+    ExecRun& run = *transfer->exec;
+    pumpExecStderr(run);
+    const bool upload = transfer->request.direction == SshConnection::TransferDirection::Upload;
+    auto armExitDeadline = [&run] {
+        if (!run.exitDeadlineArmed) {
+            run.exitDeadlineArmed = true;
+            run.exitDeadline = QDeadlineTimer(kExecExitTimeoutMs);
+        }
+    };
+    QElapsedTimer slice;
+    slice.start();
+    qint64 moved = 0;
+    if (upload && !run.eofSent) {
+        // The remote command ending before the data did is a failure (cannot create the file...).
+        if (run.exit.received || ssh_channel_is_closed(run.channel) || ssh_channel_is_eof(run.channel)) {
+            finishTransfer(false, tr("Upload to %1 failed: %2").arg(transfer->request.remotePath, execFailureText(run)));
+            return;
+        }
+        while (moved < kTransferBytesPerTick && slice.elapsed() < kTransferMsPerTick) {
+            if (transfer->pending.isEmpty()) {
+                transfer->pending = transfer->local.read(kTransferChunk);
+                if (transfer->pending.isEmpty()) {
+                    if (transfer->local.error() != QFileDevice::NoError) {
+                        finishTransfer(false, tr("Cannot read %1: %2").arg(QDir::toNativeSeparators(transfer->request.localPath),
+                                                                           transfer->local.errorString()));
+                        return;
+                    }
+                    ssh_channel_send_eof(run.channel);
+                    run.eofSent = true;
+                    armExitDeadline();
+                    break;
+                }
+            }
+            const int n = ssh_channel_write(run.channel, transfer->pending.constData(),
+                                            static_cast<uint32_t>(transfer->pending.size()));
+            if (n == SSH_ERROR) {
+                if (!ssh_is_connected(m_live->session)) {
+                    handleConnectionLost(tr("Connection to %1 lost during the upload of %2")
+                                             .arg(target(), QFileInfo(transfer->request.localPath).fileName()));
+                    return;
+                }
+                pumpExecStderr(run);
+                finishTransfer(false, tr("Upload to %1 failed: %2").arg(transfer->request.remotePath, execFailureText(run)));
+                return;
+            }
+            if (n <= 0) {
+                break;   // remote window closed for the whole session timeout: retry next tick
+            }
+            transfer->pending.remove(0, n);
+            transfer->done += n;
+            moved += n;
+        }
+        emitProgress(false);
+    } else if (!upload) {
+        while (moved < kTransferBytesPerTick && slice.elapsed() < kTransferMsPerTick) {
+            const int n = ssh_channel_read_nonblocking(run.channel, m_readBuffer.data(),
+                                                       static_cast<uint32_t>(kTransferChunk), 0);
+            if (n > 0) {
+                if (transfer->local.write(m_readBuffer.constData(), n) != n) {
+                    finishTransfer(false, tr("Cannot write %1: %2").arg(QDir::toNativeSeparators(transfer->partPath),
+                                                                        transfer->local.errorString()));
+                    return;
+                }
+                transfer->done += n;
+                moved += n;
+                continue;
+            }
+            if (n == SSH_ERROR) {
+                if (!ssh_is_connected(m_live->session)) {
+                    handleConnectionLost(tr("Connection to %1 lost during the download of %2")
+                                             .arg(target(), transfer->request.remotePath));
+                    return;
+                }
+                finishTransfer(false, tr("Read from %1 failed: %2").arg(transfer->request.remotePath, libsshError()));
+                return;
+            }
+            break;
+        }
+        emitProgress(false);
+        // Only EOF / close end the data phase: both are reported by libssh once every buffered
+        // byte was read, whereas the exit status can arrive ahead of data still queued.
+        if (ssh_channel_is_eof(run.channel) || ssh_channel_is_closed(run.channel)) {
+            armExitDeadline();
+        }
+    }
+    if (!run.exitDeadlineArmed) {
+        return;
+    }
+    // The data phase is over: wait for the exit status (the shell channel's reads keep the
+    // packets flowing), a close without one, or the deadline.
+    if (run.exit.received || ssh_channel_is_closed(run.channel) || run.exitDeadline.hasExpired()) {
+        completeShellTransfer();
+    }
+}
+
+void SshWorker::completeShellTransfer()
+{
+    Transfer* transfer = m_live->transfer.get();
+    ExecRun& run = *transfer->exec;
+    const SshConnection::TransferRequest request = transfer->request;
+    const qint64 done = transfer->done;
+    pumpExecStderr(run);
+    const bool upload = request.direction == SshConnection::TransferDirection::Upload;
+    if (!run.exit.received && !ssh_is_connected(m_live->session)) {
+        // "Closed" because the link died: never a success (the tick's shell pump normally sees
+        // this first; this is the window between the two).
+        handleConnectionLost(tr("Connection to %1 lost during the transfer of %2").arg(target(), request.remotePath));
+        return;
+    }
+    int status = -1;
+    QString unconfirmed;   // an upload without an exit status whose size did not check out
+    if (run.exit.received) {
+        status = run.exit.status;
+    } else if (!upload) {
+        if (run.stderrText.trimmed().isEmpty() && (transfer->total < 0 || done == transfer->total)) {
+            status = 0;   // closed without a status but every byte arrived (counted against wc -c)
+        }
+    } else if (run.stderrText.trimmed().isEmpty()) {
+        // No exit status (the deadline after EOF passed, or the channel closed without one):
+        // `done` only counts bytes the channel accepted, not bytes cat wrote, so the file's
+        // size decides. Asked while cat may still be running: a size already equal to the
+        // local one means every byte reached the file.
+        QByteArray output;
+        QString errorText;
+        int wcStatus = -1;
+        QString error;
+        if (!runExec(QStringLiteral("wc -c < ") + shellPath(request.remotePath), &output, &errorText, &wcStatus, &error)) {
+            if (!m_live) {   // the link dropped inside runExec: the transfer is already finished
+                return;
+            }
+            unconfirmed = error;
+        } else {
+            bool sizeOk = false;
+            const qint64 size = QString::fromUtf8(output).trimmed().toLongLong(&sizeOk);
+            if (wcStatus == 0 && sizeOk && size == transfer->total) {
+                status = 0;
+            } else if (wcStatus == 0 && sizeOk) {
+                unconfirmed = tr("%1 of %2 written").arg(sizeText(size), sizeText(transfer->total));
+            } else {
+                unconfirmed = errorText.trimmed().isEmpty() ? tr("exit status %1").arg(wcStatus) : errorText.trimmed();
+            }
+        }
+    }
+    if (status != 0) {
+        const QString reason = unconfirmed.isEmpty() ? execFailureText(run)
+                                                     : tr("the remote command did not finish (%1)").arg(unconfirmed);
+        finishTransfer(false, upload ? tr("Upload to %1 failed: %2").arg(request.remotePath, reason)
+                                     : tr("Download of %1 failed: %2").arg(request.remotePath, reason));
+        return;
+    }
+    closeExec(run);
+    transfer->exec.reset();
+    if (upload) {
+        transfer->local.close();
+        if (request.preservePermissions) {
+            const int mode = modeFromPermissions(QFile::permissions(request.localPath));
+            const QString command = QStringLiteral("chmod %1 ").arg(mode, 3, 8, QLatin1Char('0')) + shellPath(request.remotePath);
+            QByteArray output;
+            QString errorText;
+            int chmodStatus = -1;
+            QString error;
+            if (!runExec(command, &output, &errorText, &chmodStatus, &error)) {
+                if (!m_live) {   // the link dropped inside runExec: the transfer is already finished
+                    return;
+                }
+                qCWarning(lcSsh) << "chmod of" << request.remotePath << "failed:" << error;
+            } else if (chmodStatus != 0) {
+                qCWarning(lcSsh) << "chmod of" << request.remotePath << "failed:" << errorText.trimmed();
+            }
+        }
+        finishTransfer(true, tr("Uploaded %1 to %2 (%3, via shell)")
+                                 .arg(QFileInfo(request.localPath).fileName(), request.remotePath, sizeText(done)));
+        return;
+    }
+    if (transfer->total >= 0 && done != transfer->total) {
+        finishTransfer(false, tr("Download of %1 ended after %2 of %3").arg(request.remotePath, sizeText(done), sizeText(transfer->total)));
+        return;
+    }
+    if (!transfer->local.flush()) {
+        finishTransfer(false, tr("Cannot write %1: %2").arg(QDir::toNativeSeparators(transfer->partPath),
+                                                            transfer->local.errorString()));
+        return;
+    }
+    transfer->local.close();
+    if (QFileInfo::exists(request.localPath) && !QFile::remove(request.localPath)) {
+        finishTransfer(false, tr("Cannot replace %1").arg(QDir::toNativeSeparators(request.localPath)));
+        return;
+    }
+    if (!QFile::rename(transfer->partPath, request.localPath)) {
+        finishTransfer(false, tr("Cannot rename %1 to %2").arg(QDir::toNativeSeparators(transfer->partPath),
+                                                               QDir::toNativeSeparators(request.localPath)));
+        return;
+    }
+    finishTransfer(true, tr("Downloaded %1 to %2 (%3, via shell)")
+                             .arg(request.remotePath, QDir::toNativeSeparators(request.localPath), sizeText(done)));
 }
 
 void SshWorker::emitProgress(bool force)
@@ -2202,12 +2943,49 @@ QString SshWorker::sftpError() const
     return text;
 }
 
-QString SshWorker::passwordSecretKey() const
+// ---------------------------------------------------------------------------------------
+// SecretStore key scheme (see the class comment)
+// ---------------------------------------------------------------------------------------
+
+QString SshWorker::normalizedKeyPath(const QString& keyFile)
 {
-    return QStringLiteral("ssh/%1/password").arg(m_request.profile.id);
+    const QString expanded = expandHome(keyFile);
+    if (expanded.isEmpty()) {
+        return QString();
+    }
+    return QDir::cleanPath(QFileInfo(expanded).absoluteFilePath());
 }
 
-QString SshWorker::passphraseSecretKey() const
+QString SshWorker::profilePasswordKey(const SshProfile& profile)
 {
-    return QStringLiteral("ssh/%1/passphrase").arg(m_request.profile.id);
+    return profile.id.isEmpty() ? QString() : QStringLiteral("ssh/%1/password").arg(profile.id);
+}
+
+QString SshWorker::profilePassphraseKey(const SshProfile& profile)
+{
+    return profile.id.isEmpty() ? QString() : QStringLiteral("ssh/%1/passphrase").arg(profile.id);
+}
+
+QString SshWorker::targetPasswordKey(const SshProfile& profile)
+{
+    return QStringLiteral("ssh/target/%1/password").arg(profile.displayTarget());
+}
+
+QString SshWorker::keyPassphraseKey(const QString& keyFile)
+{
+    return QStringLiteral("ssh/key/%1/passphrase").arg(normalizedKeyPath(keyFile));
+}
+
+QString SshWorker::shellQuote(const QString& path)
+{
+    QString quoted = path;
+    quoted.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+    return QLatin1Char('\'') + quoted + QLatin1Char('\'');
+}
+
+QString SshWorker::shellPath(const QString& path)
+{
+    // Single quotes stop the shell, not the utilities' own option parsing: `cat '-x'` is an
+    // invalid option and `cat '-'` reads stdin. "./-x" names the same relative file.
+    return shellQuote(path.startsWith(QLatin1Char('-')) ? QStringLiteral("./") + path : path);
 }

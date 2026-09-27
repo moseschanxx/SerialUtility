@@ -7,9 +7,11 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QRegularExpression>
 #include <QSemaphore>
 #include <QTcpServer>
 #include <QThread>
@@ -40,6 +42,154 @@ constexpr long kKeyExchangeTimeoutSeconds = 15;
 constexpr int kMaxWriteChunk = 32 * 1024;     ///< one ssh_channel_write per tick and channel
 constexpr int kMaxBigLines = 1000000;
 constexpr int kForwardReadChunk = 16 * 1024;
+constexpr qsizetype kStreamChunk = 64 * 1024;          ///< `cat 'p'`: file bytes read per refill
+constexpr qsizetype kStreamHighWater = 256 * 1024;     ///< `cat 'p'`: refill the output queue below this
+
+// ---- Exec file commands: shell words and paths -------------------------------------------------
+
+/// Split a command line into commands (separated by an unquoted "&&") of shell words: single and
+/// double quotes group (the '\'' idiom works since adjacent pieces join), a backslash escapes the
+/// next character outside quotes, an unquoted ">" or "<" is a word of its own. False with *error
+/// for an unterminated quote or a lone "&".
+bool splitExecCommands(const QByteArray& line, QList<QStringList>* commands, QString* error)
+{
+    commands->clear();
+    QStringList words;
+    QString word;
+    bool inWord = false;
+    bool single = false;
+    bool dbl = false;
+    auto endWord = [&] {
+        if (inWord) {
+            words.append(word);
+            word.clear();
+            inWord = false;
+        }
+    };
+    const QString text = QString::fromUtf8(line);
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (single) {
+            if (ch == QLatin1Char('\'')) {
+                single = false;
+            } else {
+                word.append(ch);
+            }
+            continue;
+        }
+        if (dbl) {
+            if (ch == QLatin1Char('"')) {
+                dbl = false;
+            } else {
+                word.append(ch);
+            }
+            continue;
+        }
+        if (ch == QLatin1Char('\'')) {
+            single = true;
+            inWord = true;
+        } else if (ch == QLatin1Char('"')) {
+            dbl = true;
+            inWord = true;
+        } else if (ch == QLatin1Char('\\') && i + 1 < text.size()) {
+            word.append(text.at(++i));
+            inWord = true;
+        } else if (ch.isSpace()) {
+            endWord();
+        } else if (ch == QLatin1Char('&')) {
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('&')) {
+                endWord();
+                commands->append(words);
+                words.clear();
+                ++i;
+            } else {
+                *error = QStringLiteral("syntax error near unexpected token '&'");
+                return false;
+            }
+        } else if (ch == QLatin1Char('>') || ch == QLatin1Char('<')) {
+            endWord();
+            words.append(QString(ch));
+        } else {
+            word.append(ch);
+            inWord = true;
+        }
+    }
+    if (single || dbl) {
+        *error = QStringLiteral("syntax error: unterminated quoted string");
+        return false;
+    }
+    endWord();
+    commands->append(words);
+    return true;
+}
+
+/// The first word of a command line the exec file interpreter handles (everything else is the
+/// scripted shell's business).
+bool isFileCommand(const QStringList& words)
+{
+    static const QStringList kCommands = {QStringLiteral("cat"),   QStringLiteral("wc"),    QStringLiteral("test"),
+                                          QStringLiteral("chmod"), QStringLiteral("rm"),    QStringLiteral("mkdir"),
+                                          QStringLiteral("mv"),    QStringLiteral("pwd"),   QStringLiteral(":")};
+    return !words.isEmpty() && kCommands.contains(words.first());
+}
+
+/// Resolve a path word of an exec file command: relative names land under `root` (a POSIX-style
+/// "/name" too on Windows, like the SFTP handler), absolute ones are used as given, ".." is refused.
+bool resolveExecPath(const QString& root, const QString& word, QString* resolved, QString* error)
+{
+    if (word.isEmpty()) {
+        *error = QStringLiteral("empty path");
+        return false;
+    }
+    const QStringList parts = word.split(QRegularExpression(QStringLiteral("[/\\\\]")), Qt::SkipEmptyParts);
+    if (parts.contains(QLatin1String(".."))) {
+        *error = QStringLiteral("%1: Permission denied").arg(word);
+        return false;
+    }
+    QString path = word;
+    if (path == QLatin1String(".") || path == QLatin1String("~")) {
+        path = root;
+    } else if (path.startsWith(QLatin1String("~/"))) {
+        path = root + path.mid(1);
+    } else if (!QDir::isAbsolutePath(path)) {
+        path = QDir(root).filePath(path);
+    }
+    *resolved = QDir::cleanPath(path);
+    return true;
+}
+
+QFileDevice::Permissions permissionsFromOctal(unsigned mode)
+{
+    QFileDevice::Permissions permissions;
+    if (mode & 0400) {
+        permissions |= QFileDevice::ReadOwner | QFileDevice::ReadUser;
+    }
+    if (mode & 0200) {
+        permissions |= QFileDevice::WriteOwner | QFileDevice::WriteUser;
+    }
+    if (mode & 0100) {
+        permissions |= QFileDevice::ExeOwner | QFileDevice::ExeUser;
+    }
+    if (mode & 0040) {
+        permissions |= QFileDevice::ReadGroup;
+    }
+    if (mode & 0020) {
+        permissions |= QFileDevice::WriteGroup;
+    }
+    if (mode & 0010) {
+        permissions |= QFileDevice::ExeGroup;
+    }
+    if (mode & 0004) {
+        permissions |= QFileDevice::ReadOther;
+    }
+    if (mode & 0002) {
+        permissions |= QFileDevice::WriteOther;
+    }
+    if (mode & 0001) {
+        permissions |= QFileDevice::ExeOther;
+    }
+    return permissions;
+}
 
 // ---- Socket helpers (SOCKET on Windows, int elsewhere; winsock is initialised by libssh) ---
 
@@ -288,10 +438,19 @@ struct ChannelContext
     bool exitRequested = false;
     int exitStatus = 0;
     QByteArray output;          ///< bytes queued for ssh_channel_write
+    QByteArray errorOutput;     ///< bytes queued for ssh_channel_write_stderr
     bool localClosed = false;
     bool remoteClosed = false;
     bool finished = false;
     std::unique_ptr<TestSftpHandler> sftp;
+    // exec file commands (see the class comment of TestSshServer)
+    QList<QStringList> chain;             ///< commands still to run (" && " chain)
+    std::unique_ptr<QFile> stdinFile;     ///< `cat > 'p'`: where stdin goes until EOF
+    std::unique_ptr<QFile> stdoutFile;    ///< `cat 'p'`: the file the tick streams to stdout
+    bool stdinEof = false;
+    qint64 stdinWritten = 0;              ///< `cat > 'p'`: bytes stored so far (Options::execUploadLimit)
+    bool stdinFailed = false;             ///< `cat > 'p'`: the limit was hit, the command fails at EOF
+    bool dataCommand = false;             ///< `cat > 'p'` / `cat 'p'` ran here (Options::sendExecExitStatus)
 };
 
 struct ForwardContext
@@ -360,6 +519,8 @@ private:
     void flushChannelOutput(ChannelContext& c);
     void feedShell(ChannelContext& c, const char* data, uint32_t len);
     void runLine(ChannelContext& c, const QByteArray& line, bool exec);
+    void runExecChain(ChannelContext& c);                       ///< run c.chain until it waits or ends
+    int runFileCommand(ChannelContext& c, const QStringList& words);   ///< exit status, -1 = waiting (stdin / stream)
     void requestExit(ChannelContext& c, int status);
     void noteActivity();
     void noteAuthenticated(const QString& method);
@@ -564,8 +725,23 @@ int ClientSession::cbData(ssh_session, ssh_channel, void* data, uint32_t len, in
         }
         break;
     case ChannelMode::Exec:
+        if (c->stdinFile) {
+            // `cat > 'p'`; with a limit the file stops growing (a full flash) and the rest is
+            // dropped: the failure is reported when the client's EOF ends the command.
+            const qint64 limit = c->client->m_opts.execUploadLimit;
+            qint64 store = static_cast<qint64>(len);
+            if (limit >= 0 && c->stdinWritten + store > limit) {
+                store = qMax<qint64>(0, limit - c->stdinWritten);
+                c->stdinFailed = true;
+            }
+            if (store > 0) {
+                c->stdinFile->write(bytes, store);
+                c->stdinWritten += store;
+            }
+        }
+        break;   // otherwise nothing reads it; consumed
     case ChannelMode::None:
-        break;   // nothing reads it; consumed
+        break;
     }
     return static_cast<int>(len);
 }
@@ -574,6 +750,20 @@ void ClientSession::cbEof(ssh_session, ssh_channel, void* userdata)
 {
     auto* c = static_cast<ChannelContext*>(userdata);
     c->client->noteActivity();
+    c->stdinEof = true;
+    if (c->stdinFile) {
+        // `cat > 'p'` is complete; the rest of the chain runs now - unless the upload limit was
+        // hit, in which case cat reports the write error and the chain stops there.
+        c->stdinFile->close();
+        c->stdinFile.reset();
+        if (c->stdinFailed) {
+            c->errorOutput.append("cat: write error: No space left on device\n");
+            c->chain.clear();
+            c->client->requestExit(*c, 1);
+            return;
+        }
+        c->client->runExecChain(*c);
+    }
 }
 
 void ClientSession::cbClose(ssh_session, ssh_channel, void* userdata)
@@ -581,6 +771,11 @@ void ClientSession::cbClose(ssh_session, ssh_channel, void* userdata)
     auto* c = static_cast<ChannelContext*>(userdata);
     c->client->noteActivity();
     c->remoteClosed = true;
+    // Release the files right here: a client that cancelled an upload sends `rm -f 'p'` on the
+    // next channel, which the same poll may deliver before the tick finishes this one.
+    c->stdinFile.reset();
+    c->stdoutFile.reset();
+    c->chain.clear();
 }
 
 int ClientSession::cbPty(ssh_session, ssh_channel, const char* term, int width, int height, int, int, void* userdata)
@@ -637,7 +832,17 @@ int ClientSession::cbExec(ssh_session, ssh_channel, const char* command, void* u
         QMutexLocker lock(&c->client->m_core->mutex);
         c->client->m_core->lastExecCommand = QString::fromUtf8(line);
     }
-    c->client->runLine(*c, line, true);
+    QList<QStringList> commands;
+    QString error;
+    if (!splitExecCommands(line, &commands, &error)) {
+        c->errorOutput.append(QStringLiteral("sh: %1\n").arg(error).toUtf8());
+        c->client->requestExit(*c, 2);
+    } else if (commands.size() > 1 || isFileCommand(commands.first())) {
+        c->chain = commands;
+        c->client->runExecChain(*c);
+    } else {
+        c->client->runLine(*c, line, true);
+    }
     emit c->client->m_q->execRequested(QString::fromUtf8(line));
     return 0;
 }
@@ -654,6 +859,12 @@ int ClientSession::cbSubsystem(ssh_session, ssh_channel, const char* subsystem, 
     auto* c = static_cast<ChannelContext*>(userdata);
     c->client->noteActivity();
     if (!subsystem || std::strcmp(subsystem, "sftp") != 0 || c->mode != ChannelMode::None) {
+        return 1;
+    }
+    if (!c->client->m_opts.allowSftp) {
+        // A dropbear-like server: the request is refused, the client has to use exec commands.
+        qCInfo(lcSsh) << "TestSshServer: sftp subsystem refused (allowSftp = false)";
+        emit c->client->m_q->sftpRequested();
         return 1;
     }
     QString root = c->client->m_opts.rootDir;
@@ -762,6 +973,193 @@ void ClientSession::runLine(ChannelContext& c, const QByteArray& rawLine, bool e
     } else if (prompt) {
         c.output.append("$ ");
     }
+}
+
+// ---- The exec file commands ------------------------------------------------------------------
+
+void ClientSession::runExecChain(ChannelContext& c)
+{
+    while (!c.chain.isEmpty()) {
+        const QStringList words = c.chain.takeFirst();
+        const int status = runFileCommand(c, words);
+        if (status < 0) {
+            return;   // waiting for stdin EOF (`cat >`) or streaming a file (`cat`); resumed later
+        }
+        if (status != 0) {
+            c.chain.clear();
+            requestExit(c, status);
+            return;
+        }
+    }
+    requestExit(c, 0);
+}
+
+int ClientSession::runFileCommand(ChannelContext& c, const QStringList& words)
+{
+    auto fail = [&c](const QString& message) {
+        c.errorOutput.append((message + QLatin1Char('\n')).toUtf8());
+        return 1;
+    };
+    const QString root = m_opts.rootDir;
+    auto resolve = [&](const QString& word, QString* path) {
+        QString error;
+        if (!resolveExecPath(root, word, path, &error)) {
+            fail(error);
+            return false;
+        }
+        return true;
+    };
+    const QString command = words.value(0);
+    if (command == QLatin1String("pwd")) {
+        c.output.append((QFileInfo(root).canonicalFilePath() + QLatin1Char('\n')).toUtf8());
+        return 0;
+    }
+    if (command == QLatin1String(":")) {
+        // `: > 'p'`: the shell opens the file for writing (create / truncate) and runs nothing.
+        if (words.size() != 3 || words.at(1) != QLatin1String(">")) {
+            return words.size() == 1 ? 0 : fail(QStringLiteral("sh: unsupported redirection"));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            return 1;
+        }
+        QFile file(path);
+        if (QFileInfo(path).isDir() || !file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return fail(QStringLiteral("sh: can't create '%1': %2")
+                            .arg(words.at(2), QFileInfo(path).isDir() ? QStringLiteral("Is a directory") : file.errorString()));
+        }
+        return 0;
+    }
+    if (command == QLatin1String("cat")) {
+        if (words.size() == 3 && words.at(1) == QLatin1String(">")) {
+            QString path;
+            if (!resolve(words.at(2), &path)) {
+                return 1;
+            }
+            auto file = std::make_unique<QFile>(path);
+            if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                return fail(QStringLiteral("cat: can't create '%1': %2").arg(words.at(2), file->errorString()));
+            }
+            c.dataCommand = true;
+            if (c.stdinEof) {
+                return 0;   // EOF already arrived: an empty file
+            }
+            c.stdinFile = std::move(file);
+            return -1;
+        }
+        if (words.size() == 2) {
+            QString path;
+            if (!resolve(words.at(1), &path)) {
+                return 1;
+            }
+            auto file = std::make_unique<QFile>(path);
+            if (!QFileInfo(path).isFile() || !file->open(QIODevice::ReadOnly)) {
+                return fail(QStringLiteral("cat: can't open '%1': No such file or directory").arg(words.at(1)));
+            }
+            c.dataCommand = true;
+            c.stdoutFile = std::move(file);   // streamed by the tick
+            return -1;
+        }
+        return fail(QStringLiteral("cat: unsupported arguments"));
+    }
+    if (command == QLatin1String("wc")) {
+        if (words.size() != 4 || words.at(1) != QLatin1String("-c") || words.at(2) != QLatin1String("<")) {
+            return fail(QStringLiteral("wc: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(3), &path)) {
+            return 1;
+        }
+        const QFileInfo info(path);
+        if (!info.isFile()) {
+            return fail(QStringLiteral("sh: can't open '%1': No such file or directory").arg(words.at(3)));
+        }
+        c.output.append((QString::number(info.size()) + QLatin1Char('\n')).toUtf8());
+        return 0;
+    }
+    if (command == QLatin1String("test")) {
+        if (words.size() != 3 || words.at(1) != QLatin1String("-e")) {
+            return fail(QStringLiteral("test: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            return 1;
+        }
+        return QFileInfo::exists(path) ? 0 : 1;
+    }
+    if (command == QLatin1String("chmod")) {
+        if (words.size() != 3) {
+            return fail(QStringLiteral("chmod: unsupported arguments"));
+        }
+        bool ok = false;
+        const unsigned mode = words.at(1).toUInt(&ok, 8);
+        if (!ok || mode > 07777u) {
+            return fail(QStringLiteral("chmod: invalid mode '%1'").arg(words.at(1)));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            return 1;
+        }
+        if (!QFileInfo::exists(path)) {
+            return fail(QStringLiteral("chmod: %1: No such file or directory").arg(words.at(2)));
+        }
+        QFile::setPermissions(path, permissionsFromOctal(mode & 0777u));   // best effort (Windows keeps the write bit only)
+        return 0;
+    }
+    if (command == QLatin1String("rm")) {
+        if (words.size() != 3 || words.at(1) != QLatin1String("-f")) {
+            return fail(QStringLiteral("rm: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            return 1;
+        }
+        const QFileInfo info(path);
+        if (!info.exists()) {
+            return 0;   // -f: a missing file is fine
+        }
+        if (info.isDir()) {
+            return fail(QStringLiteral("rm: can't remove '%1': Is a directory").arg(words.at(2)));
+        }
+        if (!QFile::remove(path)) {
+            return fail(QStringLiteral("rm: can't remove '%1': Permission denied").arg(words.at(2)));
+        }
+        return 0;
+    }
+    if (command == QLatin1String("mkdir")) {
+        if (words.size() != 3 || words.at(1) != QLatin1String("-p")) {
+            return fail(QStringLiteral("mkdir: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            return 1;
+        }
+        if (!QDir().mkpath(path)) {
+            return fail(QStringLiteral("mkdir: can't create directory '%1': Permission denied").arg(words.at(2)));
+        }
+        return 0;
+    }
+    if (command == QLatin1String("mv")) {
+        if (words.size() != 3) {
+            return fail(QStringLiteral("mv: unsupported arguments"));
+        }
+        QString from;
+        QString to;
+        if (!resolve(words.at(1), &from) || !resolve(words.at(2), &to)) {
+            return 1;
+        }
+        if (!QFileInfo::exists(from)) {
+            return fail(QStringLiteral("mv: can't rename '%1': No such file or directory").arg(words.at(1)));
+        }
+        if (QFileInfo(to).isFile() && !QFile::remove(to)) {
+            return fail(QStringLiteral("mv: can't overwrite '%1': Permission denied").arg(words.at(2)));
+        }
+        if (!QFile::rename(from, to)) {
+            return fail(QStringLiteral("mv: can't rename '%1' to '%2': Permission denied").arg(words.at(1), words.at(2)));
+        }
+        return 0;
+    }
+    return fail(QStringLiteral("sh: %1: not found").arg(command));
 }
 
 // ---- direct-tcpip ----------------------------------------------------------------------------
@@ -962,6 +1360,26 @@ void ClientSession::tick()
 
 void ClientSession::flushChannelOutput(ChannelContext& c)
 {
+    // stderr first (short messages), then stdout; both stop at an exhausted remote window and
+    // continue next tick (the session is non-blocking, so ssh_channel_write returns 0 then).
+    while (!c.errorOutput.isEmpty()) {
+        if (c.localClosed || !ssh_channel_is_open(c.channel)) {
+            c.errorOutput.clear();
+            c.output.clear();
+            return;
+        }
+        const int chunk = static_cast<int>(qMin<qsizetype>(c.errorOutput.size(), kMaxWriteChunk));
+        const int n = ssh_channel_write_stderr(c.channel, c.errorOutput.constData(), static_cast<uint32_t>(chunk));
+        if (n < 0) {
+            c.errorOutput.clear();
+            c.output.clear();
+            return;
+        }
+        if (n == 0) {
+            return;
+        }
+        c.errorOutput.remove(0, n);
+    }
     while (!c.output.isEmpty()) {
         if (c.localClosed || !ssh_channel_is_open(c.channel)) {
             c.output.clear();
@@ -993,9 +1411,23 @@ void ClientSession::serviceChannel(ChannelContext& c)
             c.output.append("$ ");
         }
     }
+    // `cat 'p'`: refill the output queue from the file while the window drains it, so a big file
+    // never sits in memory at once; at its end the chain continues.
+    while (c.stdoutFile && c.output.size() < kStreamHighWater) {
+        const QByteArray chunk = c.stdoutFile->read(kStreamChunk);
+        if (chunk.isEmpty()) {
+            c.stdoutFile.reset();
+            runExecChain(c);
+            break;
+        }
+        c.output.append(chunk);
+    }
     flushChannelOutput(c);
-    if (c.exitRequested && c.output.isEmpty() && !c.localClosed && ssh_channel_is_open(c.channel)) {
-        ssh_channel_request_send_exit_status(c.channel, c.exitStatus);
+    if (c.exitRequested && c.output.isEmpty() && c.errorOutput.isEmpty() && !c.localClosed
+        && ssh_channel_is_open(c.channel)) {
+        if (c.mode != ChannelMode::Exec || !c.dataCommand || m_opts.sendExecExitStatus) {
+            ssh_channel_request_send_exit_status(c.channel, c.exitStatus);
+        }
         ssh_channel_send_eof(c.channel);
         ssh_channel_close(c.channel);
         c.localClosed = true;
@@ -1010,6 +1442,9 @@ void ClientSession::finishChannel(ChannelContext& c)
     if (c.finished) {
         return;
     }
+    c.stdinFile.reset();
+    c.stdoutFile.reset();
+    c.chain.clear();
     ssh_remove_channel_callbacks(c.channel, &c.callbacks);
     ssh_channel_free(c.channel);   // answers the peer's close when we have not closed yet
     c.channel = nullptr;

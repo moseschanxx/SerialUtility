@@ -3,6 +3,7 @@
 #include <QSettings>
 
 #include "app/AppSettings.h"
+#include "core/BaudRateDetector.h"
 #include "core/DeviceSimulator.h"
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
@@ -48,6 +49,11 @@ QByteArray exchange(DeviceSimulator& sim, const QByteArray& bytes)
 }
 
 const QByteArray kLinuxPrompt = QByteArrayLiteral("[root@rv1106:~]# ");
+
+// The rates the simulated boards talk at (v0.4): a session at any other rate hears garbage.
+const qint32 kLinuxBaud = DeviceSimulator::nativeBaudRate(DeviceSimulator::Kind::Linux);   // 1500000
+const qint32 kUBootBaud = DeviceSimulator::nativeBaudRate(DeviceSimulator::Kind::UBoot);   // 1500000
+const qint32 kMcuBaud = DeviceSimulator::nativeBaudRate(DeviceSimulator::Kind::Mcu);       // 115200
 
 } // namespace
 
@@ -96,7 +102,18 @@ private slots:
     void mcuShell();
     void mcuAtCommands();
     void mcuTelemetry();
+    void mcuTelemetryInterval();
     void mcuResetAndVanish();
+
+    // native baud rate / wrong-rate garbage (v0.4)
+    void nativeRates();
+    void garbageWhenMismatched();
+    void textAgainWhenMatched();
+    void nativeRateSwitchMidSession();
+    void loopbackUnaffectedByRate();
+    void typedInputIgnoredWhileMismatched();
+    void wrongRateNoise();
+    void connectionHearsGarbageAtWrongRate();
 
     // integration with SerialConnection / SerialPortEnumerator / AppSettings
     void connectionOpensLoopback();
@@ -131,7 +148,7 @@ void Tst_devicesimulator::cleanupTestCase()
 
 DeviceSimulator* Tst_devicesimulator::loggedInLinux(QObject* parent)
 {
-    auto* sim = new DeviceSimulator(DeviceSimulator::Kind::Linux, 4000000, parent);
+    auto* sim = new DeviceSimulator(DeviceSimulator::Kind::Linux, kLinuxBaud, parent);
     sim->start();
     flush(*sim);
     exchange(*sim, "root\r");
@@ -312,7 +329,9 @@ void Tst_devicesimulator::pacingFollowsBaudRate()
 
 void Tst_devicesimulator::linuxBootAndLogin()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::Linux, 115200);
+    DeviceSimulator sim(DeviceSimulator::Kind::Linux, kLinuxBaud);
+    QCOMPARE(sim.nativeBaudRate(), kLinuxBaud);
+    QVERIFY(sim.baudRateMatches());
     sim.start();
     const QByteArray boot = flush(sim);
     QVERIFY(boot.contains("Booting Linux on physical CPU 0x0"));
@@ -648,10 +667,14 @@ void Tst_devicesimulator::linuxRebootVanishes()
 void Tst_devicesimulator::linuxRebootDrainsOutputAtLowBaud()
 {
     QObject parent;
-    DeviceSimulator* sim = loggedInLinux(&parent);   // logs in at 4 Mbaud (fast)
+    DeviceSimulator* sim = loggedInLinux(&parent);   // logs in at 1.5 Mbaud (fast)
     QVERIFY(sim);
     DeviceSimulator::markPresent(QStringLiteral("SIM:linux"));
-    sim->setBaudRate(2400);   // ~190 B of shutdown text at 4 B/tick: ~1 s, longer than the 400 ms grace
+    // The board and the host both move to 2400 (a mismatch would garble the text and drop the
+    // typed command): ~190 B of shutdown text at 4 B/tick is ~1 s, longer than the 400 ms grace.
+    sim->setNativeBaudRate(2400);
+    sim->setBaudRate(2400);
+    QVERIFY(sim->baudRateMatches());
     Collector out(*sim);
     QSignalSpy vanished(sim, &DeviceSimulator::vanished);
     sim->receive("reboot\r");   // paced path, no flush()
@@ -668,6 +691,7 @@ void Tst_devicesimulator::linuxCtrlCDiscardsPendingOutput()
     DeviceSimulator* sim = loggedInLinux(&parent);
     QVERIFY(sim);
 
+    sim->setNativeBaudRate(9600);   // board and host at 9600: readable, just slow
     sim->setBaudRate(9600);
     sim->receive("dmesg\r");
     QVERIFY(sim->pendingOutput().size() > 2000);   // a lot still queued at 9600 baud
@@ -699,7 +723,7 @@ void Tst_devicesimulator::linuxPoweroffStaysDown()
 
 void Tst_devicesimulator::ubootCountdownAndPrompt()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 115200);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     sim.start();
     const QByteArray banner = flush(sim);
     QVERIFY(banner.contains("U-Boot 2017.09"));
@@ -716,7 +740,7 @@ void Tst_devicesimulator::ubootCountdownAndPrompt()
 
 void Tst_devicesimulator::ubootCountdownTicks()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 115200);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     Collector out(sim);
     sim.start();
     QTRY_VERIFY_WITH_TIMEOUT(out.data.contains("autoboot:  3"), 2000);
@@ -732,6 +756,7 @@ void Tst_devicesimulator::ubootCountdownWaitsForBanner()
     // At 2400 baud the banner streams for ~3 s: the seconds must not start counting before
     // the "3" has actually been delivered.
     DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 2400);
+    sim.setNativeBaudRate(2400);   // a board configured for 2400: readable at 2400
     Collector out(sim);
     sim.start();
     QTRY_VERIFY_WITH_TIMEOUT(out.data.contains("autoboot:  3"), 8000);
@@ -743,7 +768,7 @@ void Tst_devicesimulator::ubootCountdownWaitsForBanner()
 
 void Tst_devicesimulator::ubootResetCrlfKeepsCountdown()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 4000000);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     sim.start();
     flush(sim);
     exchange(sim, " ");   // stop the initial autoboot -> "=> "
@@ -762,7 +787,7 @@ void Tst_devicesimulator::ubootResetCrlfKeepsCountdown()
 
 void Tst_devicesimulator::ubootCommands()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 4000000);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     sim.start();
     flush(sim);
     exchange(sim, " ");
@@ -810,7 +835,7 @@ void Tst_devicesimulator::ubootCommands()
 
 void Tst_devicesimulator::ubootBootsToLinux()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 4000000);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     sim.start();
     flush(sim);
     exchange(sim, " ");
@@ -835,7 +860,7 @@ void Tst_devicesimulator::ubootBootsToLinux()
 
 void Tst_devicesimulator::ubootAutoboot()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 4000000);
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, kUBootBaud);
     Collector out(sim);
     sim.start();
     // Not interrupted: 3, 2, 1, 0 then the kernel boots and the login prompt appears.
@@ -850,7 +875,8 @@ void Tst_devicesimulator::ubootAutoboot()
 
 void Tst_devicesimulator::mcuShell()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, 115200);
+    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, kMcuBaud);
+    QCOMPARE(kMcuBaud, 115200);
     sim.start();
     const QByteArray banner = flush(sim);
     QVERIFY(banner.contains("BuildAI MCU shell v1.0 (STM32F4 @168MHz)"));
@@ -921,9 +947,28 @@ void Tst_devicesimulator::mcuTelemetry()
     QVERIFY(!out.data.contains("temp="));
 }
 
+void Tst_devicesimulator::mcuTelemetryInterval()
+{
+    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, kMcuBaud);
+    sim.start();
+    flush(sim);
+    Collector out(sim);
+    // An optional interval in milliseconds (clamped to 100..60000).
+    QByteArray reply = exchange(sim, "telemetry on 100\r");
+    QVERIFY2(reply.contains("Telemetry enabled (every 100 ms)"), reply.constData());
+    out.clear();
+    QTRY_VERIFY_WITH_TIMEOUT(out.data.count("temp=") >= 5, 3000);
+    QVERIFY(exchange(sim, "telemetry\r").contains("Telemetry is on"));
+    QVERIFY(exchange(sim, "telemetry on 10\r").contains("(every 100 ms)"));   // clamped
+    QVERIFY(exchange(sim, "telemetry on 2000\r").contains("(every 2 s)"));
+    QVERIFY(exchange(sim, "telemetry on abc\r").contains("usage: telemetry on|off [ms]"));
+    QVERIFY(exchange(sim, "telemetry off\r").contains("Telemetry disabled"));
+    QVERIFY(exchange(sim, "help\r").contains("telemetry on|off [ms]"));
+}
+
 void Tst_devicesimulator::mcuResetAndVanish()
 {
-    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, 4000000);
+    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, kMcuBaud);
     sim.start();
     flush(sim);
     QByteArray out = exchange(sim, "reset\r");
@@ -1016,7 +1061,7 @@ void Tst_devicesimulator::connectionReconnectsAfterSimulatedReset()
     SerialConnection c;
     SerialSettings s;
     s.portName = QStringLiteral("SIM:mcu");
-    s.baudRate = 4000000;
+    s.baudRate = kMcuBaud;
     c.setSettings(s);
     c.setReconnectIntervalMs(200);
 
@@ -1137,6 +1182,234 @@ void Tst_devicesimulator::enumeratorListsSimulatedPorts()
     settings.setShowSimulatedPorts(true);
     e.refresh();
     QVERIFY(e.contains(QStringLiteral("SIM:mcu")));
+}
+
+// ---------------------------------------------------------------------------------------
+// Native baud rate / wrong-rate garbage (v0.4)
+// ---------------------------------------------------------------------------------------
+
+void Tst_devicesimulator::nativeRates()
+{
+    using Kind = DeviceSimulator::Kind;
+    QCOMPARE(DeviceSimulator::nativeBaudRate(Kind::Linux), 1500000);
+    QCOMPARE(DeviceSimulator::nativeBaudRate(Kind::UBoot), 1500000);
+    QCOMPARE(DeviceSimulator::nativeBaudRate(Kind::Mcu), 115200);
+    QCOMPARE(DeviceSimulator::nativeBaudRate(Kind::Loopback), 0);
+
+    for (Kind kind : {Kind::Loopback, Kind::Linux, Kind::UBoot, Kind::Mcu}) {
+        DeviceSimulator sim(kind, 9600);
+        QCOMPARE(sim.nativeBaudRate(), DeviceSimulator::nativeBaudRate(kind));
+        QCOMPARE(sim.baudRateMatches(), kind == Kind::Loopback);
+        sim.setBaudRate(DeviceSimulator::nativeBaudRate(kind) > 0 ? DeviceSimulator::nativeBaudRate(kind) : 9600);
+        QVERIFY(sim.baudRateMatches());
+        sim.setNativeBaudRate(0);   // "any rate"
+        QCOMPARE(sim.nativeBaudRate(), 0);
+        sim.setBaudRate(300);
+        QVERIFY(sim.baudRateMatches());
+        sim.setNativeBaudRate(-7);   // clamped to 0
+        QCOMPARE(sim.nativeBaudRate(), 0);
+        sim.setNativeBaudRate(300);
+        QVERIFY(sim.baudRateMatches());
+        sim.setNativeBaudRate(9600);
+        QVERIFY(!sim.baudRateMatches());
+    }
+    // The port list tells the user what each board talks at.
+    QVERIFY(DeviceSimulator::description(Kind::Linux).contains(QStringLiteral("1500000")));
+    QVERIFY(DeviceSimulator::description(Kind::UBoot).contains(QStringLiteral("1500000")));
+    QVERIFY(DeviceSimulator::description(Kind::Mcu).contains(QStringLiteral("115200")));
+}
+
+void Tst_devicesimulator::garbageWhenMismatched()
+{
+    // A Linux board heard at 115200: the whole boot log arrives as garbage of the same size.
+    DeviceSimulator sim(DeviceSimulator::Kind::Linux, 115200);
+    QVERIFY(!sim.baudRateMatches());
+    sim.start();
+    const QByteArray expected = sim.pendingOutput();   // the real text, still queued
+    QVERIFY(expected.contains("Booting Linux on physical CPU 0x0"));
+    const QByteArray heard = flush(sim);
+    QCOMPARE(heard.size(), expected.size());
+    QVERIFY(!heard.contains("Booting Linux"));
+    QVERIFY(!heard.contains("login:"));
+    const double score = BaudRateDetector::textScore(heard.left(512));
+    QVERIFY2(score < 0.4, qPrintable(QString::number(score)));
+    QVERIFY2(BaudRateDetector::textScore(heard) < 0.4, qPrintable(QString::number(BaudRateDetector::textScore(heard))));
+    QVERIFY(heard.count('\0') + heard.count('\xFF') > heard.size() / 4);
+    QVERIFY(sim.pendingOutput().isEmpty());
+
+    // The state machine advanced underneath: the device is at its login prompt. Matching the
+    // rate makes it readable, and the login works.
+    sim.setBaudRate(1500000);
+    QVERIFY(sim.baudRateMatches());
+    QCOMPARE(exchange(sim, "root\r"), QByteArrayLiteral("root\r\nPassword: "));
+    QVERIFY(exchange(sim, "x\r").endsWith(kLinuxPrompt));
+
+    // The paced path garbles too (same chunk sizes, same pacing).
+    sim.setBaudRate(9600);
+    Collector out(sim);
+    sim.receive("pwd\r");   // dropped: the device hears noise
+    QTest::qWait(100);
+    QVERIFY(out.data.isEmpty());
+    sim.setBaudRate(1500000);
+    sim.receive("dmesg\r");
+    sim.setBaudRate(115200);   // the host switches away while the output streams
+    QTRY_VERIFY_WITH_TIMEOUT(out.data.size() > 600, 3000);
+    QVERIFY(!out.data.contains("Booting Linux"));
+    QVERIFY(BaudRateDetector::textScore(out.data) < 0.4);
+}
+
+void Tst_devicesimulator::textAgainWhenMatched()
+{
+    DeviceSimulator sim(DeviceSimulator::Kind::Mcu, 9600);
+    QVERIFY(!sim.baudRateMatches());
+    sim.start();
+    const QByteArray banner = flush(sim);
+    QVERIFY(!banner.contains("BuildAI MCU shell"));
+    QVERIFY(!banner.isEmpty());
+    // Still at the prompt underneath; readable as soon as the rates match.
+    sim.setBaudRate(115200);
+    QVERIFY(sim.baudRateMatches());
+    QByteArray out = exchange(sim, "version\r");
+    QVERIFY2(out.contains("BuildAI MCU shell v1.0"), out.constData());
+    QVERIFY(out.endsWith("> "));
+    // Mismatch again: the reply to a *matched* command that is still queued is garbled as it
+    // leaves the device (what a real UART does when the host changes rate mid-line).
+    sim.receive("help\r");
+    sim.setBaudRate(9600);
+    out = flush(sim);
+    QVERIFY(!out.isEmpty());
+    QVERIFY(!out.contains("telemetry"));
+    sim.setBaudRate(115200);
+    QVERIFY(exchange(sim, "version\r").contains("BuildAI MCU shell v1.0"));
+}
+
+void Tst_devicesimulator::nativeRateSwitchMidSession()
+{
+    QObject parent;
+    DeviceSimulator* sim = loggedInLinux(&parent);   // matched at 1500000
+    QVERIFY(sim);
+    Collector out(*sim);
+
+    // "The board changed its rate": from now on the host (still at 1500000) hears garbage ...
+    sim->setNativeBaudRate(115200);
+    QVERIFY(!sim->baudRateMatches());
+    QCOMPARE(sim->baudRate(), 1500000);
+    sim->receive("uname -a\r");   // ... and its keystrokes are noise to the board
+    QTest::qWait(100);
+    QVERIFY(out.data.isEmpty());
+    // ... until it follows the board.
+    sim->setBaudRate(115200);
+    QVERIFY(sim->baudRateMatches());
+    QByteArray reply = exchange(*sim, "uname -a\r");
+    QVERIFY2(reply.contains("Linux rv1106 5.10.160"), reply.constData());
+
+    // Output queued while matched is garbled once the board's rate changes underneath it.
+    sim->receive("dmesg\r");
+    QVERIFY(sim->pendingOutput().contains("Booting Linux"));
+    const qsizetype queued = sim->pendingOutput().size();
+    sim->setNativeBaudRate(1500000);
+    reply = flush(*sim);
+    QCOMPARE(reply.size(), queued);   // same amount of bytes, none of them readable
+    QVERIFY(!reply.contains("Booting Linux"));
+    QVERIFY(BaudRateDetector::textScore(reply) < 0.4);
+    sim->setBaudRate(1500000);
+    QVERIFY(exchange(*sim, "pwd\r").contains("/root"));
+}
+
+void Tst_devicesimulator::loopbackUnaffectedByRate()
+{
+    for (const qint32 baud : {300, 9600, 115200, 1500000, 4000000}) {
+        DeviceSimulator sim(DeviceSimulator::Kind::Loopback, baud);
+        QCOMPARE(sim.nativeBaudRate(), 0);
+        QVERIFY(sim.baudRateMatches());
+        sim.start();
+        QCOMPARE(exchange(sim, "echo \xE4\xB8\xAD\r"), QByteArrayLiteral("echo \xE4\xB8\xAD\r"));
+    }
+    // Only a non-zero native rate can mismatch, even on the loopback.
+    DeviceSimulator sim(DeviceSimulator::Kind::Loopback, 9600);
+    sim.start();
+    sim.setNativeBaudRate(115200);
+    QVERIFY(!sim.baudRateMatches());
+    QVERIFY(exchange(sim, "abc").isEmpty());   // dropped
+    sim.setNativeBaudRate(0);
+    QCOMPARE(exchange(sim, "abc"), QByteArrayLiteral("abc"));
+}
+
+void Tst_devicesimulator::typedInputIgnoredWhileMismatched()
+{
+    // U-Boot heard at 115200: the banner is garbage and a key press does NOT stop the autoboot.
+    DeviceSimulator sim(DeviceSimulator::Kind::UBoot, 115200);
+    Collector out(sim);
+    sim.start();
+    QTRY_VERIFY_WITH_TIMEOUT(sim.pendingOutput().isEmpty(), 5000);   // banner + "3" delivered (as noise)
+    QVERIFY(!out.data.contains("U-Boot"));
+    QVERIFY(!out.data.contains("autoboot"));
+    sim.receive(" ");   // dropped
+    QVERIFY(flush(sim).isEmpty());
+    sim.receive("help\r");
+    QVERIFY(flush(sim).isEmpty());
+    // The countdown keeps running underneath and boots Linux; matching the rate late shows the
+    // tail of the boot log and the login prompt as text.
+    sim.setBaudRate(1500000);
+    QTRY_VERIFY_WITH_TIMEOUT(out.data.contains("rv1106 login: "), 12000);
+    QVERIFY(out.data.contains("Freeing unused kernel memory") || out.data.contains("Starting kernel"));
+    QCOMPARE(exchange(sim, "root\r"), QByteArrayLiteral("root\r\nPassword: "));
+}
+
+void Tst_devicesimulator::wrongRateNoise()
+{
+    const QByteArray a = DeviceSimulator::wrongRateNoise(1024);
+    QCOMPARE(a.size(), 1024);
+    QCOMPARE(a, DeviceSimulator::wrongRateNoise(1024));           // fixed sequence
+    QCOMPARE(a.left(100), DeviceSimulator::wrongRateNoise(100));   // a prefix of the same sequence
+    QVERIFY(a != DeviceSimulator::wrongRateNoise(1024, 12345));   // another seed, another sequence
+    QVERIFY(DeviceSimulator::wrongRateNoise(0).isEmpty());
+    QVERIFY(DeviceSimulator::wrongRateNoise(-3).isEmpty());
+    // Dominated by 0x00 / 0xFF and high bytes, a few printable ones slip through.
+    int nullOrFf = 0;
+    int high = 0;
+    int printable = 0;
+    for (const char c : a) {
+        const auto b = static_cast<unsigned char>(c);
+        nullOrFf += (b == 0x00 || b == 0xFF) ? 1 : 0;
+        high += (b >= 0x80 && b != 0xFF) ? 1 : 0;
+        printable += (b >= 0x20 && b <= 0x7E) ? 1 : 0;
+    }
+    QVERIFY2(nullOrFf > 300, qPrintable(QString::number(nullOrFf)));
+    QVERIFY2(high > 250, qPrintable(QString::number(high)));
+    QVERIFY2(printable > 30 && printable < 250, qPrintable(QString::number(printable)));
+    QVERIFY(BaudRateDetector::textScore(a) < 0.4);
+    QVERIFY(BaudRateDetector::textScore(DeviceSimulator::wrongRateNoise(512)) < 0.4);
+}
+
+void Tst_devicesimulator::connectionHearsGarbageAtWrongRate()
+{
+    // Through SerialConnection: a live baud change flips between garbage and text without any
+    // error, disconnect or reconnect.
+    SerialConnection c;
+    SerialSettings s;
+    s.portName = QStringLiteral("SIM:linux");
+    s.baudRate = 115200;
+    c.setSettings(s);
+    QSignalSpy errors(&c, &SerialConnection::errorOccurred);
+    QSignalSpy disappeared(&c, &SerialConnection::portDisappeared);
+    QSignalSpy states(&c, &SerialConnection::stateChanged);
+    Collector rx(c);
+    QVERIFY(c.open());
+    QTRY_VERIFY_WITH_TIMEOUT(rx.data.size() > 200, 3000);
+    QVERIFY(!rx.data.contains("Booting Linux"));
+    QVERIFY(BaudRateDetector::textScore(rx.data) < 0.4);
+
+    s.baudRate = 1500000;
+    c.setSettings(s);
+    rx.clear();
+    QTRY_VERIFY_WITH_TIMEOUT(rx.data.contains("rv1106 login: "), 15000);
+    QVERIFY(BaudRateDetector::textScore(rx.data) > 0.9);
+    QCOMPARE(errors.count(), 0);
+    QCOMPARE(disappeared.count(), 0);
+    QCOMPARE(states.count(), 1);   // Connected, once
+    QVERIFY(c.isOpen());
+    c.close();
 }
 
 QTEST_GUILESS_MAIN(Tst_devicesimulator)

@@ -8,6 +8,9 @@
 #include <QRawFont>
 #include <QStringEncoder>
 #include <QElapsedTimer>
+#include <QKeySequence>
+#include <QList>
+#include <QSet>
 #include <QVarLengthArray>
 #include <memory>
 
@@ -62,10 +65,21 @@ class AnsiParser;
  *  - Ctrl+A..Z -> 0x01..0x1A ; Ctrl+[ 0x1B ; Ctrl+\ 0x1C ; Ctrl+] 0x1D ; Ctrl+Space 0x00
  *  - Alt+<key> -> ESC + key bytes
  *  - Ctrl+Shift+C / Ctrl+Insert -> copySelection() ; Ctrl+Shift+V / Shift+Insert -> paste()
- *  - Ctrl+Shift+<letter> is never claimed from the application's shortcut map: the main window's
- *    actions (Hex View, Find, Send File, Clear, Replay Log, Quit, ...) stay reachable while the
- *    terminal is connected and focused; a Ctrl+Shift+<letter> that no action uses is sent as the
- *    Ctrl+<letter> control byte. Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, / F2 / F3 / F5 pass through too.
+ *  - Application shortcuts (setReservedShortcuts(), pushed by MainWindow from its actions): while
+ *    input is enabled a key press equal to a reserved sequence is left to the application's
+ *    shortcut map (ShortcutOverride not accepted; keyPressEvent() ignores it if it comes back
+ *    because the action is disabled). Ctrl+Shift+<anything> and Alt+<digit> (the tab
+ *    accelerators Alt+1..9) pass through regardless; Ctrl+Alt (AltGr) is text and never does.
+ *    Everything else that maps to bytes is sent to the device - bare Ctrl+letter combinations
+ *    such as Ctrl+W (0x17) and Ctrl+T (0x14), Alt+<letter> (ESC + letter: readline's Alt+F /
+ *    Alt+B / Alt+D, so the menu bar's mnemonics do not open a menu from a connected terminal;
+ *    a bare Alt tap or the mouse still reaches the menu bar), Tab, arrows, Home / End and the
+ *    F-keys included - unless it is reserved: F2 / F3 / F5 reach the application only because
+ *    Connect / Disconnect / Refresh Ports use them, so a user who reassigns those actions gets
+ *    the keys in the shell, and an action given Alt+F takes that key from the shell. A
+ *    passed-through key that no action claims comes back to keyPressEvent() and is mapped like
+ *    any other (Ctrl+Shift+A -> 0x01, Alt+1 -> ESC 1). While input is disabled every
+ *    application shortcut works as before (nothing is claimed except the local actions).
  *  - Ctrl+C with an active selection -> copy (and clear selection); without -> 0x03
  *  - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 -> zoom (font size) ; emits fontZoomed()
  *  - Text (incl. IME commit) -> encoded with the current encoding (QStringEncoder)
@@ -158,6 +172,16 @@ public:
     /// shortcuts, pastes are dropped and DSR/DA replies are not sent; the cursor is drawn hollow.
     void setInputEnabled(bool on);
     bool inputEnabled() const;
+    /// The application's shortcuts (MainWindow pushes every action's sequences, alternates
+    /// included, and re-pushes them when the user changes one in Preferences > Keyboard). While
+    /// input is enabled a key press whose QKeySequence(modifiers | key) equals one of them is
+    /// left to the application's shortcut map: ShortcutOverride is not accepted and, should the
+    /// key come back because its action is disabled, keyPressEvent() ignores it. Every other key
+    /// that maps to bytes - bare Ctrl+letter (Ctrl+W = 0x17, Ctrl+T = 0x14), Tab, F-keys, ... -
+    /// goes to the device; see "Input mapping" in the class comment. Empty (nothing reserved)
+    /// by default; the list is copied, duplicates and empty sequences dropped.
+    void setReservedShortcuts(const QList<QKeySequence>& sequences);
+    QList<QKeySequence> reservedShortcuts() const;
     /// Freeze the display while text is selected (see the class comment). Turning it off while
     /// paused resumes (the selection is kept). Default true.
     void setPauseWhileSelecting(bool on);
@@ -308,6 +332,10 @@ private:
     void publishSelection();                  ///< X11 PRIMARY selection when the platform supports it
     void ensureLineVisible(int absoluteLine);
     bool handleLocalShortcut(QKeyEvent* event);   ///< copy/paste/zoom/scroll keys that never reach the device
+    bool isReservedShortcut(const QKeyEvent* event) const;   ///< QKeySequence(modifiers | key) is in the reserved list
+    /// ShortcutOverride decision: reserved, or one of the application's modifier families
+    /// (Ctrl+Shift+<anything>, Alt+<anything> without Ctrl, Meta+<anything>).
+    bool passesToApplication(const QKeyEvent* event) const;
     void scheduleFullRepaint();               ///< coalesced repaint of every row (view scrolled, no dirty rows)
     void extendDragSelectionTo(const QPoint& viewportPos);   ///< drag in progress: selection from the press cell
 
@@ -334,6 +362,8 @@ private:
     bool m_backspaceSendsDelete = true;
     bool m_localEcho = false;
     bool m_inputEnabled = false;
+    QList<QKeySequence> m_reservedShortcuts;   ///< setReservedShortcuts(), as given (deduplicated)
+    QSet<int> m_reservedCombos;                ///< QKeyCombination::toCombined() of the single-chord ones
     bool m_cursorBlink = true;
     bool m_cursorBlinkState = true;
     bool m_bellEnabled = true;

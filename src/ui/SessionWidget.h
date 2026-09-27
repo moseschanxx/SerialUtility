@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QWidget>
+#include <QByteArray>
+#include <QElapsedTimer>
 #include <QString>
 #include <QFont>
 
@@ -25,6 +27,7 @@ class SessionLogger;
 class SendFileDialog;
 class RemoteFileDialog;
 class LogReplayer;
+class BaudRateDetector;
 
 /**
  * One tab of the main window = one session over a Transport: a serial port (Kind::Serial,
@@ -126,6 +129,38 @@ class LogReplayer;
  * A serial port opens synchronously, so its log starts inside connectPort(); an SSH session's log
  * starts when the state reaches Connected after a user-initiated connect, so the header carries
  * the host-key type and auth method and a failed or cancelled connect leaves no file behind.
+ * A serial session opened with the "Auto" baud rate starts its auto-log once the detection below
+ * has finished, so the header reads "SIM:linux Auto (1500000) 8N1" - the rate that was found.
+ *
+ * Automatic baud-rate detection (serial only, v0.4; core/BaudRateDetector.h):
+ *  - connectPort() with the bar's "Auto" rate (SerialSettings::autoBaud) opens the port at the
+ *    effective rate (the last one detected, initially 115200) and immediately runs the detector
+ *    with AppSettings::autoBaudCandidates() / autoBaudSampleMs(). While a detection runs the
+ *    terminal is MUTED: received bytes go to the detector, the hex view and the logger only; the
+ *    terminal shows a dim system line "--- detecting baud rate ---" before and "--- baud rate
+ *    1500000 detected ---" (or "--- no readable output at any baud rate, keeping 115200 ---")
+ *    after, and statusMessage() reports "Trying 921600..." per candidate. The bytes that arrived
+ *    at the winning rate are replayed into the terminal after the "detected" line, so nothing
+ *    of a boot log is lost; garbage heard at the wrong rates is never shown. The result is applied
+ *    through the connection (the detector leaves it there) and the bar (setEffectiveBaudRate(),
+ *    so settings()/summary() read "Auto (1500000) 8N1"), and titleChanged() lets MainWindow
+ *    refresh its status bar.
+ *  - Watchdog: while the session runs with "Auto" and AppSettings::autoBaudWatchdog() is on,
+ *    every RX chunk is fed to the detector; garbageDetected() writes "--- output unreadable,
+ *    re-detecting baud rate ---" and runs a new detection, never more often than once per
+ *    kWatchdogQuietMs (5 s, the detector's quietMs). A re-detection that finds nothing readable
+ *    at any candidate (a rate outside the list, a binary protocol) puts the detector's watchdog
+ *    on hold - no further re-detection, the garbage stays visible - until readable output
+ *    arrives again or a detection is started by hand (BaudRateDetector.h, "Hold").
+ *  - detectBaudRate() (Session > Detect Baud Rate, Ctrl+Shift+B) runs one detection by hand; on a
+ *    fixed-rate session the rate found becomes the bar's new fixed rate. Choosing "Auto" in the
+ *    bar while connected at a fixed rate keeps that rate as the effective one and searches from
+ *    it (it is tried first; a quiet device keeps it). A running detection is cancelled by a
+ *    change of the bar's line parameters (the user's choice wins; a re-emission of unchanged
+ *    settings is not a change, whatever candidate the connection is on) and by the connection
+ *    leaving Connected; the original rate is restored by the detector. No detection starts
+ *    while the session's SendFileDialog is sending (the file would leave at the wrong rates):
+ *    a manual request is refused with a status message, a watchdog request is dropped.
  */
 class SessionWidget : public QWidget
 {
@@ -224,6 +259,14 @@ public slots:
     /// Serial: sends "stty cols <cols> rows <rows>\r" so a Linux shell over UART matches the widget.
     /// SSH: transport()->notifyTerminalSize() (a window-change request) and a status message.
     void syncTerminalSize();
+    /// Serial sessions: run BaudRateDetector once on the open port (Session > Detect Baud Rate,
+    /// Ctrl+Shift+B, and automatically when the bar's baud rate is "Auto"): the terminal is muted
+    /// while candidates are tried, a status message reports progress, and the result is applied
+    /// to the connection and the bar ("--- baud rate 1500000 detected ---" system line; a silent
+    /// device or nothing readable leaves the previous rate and reports that). Refused with a
+    /// status message when not connected, on an SSH session, while a detection runs, or while
+    /// the session's SendFileDialog is sending a file.
+    void detectBaudRate();
     void sendBytes(const QByteArray& bytes);
     void sendQuickCommand(const QuickCommand& command);
     void focusTerminal();
@@ -259,6 +302,9 @@ private slots:
     void onBarSettingsChanged(const SerialSettings& settings);
     void onPortsChanged(const QList<SerialPortEntry>& ports);
     void onInputSendRequested(const QByteArray& payload, const QString& displayText);
+    void onDataReceived(const QByteArray& bytes);   ///< transport RX -> terminal (unless muted) + baud watchdog
+    void onBaudDetectionFinished(bool found, qint32 baud, double score);
+    void onGarbageDetected(double score);
     // ---- SSH ----
     void onSshProfileChanged(const SshProfile& profile);
     void onHostKeyVerificationRequired(const SshConnection::HostKeyInfo& info);
@@ -291,6 +337,13 @@ private:
     RemoteFileDialog* remoteFileDialog();                        ///< created on first use
     static QString sanitizeForFileName(const QString& name);     ///< [A-Za-z0-9._@-], the rest -> "_"
 
+    // ---- Automatic baud-rate detection (serial only; see the class comment) -------------
+    enum class DetectReason { Connect, Watchdog, Manual };
+    /// Mute the terminal, write the system line and start the detector with the AppSettings
+    /// candidates / sample time. False (with a status message) when it cannot start.
+    bool startBaudDetection(DetectReason reason);
+    bool isDetectingBaud() const;
+
     Transport::Kind m_kind = Transport::Kind::Serial;
     Transport* m_transport = nullptr;        ///< m_connection or m_ssh
     SerialConnection* m_connection = nullptr;   ///< serial only
@@ -309,6 +362,18 @@ private:
     SendFileDialog* m_sendFileDialog = nullptr;
     RemoteFileDialog* m_remoteFileDialog = nullptr;   ///< SSH only; created by uploadFile()/downloadFile()
     LogReplayer* m_replayer = nullptr;       ///< created on the first replayLogFile(); QObject child
+    BaudRateDetector* m_baudDetector = nullptr;   ///< serial only; QObject child
+    DetectReason m_detectReason = DetectReason::Connect;
+    /// The connection's settings when the running detection started (its original rate): what a
+    /// re-emission of unchanged bar settings is compared against, the live rate being a candidate.
+    SerialSettings m_detectStartSettings;
+    bool m_terminalMuted = false;            ///< a detection runs: RX bytes bypass the terminal
+    bool m_detectCancelled = false;          ///< the session itself cancelled the running detection
+    bool m_watchdogEnabled = true;           ///< AppSettings::autoBaudWatchdog(), cached by applyPreferences()
+    qint32 m_lastTriedBaud = 0;              ///< the candidate m_detectSample was collected at
+    QByteArray m_detectSample;               ///< RX bytes of the candidate being tried (replayed when it wins)
+    QElapsedTimer m_clock;
+    qint64 m_lastWatchdogDetectMs = -1;      ///< m_clock time of the last watchdog-triggered detection
     ViewMode m_viewMode = ViewMode::Terminal;
     /// Target (port name / SSH display name) the active log was auto-started for; empty when the
     /// log was started by the user or no log is active.

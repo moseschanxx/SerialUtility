@@ -312,6 +312,65 @@
          </property>
         </widget>
        </item>
+       <item row="10" column="0">
+        <widget class="QLabel" name="autoBaudCandidatesLabel">
+         <property name="text">
+          <string>Auto baud candidates:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="10" column="1">
+        <widget class="QLineEdit" name="autoBaudCandidatesEdit">
+         <property name="toolTip">
+          <string>Baud rates tried, in this order, when the baud rate is set to Auto or Session &gt; Detect Baud Rate runs. Comma-separated.</string>
+         </property>
+         <property name="placeholderText">
+          <string notr="true">115200, 1500000, 921600, ...</string>
+         </property>
+        </widget>
+       </item>
+       <item row="11" column="0">
+        <widget class="QLabel" name="autoBaudSampleLabel">
+         <property name="text">
+          <string>Auto baud sample time:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="11" column="1">
+        <widget class="QSpinBox" name="autoBaudSampleSpin">
+         <property name="toolTip">
+          <string>How long the detector listens at each candidate rate before judging the output.</string>
+         </property>
+         <property name="suffix">
+          <string> ms</string>
+         </property>
+         <property name="minimum">
+          <number>300</number>
+         </property>
+         <property name="maximum">
+          <number>10000</number>
+         </property>
+         <property name="singleStep">
+          <number>100</number>
+         </property>
+         <property name="value">
+          <number>1500</number>
+         </property>
+        </widget>
+       </item>
+       <item row="12" column="1">
+        <widget class="QCheckBox" name="autoBaudWatchdogCheck">
+         <property name="toolTip">
+          <string>While a session runs with the Auto baud rate, run the detection again when the incoming bytes stop looking like text (the board switched rates, e.g. U-Boot at 1500000 and the kernel at 115200).</string>
+         </property>
+         <property name="text">
+          <string>Re-detect when the output turns into garbage</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
       </layout>
      </widget>
      <widget class="QWidget" name="tabSsh">
@@ -429,6 +488,114 @@
         <widget class="QLabel" name="sshSecretsNoteLabel">
          <property name="text">
           <string notr="true"/>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tabKeyboard">
+      <attribute name="title">
+       <string>Keyboard</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="keyboardLayout">
+       <item>
+        <widget class="QTableWidget" name="shortcutTable">
+         <property name="toolTip">
+          <string>Select a row and press the new key combination in the field below.</string>
+         </property>
+         <property name="editTriggers">
+          <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
+         </property>
+         <property name="selectionMode">
+          <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
+         </property>
+         <property name="selectionBehavior">
+          <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+         </property>
+         <property name="columnCount">
+          <number>3</number>
+         </property>
+         <attribute name="horizontalHeaderStretchLastSection">
+          <bool>true</bool>
+         </attribute>
+         <attribute name="verticalHeaderVisible">
+          <bool>false</bool>
+         </attribute>
+         <column>
+          <property name="text">
+           <string>Action</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Shortcut</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Default</string>
+          </property>
+         </column>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="shortcutEditLayout">
+         <item>
+          <widget class="QLabel" name="shortcutEditLabel">
+           <property name="text">
+            <string>Shortcut:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QKeySequenceEdit" name="shortcutEdit">
+           <property name="toolTip">
+            <string>Press the key combination for the selected action.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="shortcutClearButton">
+           <property name="toolTip">
+            <string>Remove the shortcut of the selected action.</string>
+           </property>
+           <property name="text">
+            <string>Clear</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="shortcutRestoreButton">
+           <property name="toolTip">
+            <string>Put the selected action back to its default shortcut.</string>
+           </property>
+           <property name="text">
+            <string>Restore Default</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QLabel" name="shortcutConflictLabel">
+         <property name="styleSheet">
+          <string notr="true">color: #c0392b;</string>
+         </property>
+         <property name="text">
+          <string notr="true"/>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="shortcutNoteLabel">
+         <property name="text">
+          <string>While a session is connected, every key that is not an application shortcut is sent to the device: bare Ctrl+letter combinations such as Ctrl+C or Ctrl+W reach the shell unless you assign them here.</string>
          </property>
          <property name="wordWrap">
           <bool>true</bool>

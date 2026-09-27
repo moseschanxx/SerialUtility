@@ -28,7 +28,7 @@ to hide them.
 |---|---|
 | Plug in | USB-UART adapter (CH343 / CP2102) on the board's debug header |
 | Port | Pick it in the connection bar - the list updates live, **F5** rescans |
-| Baud | **1500000** (RV1106 / RV1106B, recent SDKs) or **115200** (older boards) - 8N1, no flow |
+| Baud | **Auto** (the tool finds it while the board boots), or **1500000** (RV1106 / RV1106B, recent SDKs) / **115200** (older boards) - 8N1, no flow |
 | Connect | **F2** (or the Connect button). Power / reset the board |
 | U-Boot | Hold **Ctrl+C** during "Hit any key to stop autoboot" - or click *Control > Ctrl+C* |
 | Linux | Log in; Enter sends CR and Backspace sends DEL by default (what a tty expects) |
@@ -59,13 +59,14 @@ warning - tick the box and *Replace key and connect*.
 
 | Want to... | Do this |
 |---|---|
-| Open another board in parallel | **Ctrl+T** new tab (**Ctrl+Shift+T** for SSH), **Ctrl+Tab** to switch |
+| Open another board in parallel | **Ctrl+T** new tab (**Ctrl+Shift+T** for SSH), **Ctrl+Tab** / **Alt+1..9** / the *Window* menu to switch, **Ctrl+Shift+W** to close (Ctrl+W goes to the shell) |
 | Keep a boot log | *File > Start Logging* (or turn on auto-log in *Preferences > Logging*) |
 | Look at a log captured in the field | *File > Replay Log File...* (or `--replay boot.log --speed 1500000`) - rendered like the live session |
 | Paste a script without overrunning the console | *Session > Send File...* (**Ctrl+Shift+O**), text mode, 50 ms per line |
 | Send raw bytes | Command input in **HEX** mode (`AA 55 0D`) or a quick command with the HEX flag |
 | See exactly what goes over the wire | *View > Hex View* (**Ctrl+Shift+H**) |
 | Change baud while connected | Just pick another value - it is applied to the open port |
+| Wrong baud rate (garbage on screen) | Pick **Auto** in the baud list, or *Session > Detect Baud Rate* (**Ctrl+Shift+B**) |
 | Survive a board reboot | Nothing - auto-reconnect is on by default (amber tab dot while waiting); SSH tabs reconnect the same way after a dropped link |
 | Copy a file to the board over SSH | *Session > Upload File to Remote...* (or drop the file on the SSH terminal); *Download File from Remote...* for the other direction |
 | Add your own buttons | *Edit > Quick Commands...* - Add, set name / command / group / line ending, OK |
@@ -87,10 +88,12 @@ warning - tick the box and *Replace key and connect*.
 
 ## 7. Shortcuts
 
-`Ctrl+T` new tab, `Ctrl+Shift+T` new SSH tab, `Ctrl+W` close, `Ctrl+Tab`/`Ctrl+Shift+Tab` next/previous tab, `F2`/`F3`
+`Ctrl+T` new tab, `Ctrl+Shift+T` new SSH tab, `Ctrl+Shift+W` close (Ctrl+W goes to the shell), `Ctrl+Tab`/`Ctrl+Shift+Tab` or `Ctrl+PgDn`/`Ctrl+PgUp` next/previous tab, `Alt+1`..`Alt+9` select a tab (also the *Window* menu; a middle click on a tab closes it), `Ctrl+Shift+B` detect the baud rate, `F2`/`F3`
 connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear (screen + scrollback + hex view), `Ctrl+Shift+O` send file,
 `Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
 `Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,
 `Ctrl+Shift+Q` quit.
-Everything else (Tab, arrows, bare Ctrl+letters, F-keys other than F3 / F5) goes to the device;
-F3 / F5 stay Disconnect / Refresh Ports, and F2 only reaches the device while connected.
+Every shortcut is configurable in *Edit > Preferences > Keyboard*. While connected, a key that is
+an application shortcut goes to the application and everything else (Tab, arrows, every bare
+Ctrl+letter, F-keys) goes to the device; F2 / F3 / F5 are application keys only because Connect /
+Disconnect / Refresh Ports use them.

@@ -166,7 +166,15 @@ on (default on; a Preferences checkbox hides them for production use):
 | `SIM:loopback` | echoes every byte | TX/RX path, hex view, logger, encodings |
 | `SIM:linux` | Rockchip-style boot log → `login:` → busybox-like shell with device-side line editing, coloured `dmesg`, `top`, `progress`, `color`, `chinese`, `reboot` (port vanishes 3 s), `poweroff` (device stays listed but is down until you reconnect) | full emulation, quick commands, auto-reconnect |
 | `SIM:uboot` | U-Boot banner, "Hit any key to stop autoboot" countdown, `=>` prompt, `boot` → Linux | autoboot interrupt workflow |
-| `SIM:mcu` | firmware shell with `\r\n`, `AT`/`OK`, telemetry stream | CRLF/LF handling, streaming |
+| `SIM:mcu` | firmware shell with `\r\n`, `AT`/`OK`, telemetry stream (`telemetry on [ms]` makes it chatty) | CRLF/LF handling, streaming |
+
+Native baud rates (v0.4): `SIM:linux` and `SIM:uboot` talk at 1 500 000, `SIM:mcu` at 115200,
+`SIM:loopback` at any rate (`DeviceSimulator::nativeBaudRate()`). A session opened at another
+rate hears deterministic wrong-rate garbage (`DeviceSimulator::wrongRateNoise()`, paced like the
+text, dominated by 0x00 / 0xFF / high-bit bytes as a UART decodes a mismatch) while the scripted
+device keeps running underneath; typed input is dropped meanwhile; `setNativeBaudRate()` switches
+a running instance mid-session (a board that changed rate) - a reboot goes back to the kind's
+native rate. This is what makes automatic baud detection testable offscreen (section 4.10).
 
 Integration points: `SerialSettings::isSimulatedPort()`, `SerialConnection::open()` creates a
 `DeviceSimulator` instead of using `QSerialPort` (same signals, same counters, `vanished()`
@@ -290,7 +298,9 @@ TCP + key exchange with the profile's timeout → host key check against an Open
 authentication in the profile's order (Auto = agent, identity file, `~/.ssh/id_ed25519|id_ecdsa|id_rsa`,
 password, keyboard-interactive; each only if the server offers it; encrypted keys and passwords
 raise `authPromptRequired` → `AuthPromptDialog`, up to three attempts; a password or passphrase
-can be remembered in `SecretStore` under the profile id) → PTY (`xterm-256color`, the terminal's
+can be remembered in `SecretStore`: under the profile id for a stored profile, under
+`ssh/target/<user@host:port>/password` for an ad-hoc target and under `ssh/key/<path>/passphrase`
+for a key file, so a remembered key needs its passphrase only once whatever the target (v0.4)) → PTY (`xterm-256color`, the terminal's
 current grid) + `shell` (or `exec` for a remote command) → `shellStarted`. `~/.ssh/config` is
 parsed by libssh so `Host` aliases, `IdentityFile`, `User`, `Port` and `ProxyJump` from the user's
 config apply; explicit profile fields win (the environment variable `SU_SSH_IGNORE_CONFIG=1` skips
@@ -299,7 +309,16 @@ keep-alive (`SSH_MSG_IGNORE`, 30 s default) detects dead links; a dropped link (
 `exit`) goes to Reconnecting with 2 → 30 s backoff using only non-interactive credentials.
 Local port forwards (`-L`) are `QTcpServer`s in the worker bridged to `direct-tcpip` channels.
 File transfer uses the SFTP subsystem of the same session (`RemoteFileDialog`, drag-and-drop of a
-file onto an SSH terminal = upload) in 64 KiB slices interleaved with the shell traffic.
+file onto an SSH terminal = upload) in 64 KiB slices interleaved with the shell traffic. When the
+server refuses the `sftp` subsystem (dropbear on a buildroot board), the transfer falls back to a
+plain exec channel driving busybox tools - upload `: > 'path'` (create / truncate: a path that
+cannot be written fails here and is never touched) then `cat > 'path'` fed with the raw bytes
+then EOF (+ `chmod`; a command that ends without an exit status is confirmed by `wc -c` against
+the local size), download `wc -c < 'path'` then `cat 'path'`, `test -e` for overwrite
+protection, `rm -f` for an upload that did not complete (cancel, failure, a Disconnect during
+it) - paths single-quoted with `'''` escaping, a relative `-name` written as `./-name`; the
+method is reported in `TransferStatus::method` and the finished message ("..., via shell")
+(v0.4).
 Limitation: libssh has no ssh-agent support on Windows, so `Auth::Agent` is only useful on Linux
 and macOS (key files work everywhere).
 
@@ -327,7 +346,9 @@ tab with that target filled in (`--ssh <target> --connect` connects at once); a 
 **Testing.** `tests/support/TestSshServer` is an in-process libssh *server* (ed25519 host key,
 password / public-key / keyboard-interactive auth, PTY with window-change tracking, a scripted
 shell - `echo`, `env`, `size`, `big n`, `sleep`, `hang`, `exit n` - exec, a built-in minimal SFTP v3
-server (`tests/support/TestSftpHandler`; libssh's own SFTP server is compiled out on Windows),
+server (`tests/support/TestSftpHandler`; libssh's own SFTP server is compiled out on Windows) that
+`Options::allowSftp = false` switches off to imitate dropbear, the exec file commands the shell
+fallback needs (`cat > 'p'`, `cat 'p'`, `wc -c < 'p'`, `test -e`, `chmod`, `rm -f`, `mkdir -p`, `mv`, `pwd`),
 direct-tcpip, abrupt client drops), so `tst_sshconnection` and the whole-application
 `tst_sshsession` suite run on every developer machine and on both CI platforms with no external
 sshd. `tst_sshsession` drives the real `MainWindow`, bar and dialogs (a timer answers the modal
@@ -350,6 +371,56 @@ shipped in the installer, the portable zip and the Linux tarball (the tarball's 
 carries `RUNPATH=$ORIGIN`, so the bundled `libcrypto.so.3` is used on distros without OpenSSL 3).
 Windows needs an OpenSSL 3 installation to *build* (`C:\Program Files\OpenSSL-Win64` or any
 prefix passed as `-DOPENSSL_ROOT_DIR`); users need nothing.
+
+### 4.9 Keyboard: what the device gets and what the application keeps (v0.4)
+
+`TerminalWidget::setReservedShortcuts()` receives the current shortcuts of every `MainWindow`
+action (alternates included); `MainWindow` pushes the list to each session's terminal after
+`applyShortcuts()` and whenever a `shortcuts/*` setting changes. While a session is connected a
+key press whose sequence is reserved is left to the application (`ShortcutOverride` not
+accepted); Ctrl+Shift+*x* and Alt+*digit* (the tab accelerators) pass through regardless; every
+other key that maps to a byte sequence goes to the device - bare Ctrl+letter (Ctrl+W = 0x17,
+Ctrl+T = 0x14, ...), Alt+letter (ESC + letter: readline's Alt+F / Alt+B, so the menu bar's
+mnemonics do not open a menu from a connected terminal - a bare Alt tap or the mouse does) and
+F-keys included. Consequently F2 / F3 / F5 are application keys only because
+Connect / Disconnect / Refresh Ports use them, and the defaults changed so that nothing a shell
+needs is reserved: Close Session = Ctrl+Shift+W (was Ctrl+W). Shortcuts live in
+`AppSettings::shortcut(actionName, uiDefault)` (`shortcuts/<objectName>`, portable text; an empty
+value means none); *Preferences > Keyboard* edits them with conflict detection (rows against
+each other and against the fixed sequences `MainWindow::fixedShortcutEntries()` lists: the tab
+alternates and the menu mnemonics) and per-row / page-level defaults, accepts only chords that
+can be application shortcuts (Ctrl / Alt / Meta with a key, or an F-key - a bare letter, Enter
+or Space would steal typed text from the device), and `MainWindow::shortcutEntries()` feeds the
+page. Tab selection: the
+*Window* menu (Next / Previous, `Tab 1..9` = Alt+1..9, then one checkable entry per open
+session), Ctrl+PageDown / Ctrl+PageUp as fixed alternates of Next / Previous, and a middle click
+on a tab closes it.
+
+### 4.10 Automatic baud-rate detection (v0.4)
+
+`core/BaudRateDetector` scores bytes with `textScore()` (printable ASCII, common controls and
+well-formed UTF-8 count as text; 0x00 / 0xFF and invalid UTF-8 as garbage; a Rockchip boot log
+scores > 0.97 at the right rate and < 0.4 at a wrong one). `start()` drives an open
+`SerialConnection` through the candidates from *Preferences > Connection* (current rate first,
+then 115200, 1500000, 921600, 460800, 230400, 57600, 38400, 19200, 9600 by default, `sampleMs`
+each, early exit at `goodScore()` 0.9); a silent device or one readable nowhere restores the
+original rate and reports it; the search never writes to the device. `SerialSettings::autoBaud`
+("Auto" at the top of the bar's baud list, effective rate kept in `baudRate`, summary
+"Auto (1500000) 8N1") makes `SessionWidget::connectPort()` run a detection right after opening,
+with the terminal muted and system lines "--- detecting baud rate ---" / "--- baud rate 1500000
+detected ---", and feeds the live RX stream to the detector's watchdog (sliding window of 512
+bytes, `badScore()` 0.5, at most one re-detection per 5 s) so a board that switches rates
+mid-session is followed; a re-detection that finds nothing readable at any candidate puts the
+watchdog on hold - the garbage stays visible, no further search - until readable output arrives
+or a detection is started by hand. Between two candidates only the RX side of the port is
+purged (`SerialConnection::clearBuffers(QSerialPort::Input)`): queued TX bytes keep going out
+and no write in flight is aborted, and no detection starts while the session's *Send File*
+dialog is sending. Choosing "Auto" while connected at a fixed rate searches from that rate (it
+is tried first and kept when the device is quiet). *Session > Detect Baud Rate* (Ctrl+Shift+B,
+`SessionWidget::detectBaudRate()`) runs one detection on demand and applies the result to a
+fixed-rate session too. The simulators have native rates (`DeviceSimulator::nativeBaudRate()`: Linux / U-Boot
+1 500 000, MCU 115200, loopback any) and emit paced garbage while the session rate differs, so the
+whole flow is testable offscreen (`tst_bauddetector`, `tst_devicesimulator`, `tst_sessionwidget`).
 
 ## 5. Build, run, test
 
@@ -401,6 +472,15 @@ its own.
 | **test-server** | `tests/support/TestSshServer.cpp`, `tst_testsshserver` |
 | **ssh-dialogs** | `SshConnectionBar.cpp`, the four SSH dialogs and their `.ui`, `tst_sshdialogs` |
 | **integrate / gui-e2e** | build everything together, `tst_sshconnection` end to end, `tst_sshsession` (whole-app flow) |
+
+### 6.2 v0.4.0 work packages
+
+| Package | Files owned |
+|---|---|
+| **keyboard** | `TerminalWidget` reserved shortcuts, `MainWindow` shortcut application / Window menu / Detect Baud Rate action, *Preferences > Keyboard* and the Connection page auto-baud fields, their suites |
+| **ssh-core** | `SshWorker` remembered ad-hoc credentials and the exec-channel transfer fallback, test server exec commands / `allowSftp`, `tst_sshconnection`, `tst_testsshserver` |
+| **ssh-ui** | prompt checkbox labels, transfer method text, the real-server transfer investigation (env-gated GUI probe + `gui-smoke.ps1 -Scenario sshfiles`), `tst_sshdialogs`, `tst_sshsession` |
+| **autobaud** | `BaudRateDetector`, `SerialSettings::autoBaud`, simulator native rates / garbage, the bar's Auto item, session detection + watchdog, their suites |
 
 ## 7. Future work
 

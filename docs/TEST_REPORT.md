@@ -1,4 +1,4 @@
-# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27, v0.3.0 addendum 2026-09-27)
+# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27, v0.3.0 addendum 2026-09-27, v0.4.0 addendum 2026-09-27)
 
 This report records how the first release of BuildAI Serial Utility was verified on
 2026-09-20/21, what was tested at each layer, what was found and fixed, and what could
@@ -203,4 +203,44 @@ detects a dead link only when the TCP write fails (`SSH_MSG_IGNORE` has no reply
 phase (connect / key exchange / auth) ends only with the profile's timeout, a refused connect costs the
 full timeout on Windows (libssh's select-based poll), only the first `IdentityFile` of a `~/.ssh/config`
 block is used, SFTP rename does not overwrite (plain v3), remote port forwards are not offered.
+
+## 12. v0.4.0 — keyboard, remembered SSH credentials, transfer fallback, auto baud (2026-09-27)
+
+Added in 0.4.0: **Ctrl+W and every bare Ctrl+letter go to the shell** while connected (Close Session =
+Ctrl+Shift+W), **configurable shortcuts** (*Preferences > Keyboard*), a **Window menu** with Alt+1..9 and
+Ctrl+PageUp/PageDown, **Remember** for ad-hoc SSH passwords and key passphrases, an **exec-channel file
+transfer fallback** for servers without SFTP (dropbear boards) plus SFTP request pipelining and clean-up of
+cancelled uploads, and **automatic baud-rate detection** ("Auto" in the baud list, a garbage watchdog,
+*Session > Detect Baud Rate*). Same process as 0.3.0: four packages in parallel on a stubbed tree, integration
+with cross-package tests, adversarial review, fixes.
+
+| Layer | Result |
+|---|---|
+| New unit suite | `tst_bauddetector` 19 checks: text-score vectors (boot log, CJK UTF-8, simulator garbage < 0.4, truncated UTF-8 tail), detection over a real `SerialConnection` on `SIM:linux` opened at 115200 finds 1 500 000, current rate confirmed first, silent device restores the rate, cancel, watchdog quiet period |
+| Simulator | `tst_devicesimulator` 45 checks (native rates, deterministic wrong-rate garbage at the same pacing, mid-session rate switch, loopback unaffected, typed input dropped while mismatched) |
+| Serial session | `tst_sessionwidget` 83 checks: Auto connect on `SIM:linux` with the Preferences candidates (muted terminal, "detecting" / "1500000 detected" system lines, summary "Auto (1500000)"), watchdog re-detection after the simulator switches to 115200, manual Detect Baud Rate on a fixed-rate `SIM:mcu`, refusals on SSH / disconnected |
+| Keyboard | `tst_terminalwidget` 121 checks (reserved-shortcut semantics: reserved Ctrl+X passes to the app, unreserved sends 0x18, Ctrl+Shift always passes, F2 per reservation), `tst_mainwindow` 75 (defaults incl. Ctrl+Shift+W, Alt+1..9, Ctrl+PgUp/PgDn, Window menu, middle click, stored shortcuts applied live, reserved list pushed to terminals, Ctrl+W echoed as 0x17 by `SIM:loopback` and by the in-process SSH server with the tab staying open, Detect Baud Rate enable rules, unique menu mnemonics), `tst_dialogs` 55 (Keyboard page edit / clear / restore / conflict, Connection auto-baud fields) |
+| SSH core | `tst_sshconnection` 48 checks + 6 live probes: ad-hoc password remembered under `ssh/target/<user@host:port>/password` (a new connection needs no prompt, a stale one is removed and prompted), passphrase remembered per key file across targets, shell-fallback upload/download of 2 MiB byte-identical with monotonic progress, overwrite refusal, cancel without remote leftovers, remote home via the fallback, SFTP pipelining sizes 0 B .. 3 MiB ± 1, cancelled SFTP upload unlinked; `tst_testsshserver` 24 (exec file commands, 2 MiB `cat` round trip, refused sftp subsystem) |
+| SSH UI | `tst_sshdialogs` 55 (remember captions per prompt kind, method texts), `tst_sshsession` 15 + 1 probe: Remember ticked in the real prompt → disconnect → reconnect with no prompt, the same target from a second session, a transfer through `RemoteFileDialog` with `allowSftp = false` ("via shell", byte-identical) and the SFTP path still "SFTP" |
+| Real OpenSSH server (WSL Ubuntu 22.04, user `sshprobe`) | env-gated `tst_sshsession::probeRealServerTransfers` through the real `MainWindow`: 3 MB file with a space and a non-ASCII name uploaded to "~" and to "/tmp/", downloaded back byte for byte, missing remote path → readable error, Cancel half-way through 50 MB up and down (no `.part`), second transfer without reopening, drop-target entry, dialog surviving a disconnect; `gui-smoke.ps1 -Scenario sshfiles` (real window, 18 screenshots read): the same flow through the menus. The user's saved source path pointed at a folder (not a supported source); folders are now refused with a clear message, and a dropbear board without SFTP is handled by the fallback |
+| Adversarial reviews | 2 passes on the integrated tree, 12 findings, all verified and fixed: per-candidate buffer purge that made Windows drivers report the port as vanished during detection (critical for real UARTs; now an input-only purge), selecting Auto on a connected fixed-rate session changing the live rate too early, the watchdog re-detecting forever on an unreadable stream (now held after an unreadable search), Alt+letter menu mnemonics stealing readline's Alt+F/B, modifier-less keys and fixed alternates accepted as shortcuts / missed by the conflict check, a spurious bar re-emission cancelling a manual detection, a failed shell-fallback upload leaving a truncated remote file, remote paths starting with "-" parsed as options by cat / rm / chmod, an exit-deadline expiry reported as a successful upload, a disconnect overwriting the transfer error text, and the sshfiles smoke script that could not fail |
+| GCC 11 `-Werror` (WSL Ubuntu 22.04, Qt 6.8.3) | zero warnings / errors; 23/23 suites green on Linux |
+| Windows MSVC 2022 Release, fresh configure | 23/23 suites green; the eight timing-sensitive suites passed three consecutive runs each (`--repeat until-fail:3`) |
+
+Final numbers on the tagged tree:
+
+| Platform | Suites | Result |
+|---|---|---|
+| Windows MSVC 2022 Release, fresh configure | 23 | (final run pending) |
+| Ubuntu 22.04 WSL GCC 11 `-Werror` | 23 | (final run pending) |
+
+Known limitations: a silent device cannot be detected (the detector never writes; press Enter on the board
+or run Detect Baud Rate once it talks); the first 512 garbage bytes of a rate switch reach the terminal
+before the watchdog reacts, re-detections are limited to one per 5 s, and after a re-detection that finds
+nothing readable at any candidate the watchdog waits for readable output (or a manual Detect Baud Rate)
+before it reports again; only single-chord shortcuts are configurable, and Ctrl+Shift+*x* / Alt+*digit*
+always belong to the application (Alt+*letter* goes to the shell, so the menu bar is reached with a bare
+Alt tap from a connected terminal); a key file named only in
+`~/.ssh/config` is prompted for its passphrase per session; the shell fallback cannot preserve remote
+permission bits on download; folder upload is not supported.
 

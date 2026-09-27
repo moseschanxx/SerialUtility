@@ -20,6 +20,10 @@ private slots:
     void standardBaudRates();
     void helperTexts();
     void equality();
+    void autoBaudMapRoundTrip();
+    void autoBaudSummary();
+    void autoBaudEquality();
+    void autoBaudThroughConnection();
 
     // SerialPortEntry
     void entryDisplayText();
@@ -74,16 +78,18 @@ void Tst_serialsettings::defaults()
     QCOMPARE(s.flowControl, QSerialPort::NoFlowControl);
     QVERIFY(s.dtr);
     QVERIFY(s.rts);
+    QVERIFY(!s.autoBaud);
     QCOMPARE(s.summary(), QStringLiteral("115200 8N1"));
 }
 
 void Tst_serialsettings::toMapKeys()
 {
     const QVariantMap map = custom().toMap();
-    const QStringList expectedKeys = {QStringLiteral("baud"),     QStringLiteral("dataBits"), QStringLiteral("dtr"),
-                                      QStringLiteral("flow"),     QStringLiteral("parity"),   QStringLiteral("port"),
-                                      QStringLiteral("rts"),      QStringLiteral("stopBits")};
+    const QStringList expectedKeys = {QStringLiteral("autoBaud"), QStringLiteral("baud"),   QStringLiteral("dataBits"),
+                                      QStringLiteral("dtr"),      QStringLiteral("flow"),   QStringLiteral("parity"),
+                                      QStringLiteral("port"),     QStringLiteral("rts"),    QStringLiteral("stopBits")};
     QCOMPARE(map.keys(), expectedKeys);   // QVariantMap keys are sorted
+    QCOMPARE(map.value(QStringLiteral("autoBaud")).toBool(), false);
     QCOMPARE(map.value(QStringLiteral("port")).toString(), QStringLiteral("COM8"));
     QCOMPARE(map.value(QStringLiteral("baud")).toInt(), 1500000);
     QCOMPARE(map.value(QStringLiteral("dataBits")).toInt(), 7);
@@ -136,6 +142,7 @@ void Tst_serialsettings::fromMapMissingKeys()
     QCOMPARE(s.flowControl, QSerialPort::NoFlowControl);
     QVERIFY(s.dtr);
     QVERIFY(s.rts);
+    QVERIFY(!s.autoBaud);   // a v0.3 map without the key: fixed rate
 }
 
 void Tst_serialsettings::fromMapInvalidValues()
@@ -253,6 +260,78 @@ void Tst_serialsettings::equality()
     b = custom();
     b.baudRate = 115200;
     QVERIFY(a != b);
+}
+
+void Tst_serialsettings::autoBaudMapRoundTrip()
+{
+    SerialSettings s = custom();
+    s.autoBaud = true;
+    const QVariantMap map = s.toMap();
+    QCOMPARE(map.value(QStringLiteral("autoBaud")).toBool(), true);
+    QCOMPARE(map.value(QStringLiteral("baud")).toInt(), 1500000);   // the effective rate travels with the flag
+    const SerialSettings back = SerialSettings::fromMap(map);
+    QVERIFY(back.autoBaud);
+    QCOMPARE(back.baudRate, 1500000);
+    QCOMPARE(back, s);
+
+    // String-typed values (INI backend) and the missing key.
+    QVariantMap stringy;
+    stringy.insert(QStringLiteral("autoBaud"), QStringLiteral("true"));
+    QVERIFY(SerialSettings::fromMap(stringy).autoBaud);
+    stringy.insert(QStringLiteral("autoBaud"), QStringLiteral("false"));
+    QVERIFY(!SerialSettings::fromMap(stringy).autoBaud);
+    QVERIFY(!SerialSettings::fromMap(QVariantMap()).autoBaud);
+    QVERIFY(!SerialSettings::fromMap(custom().toMap()).autoBaud);
+}
+
+void Tst_serialsettings::autoBaudSummary()
+{
+    SerialSettings s;
+    s.autoBaud = true;
+    QCOMPARE(s.summary(), QStringLiteral("Auto (115200) 8N1"));
+    s.baudRate = 1500000;
+    QCOMPARE(s.summary(), QStringLiteral("Auto (1500000) 8N1"));
+    s.dataBits = QSerialPort::Data7;
+    s.parity = QSerialPort::EvenParity;
+    s.stopBits = QSerialPort::TwoStop;
+    s.flowControl = QSerialPort::HardwareControl;
+    QCOMPARE(s.summary(), QStringLiteral("Auto (1500000) 7E2 RTS/CTS"));
+    s.autoBaud = false;
+    QCOMPARE(s.summary(), QStringLiteral("1500000 7E2 RTS/CTS"));
+}
+
+void Tst_serialsettings::autoBaudEquality()
+{
+    SerialSettings a = custom();
+    SerialSettings b = custom();
+    QVERIFY(a == b);
+    b.autoBaud = true;
+    QVERIFY(a != b);
+    QVERIFY(!(a == b));
+    a.autoBaud = true;
+    QVERIFY(a == b);
+    b.baudRate = 9600;   // a different effective rate is a different setting
+    QVERIFY(a != b);
+}
+
+void Tst_serialsettings::autoBaudThroughConnection()
+{
+    // The connection stores the flag with the other fields and reports it in summary() and the
+    // persisted map; nothing else changes for a closed connection.
+    SerialConnection c;
+    SerialSettings s = custom();
+    s.autoBaud = true;
+    c.setSettings(s);
+    QCOMPARE(c.settings(), s);
+    QVERIFY(c.settings().autoBaud);
+    QCOMPARE(c.summary(), QStringLiteral("Auto (1500000) 7E2 RTS/CTS"));
+    const Transport* transport = &c;
+    QCOMPARE(SerialSettings::fromMap(transport->settingsMap()), s);
+    QVERIFY(transport->settingsMap().value(QStringLiteral("autoBaud")).toBool());
+    s.autoBaud = false;
+    c.setSettings(s);
+    QVERIFY(!c.settings().autoBaud);
+    QCOMPARE(c.summary(), QStringLiteral("1500000 7E2 RTS/CTS"));
 }
 
 // ---------------------------------------------------------------------------------------

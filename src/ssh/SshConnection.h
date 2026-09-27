@@ -68,12 +68,34 @@ class SshWorker;
  *     needed the reconnect stops with state Disconnected and an errorOccurred() explaining
  *     why. connectionRestored() after success. close() always stops everything.
  *
- * File transfer (SFTP subsystem on the same session, one transfer at a time, run inside the
- * worker's I/O loop in 64 KiB chunks so the shell keeps working): startTransfer() ->
+ * File transfer (one transfer at a time, run inside the worker's I/O loop in 64 KiB chunks so
+ * the shell keeps working; SFTP keeps several requests in flight so a LAN link is not bounded
+ * by one round trip per chunk). Method: the SFTP subsystem of the same session when the server
+ * offers it; when the "sftp" subsystem request fails (dropbear on a typical buildroot board has
+ * no sftp-server) the transfer falls back to a plain exec channel driving the remote shell
+ * tools that every busybox has: upload = `: > 'path'` (create / truncate; a path that cannot
+ * be written fails here with the shell's reason and is never touched) then `cat > 'path'` fed
+ * with the raw bytes then EOF (plus `chmod` when preservePermissions), download = `wc -c <
+ * 'path'` for the size then `cat 'path'`, existence check `test -e 'path'` for
+ * overwrite=false, `rm -f 'path'` to remove an upload that did not complete. Paths are
+ * single-quoted with ''' escaping, and a relative path starting with '-' is written as
+ * "./-name" so the utilities do not read it as an option; an exec channel has no PTY so the
+ * bytes are binary-safe. An upload whose command ends without an exit status is confirmed by
+ * `wc -c` against the local size before it is reported as a success. The chosen method is
+ * reported in transferStatus().method and in the
+ * transferFinished() message ("Uploaded x to y (1.2 MB, SFTP)" / "... via shell"), and the
+ * SFTP probe result is cached per session so later transfers do not retry it. startTransfer() ->
  * transferStarted(), transferProgress() (throttled to ~10 Hz), transferFinished(ok, message).
  * Upload keeps the local permission bits when preservePermissions is set; download writes to
- * "<localPath>.part" and renames on success. cancelTransfer() aborts and removes a partial
- * download. requestRemoteHome() resolves "." through SFTP -> remoteHomeReceived("/root").
+ * "<localPath>.part" and renames on success. cancelTransfer() aborts and removes the partial
+ * file on either side: the ".part" of a download, and the truncated remote file of an upload
+ * (SFTP unlink / `rm -f`), so a cancelled upload never leaves a file that looks complete on the
+ * board; a failed upload (a read or write error, "No space left on device", a command that
+ * did not finish) and an upload cut short by close() are cleaned up the same way while the
+ * link is alive - close() itself reports the transfer with transferFinished(false, "Transfer
+ * aborted: the connection was closed") before stateChanged(Disconnected), the worker's own
+ * report belonging to the generation that was closed.
+ * requestRemoteHome() resolves "." through SFTP -> remoteHomeReceived("/root").
  *
  * write() while Connected sends to the channel (never blocks; returns size); while
  * Connecting/Reconnecting/Disconnected returns -1. notifyTerminalSize() sends a window-change
@@ -115,7 +137,16 @@ public:
         QString user;
         QString host;
         QString keyFile;                ///< Passphrase prompts only
-        bool canRemember = false;       ///< true when the profile has an id (SecretStore possible)
+        /// Always true for Password / Passphrase prompts: "Remember" stores the answer in
+        /// SecretStore under the profile id when the profile has one, otherwise under the
+        /// target ("ssh/target/<user@host:port>/password") for an ad-hoc connection, and under
+        /// the key file ("ssh/key/<absolute path>/passphrase") for a passphrase, so the same
+        /// key needs its passphrase only once whatever the target. Keyboard-interactive
+        /// prompts can be remembered the same way as a password (first hidden prompt only).
+        bool canRemember = false;
+        /// What "Remember" saves for, shown in the checkbox label: SshProfile::displayTarget()
+        /// ("root@host:2222"; the port is omitted when it is 22) or the normalized key file path.
+        QString rememberTarget;
     };
 
     enum class TransferDirection { Upload, Download };
@@ -138,6 +169,7 @@ public:
         QString remotePath;
         qint64 done = 0;
         qint64 total = -1;              ///< -1 when unknown
+        QString method;                 ///< "sftp" or "shell" once the transfer started (see class comment)
     };
 
     explicit SshConnection(QObject* parent = nullptr);

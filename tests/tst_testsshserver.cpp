@@ -195,6 +195,74 @@ int exitStatusOf(ssh_channel channel)
     return static_cast<int>(code);
 }
 
+/// What one exec command produced: stdout, stderr, the exit status (-1 when none arrived) and
+/// whether stdout reached EOF.
+struct ExecResult
+{
+    QByteArray out;
+    QByteArray err;
+    int status = -1;
+    bool eof = false;
+};
+
+/// Run `command` over a fresh exec channel: `input` is written to its stdin (then EOF), stdout
+/// and stderr are collected until EOF / the timeout, and the exit status is fetched. A write
+/// that fails because the command already ended is not an error here - the status tells.
+ExecResult execOn(ssh_session session, const char* command, const QByteArray& input = QByteArray(),
+                  int timeoutMs = kTimeoutMs)
+{
+    ExecResult r;
+    ChannelPtr channel(ssh_channel_new(session));
+    if (!channel || ssh_channel_open_session(channel.get()) != SSH_OK) {
+        return r;
+    }
+    if (ssh_channel_request_exec(channel.get(), command) != SSH_OK) {
+        return r;
+    }
+    if (!input.isEmpty()) {
+        writeAll(channel.get(), input);
+    }
+    ssh_channel_send_eof(channel.get());
+    auto drainStderr = [&] {
+        char buf[4096];
+        for (;;) {
+            const int n = ssh_channel_read_nonblocking(channel.get(), buf, sizeof(buf), 1);
+            if (n <= 0) {
+                return;
+            }
+            r.err.append(buf, n);
+        }
+    };
+    QDeadlineTimer deadline(timeoutMs);
+    while (!deadline.hasExpired()) {
+        drainStderr();
+        char buf[16384];
+        const int n = ssh_channel_read_timeout(channel.get(), buf, sizeof(buf), 0, 100);
+        if (n > 0) {
+            r.out.append(buf, n);
+        } else if (n == 0) {
+            r.eof = true;
+            break;
+        } else if (n == SSH_ERROR) {
+            break;
+        }
+    }
+    if (r.eof) {
+        r.status = exitStatusOf(channel.get());
+    }
+    drainStderr();
+    return r;
+}
+
+QByteArray fileContent(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    return file.readAll();
+}
+
 /// Authenticated shell channel with a PTY; null on failure.
 ChannelPtr openShell(ssh_session session, const char* term = "xterm-256color", int cols = 100, int rows = 40)
 {
@@ -307,10 +375,13 @@ private slots:
     void keyboardInteractive();
     void banner();
     void execCommand();
+    void execFileCommands();
+    void execCatRoundTrip();
     void bigOutput();
     void hangThenDrop();
     void refuseConnections();
     void sftpRoundTrip();
+    void sftpRefused();
     void sftpHandlerUnit();
     void directTcpip();
     void regenerateHostKey();
@@ -793,6 +864,155 @@ void Tst_testsshserver::execCommand()
     QCOMPARE(m_counters.shell, 0);
 }
 
+void Tst_testsshserver::execFileCommands()
+{
+    // Every exec file command (success and failure), exactly as the header documents them:
+    // quoted paths with the '\'' idiom, relative to rootDir, ".." refused, " && " chains.
+    const TestSshServer::Options o = options();
+    TestSshServer server(o);
+    attach(&server);
+    QVERIFY(server.start());
+    QString error;
+    SessionPtr session = connectTo(server.port(), env(), &error);
+    QVERIFY2(session, qPrintable(error));
+    QCOMPARE(ssh_userauth_password(session.get(), nullptr, "secret"), SSH_AUTH_SUCCESS);
+    const QDir root(o.rootDir);
+    ssh_session s = session.get();
+
+    // pwd: the canonical root, LF-terminated, nothing on stderr.
+    ExecResult r = execOn(s, "pwd");
+    QCOMPARE(r.status, 0);
+    QCOMPARE(QString::fromUtf8(r.out), QFileInfo(o.rootDir).canonicalFilePath() + QLatin1Char('\n'));
+    QVERIFY(r.err.isEmpty());
+
+    // cat > 'p' with a name holding a quote and a space; binary-safe (NUL, 0xFF, CR LF).
+    const QByteArray payload = QByteArrayLiteral("hello\r\nworld\0\xff\x01 end");
+    const char* quoted = "'it'\\''s here.bin'";
+    r = execOn(s, "cat > 'it'\\''s here.bin'", payload);
+    QCOMPARE(r.status, 0);
+    QVERIFY2(r.err.isEmpty(), r.err.constData());
+    QCOMPARE(fileContent(root.filePath(QStringLiteral("it's here.bin"))), payload);
+
+    // cat 'p' streams it back; wc -c < 'p' gives the size.
+    r = execOn(s, (QByteArray("cat ") + quoted).constData());
+    QCOMPARE(r.status, 0);
+    QCOMPARE(r.out, payload);
+    r = execOn(s, (QByteArray("wc -c < ") + quoted).constData());
+    QCOMPARE(r.status, 0);
+    QCOMPARE(r.out, QByteArray::number(payload.size()) + "\n");
+
+    // test -e: 0 for an existing name, 1 otherwise, silent both ways.
+    r = execOn(s, (QByteArray("test -e ") + quoted).constData());
+    QCOMPARE(r.status, 0);
+    QVERIFY(r.out.isEmpty());
+    QVERIFY(r.err.isEmpty());
+    r = execOn(s, "test -e 'nope.bin'");
+    QCOMPARE(r.status, 1);
+    QVERIFY(r.out.isEmpty());
+    QVERIFY(r.err.isEmpty());
+
+    // chmod on an existing file succeeds; on a missing one it fails with a message.
+    r = execOn(s, (QByteArray("chmod 600 ") + quoted).constData());
+    QCOMPARE(r.status, 0);
+    r = execOn(s, "chmod 644 'nope.bin'");
+    QCOMPARE(r.status, 1);
+    QVERIFY2(r.err.contains("chmod") && r.err.contains("No such file"), r.err.constData());
+
+    // mkdir -p, mv into the new directory, rm -f (twice: the second time nothing is there).
+    r = execOn(s, "mkdir -p 'sub/deep'");
+    QCOMPARE(r.status, 0);
+    QVERIFY(QFileInfo(root.filePath(QStringLiteral("sub/deep"))).isDir());
+    r = execOn(s, (QByteArray("mv ") + quoted + " 'sub/deep/moved.bin'").constData());
+    QCOMPARE(r.status, 0);
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("it's here.bin"))));
+    QCOMPARE(fileContent(root.filePath(QStringLiteral("sub/deep/moved.bin"))), payload);
+    r = execOn(s, "mv 'nope.bin' 'x'");
+    QCOMPARE(r.status, 1);
+    QVERIFY2(r.err.contains("mv") && r.err.contains("No such file"), r.err.constData());
+    r = execOn(s, "rm -f 'sub/deep/moved.bin'");
+    QCOMPARE(r.status, 0);
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("sub/deep/moved.bin"))));
+    r = execOn(s, "rm -f 'sub/deep/moved.bin'");
+    QCOMPARE(r.status, 0);
+    QVERIFY(r.err.isEmpty());
+
+    // Failures: a missing file for cat / wc, ".." anywhere, a lone "&".
+    r = execOn(s, "cat 'nope.bin'");
+    QCOMPARE(r.status, 1);
+    QVERIFY(r.out.isEmpty());
+    QVERIFY2(r.err.contains("cat: can't open 'nope.bin'"), r.err.constData());
+    r = execOn(s, "wc -c < 'nope.bin'");
+    QCOMPARE(r.status, 1);
+    QVERIFY2(r.err.contains("nope.bin") && r.err.contains("No such file"), r.err.constData());
+    r = execOn(s, "cat '../escape.bin'");
+    QCOMPARE(r.status, 1);
+    QVERIFY2(r.err.contains("Permission denied"), r.err.constData());
+    r = execOn(s, "cat > '../escape.bin'", QByteArrayLiteral("never"));
+    QCOMPARE(r.status, 1);
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("../escape.bin"))));
+    r = execOn(s, "test -e 'a' & test -e 'b'");
+    QCOMPARE(r.status, 2);
+    QVERIFY2(r.err.contains("syntax error"), r.err.constData());
+
+    // " && " chains: run in order, stop at the first failure (its status is the exit status).
+    r = execOn(s, "mkdir -p 'c' && cat > 'c/x' && chmod 644 'c/x' && test -e 'c/x'", QByteArrayLiteral("chained"));
+    QCOMPARE(r.status, 0);
+    QCOMPARE(fileContent(root.filePath(QStringLiteral("c/x"))), QByteArrayLiteral("chained"));
+    r = execOn(s, "test -e 'nope.bin' && cat > 'never'", QByteArrayLiteral("data"));
+    QCOMPARE(r.status, 1);
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("never"))));
+    r = execOn(s, "cat 'c/x' && pwd");
+    QCOMPARE(r.status, 0);
+    QCOMPARE(QString::fromUtf8(r.out), QStringLiteral("chained") + QFileInfo(o.rootDir).canonicalFilePath() + QLatin1Char('\n'));
+
+    // The scripted shell commands still run over exec as before.
+    r = execOn(s, "echo exec-ok");
+    QCOMPARE(r.status, 0);
+    QCOMPARE(r.out, QByteArray("exec-ok\r\n"));
+    QTRY_VERIFY_WITH_TIMEOUT(m_counters.execCommands.contains(QStringLiteral("cat 'c/x' && pwd")), kTimeoutMs);
+    QCOMPARE(server.lastExecCommand(), QStringLiteral("echo exec-ok"));
+    QCOMPARE(m_counters.shell, 0);
+}
+
+void Tst_testsshserver::execCatRoundTrip()
+{
+    // 2 MiB through `cat > 'p'` (stdin consumed until EOF) and back through `cat 'p'`
+    // (streamed as the window allows), through the raw libssh client API.
+    const TestSshServer::Options o = options();
+    TestSshServer server(o);
+    QVERIFY(server.start());
+    QString error;
+    SessionPtr session = connectTo(server.port(), env(), &error);
+    QVERIFY2(session, qPrintable(error));
+    QCOMPARE(ssh_userauth_password(session.get(), nullptr, "secret"), SSH_AUTH_SUCCESS);
+    const QByteArray payload = randomBytes(2 * 1024 * 1024);
+
+    ExecResult up = execOn(session.get(), "cat > 'big.bin'", payload, 60000);
+    QCOMPARE(up.status, 0);
+    QVERIFY2(up.err.isEmpty(), up.err.constData());
+    QVERIFY(up.out.isEmpty());
+    const QByteArray stored = fileContent(QDir(o.rootDir).filePath(QStringLiteral("big.bin")));
+    QCOMPARE(stored.size(), payload.size());
+    QVERIFY(stored == payload);
+
+    ExecResult size = execOn(session.get(), "wc -c < 'big.bin'");
+    QCOMPARE(size.status, 0);
+    QCOMPARE(size.out, QByteArray::number(payload.size()) + "\n");
+
+    ExecResult down = execOn(session.get(), "cat 'big.bin'", QByteArray(), 60000);
+    QCOMPARE(down.status, 0);
+    QVERIFY2(down.err.isEmpty(), down.err.constData());
+    QCOMPARE(down.out.size(), payload.size());
+    QVERIFY(down.out == payload);
+
+    // The shell still works on the same session afterwards.
+    ChannelPtr shell = openShell(session.get());
+    QVERIFY(shell);
+    QVERIFY(readUntil(shell.get(), "$ ").endsWith("$ "));
+    QVERIFY(writeAll(shell.get(), "echo after\r"));
+    QCOMPARE(readUntil(shell.get(), "after\r\n$ "), QByteArray("echo after\r\nafter\r\n$ "));
+}
+
 void Tst_testsshserver::bigOutput()
 {
     TestSshServer server(options());
@@ -1010,6 +1230,49 @@ void Tst_testsshserver::sftpRoundTrip()
     QVERIFY(writeAll(shell.get(), "echo both\r"));
     QCOMPARE(readUntil(shell.get(), "both\r\n$ "), QByteArray("echo both\r\nboth\r\n$ "));
     QCOMPARE(m_counters.sftp, 1);
+}
+
+void Tst_testsshserver::sftpRefused()
+{
+    // allowSftp = false: the subsystem request fails (sftp_new returns null), sftpRequested()
+    // still fires, and exec / shell keep working on the same session.
+    TestSshServer::Options o = options();
+    o.allowSftp = false;
+    TestSshServer server(o);
+    attach(&server);
+    QVERIFY(server.start());
+    QString error;
+    SessionPtr session = connectTo(server.port(), env(), &error);
+    QVERIFY2(session, qPrintable(error));
+    QCOMPARE(ssh_userauth_password(session.get(), nullptr, "secret"), SSH_AUTH_SUCCESS);
+
+    SftpPtr sftp(sftp_new(session.get()));
+    QVERIFY2(!sftp, "the sftp subsystem was accepted although allowSftp is false");
+    QVERIFY(ssh_is_connected(session.get()));
+    QTRY_COMPARE_WITH_TIMEOUT(m_counters.sftp, 1, kTimeoutMs);
+
+    ExecResult r = execOn(session.get(), "cat > 'x.txt'", QByteArrayLiteral("abc"));
+    QCOMPARE(r.status, 0);
+    r = execOn(session.get(), "cat 'x.txt'");
+    QCOMPARE(r.status, 0);
+    QCOMPARE(r.out, QByteArray("abc"));
+
+    ChannelPtr shell = openShell(session.get());
+    QVERIFY(shell);
+    QVERIFY(readUntil(shell.get(), "$ ").endsWith("$ "));
+    QVERIFY(writeAll(shell.get(), "echo both\r"));
+    QCOMPARE(readUntil(shell.get(), "both\r\n$ "), QByteArray("echo both\r\nboth\r\n$ "));
+    QCOMPARE(m_counters.sftp, 1);
+
+    // The default still serves SFTP.
+    TestSshServer normal(options());
+    QVERIFY(normal.start());
+    SessionPtr other = connectTo(normal.port(), env(), &error);
+    QVERIFY2(other, qPrintable(error));
+    QCOMPARE(ssh_userauth_password(other.get(), nullptr, "secret"), SSH_AUTH_SUCCESS);
+    SftpPtr served(sftp_new(other.get()));
+    QVERIFY2(served, ssh_get_error(other.get()));
+    QCOMPARE(sftp_init(served.get()), SSH_OK);
 }
 
 void Tst_testsshserver::sftpHandlerUnit()

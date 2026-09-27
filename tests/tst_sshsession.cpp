@@ -15,6 +15,7 @@
 // DialogResponder, the way a user would click them.
 
 #include <QtTest>
+#include <QElapsedTimer>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -22,6 +23,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -70,8 +72,9 @@ using State = Transport::State;
 
 constexpr int kSshTimeoutMs = 15000;        ///< a connect / a shell round trip to the in-process server
 constexpr int kDropTimeoutMs = 5000;        ///< a network cut is noticed within this
-constexpr int kTransferTimeoutMs = 60000;   ///< the SFTP transfers (256 KiB)
+constexpr int kTransferTimeoutMs = 60000;   ///< the SFTP transfers (256 KiB ... 50 MB)
 constexpr int kSimTimeoutMs = 10000;        ///< SIM:loopback round trips
+constexpr int kProbeTimeoutMs = 30000;      ///< a real OpenSSH server (WSL) answering a connect or a command
 
 const QString kUser = QStringLiteral("test");
 const QString kPassword = QStringLiteral("secret");
@@ -139,6 +142,60 @@ QString lastNonBlankLine(const TerminalWidget* terminal)
 int countLines(const TerminalWidget* terminal, const QString& exact)
 {
     return static_cast<int>(allLines(terminal).count(exact));
+}
+
+int countLinesStartingWith(const TerminalWidget* terminal, const QString& prefix)
+{
+    int n = 0;
+    const QStringList lines = allLines(terminal);
+    for (const QString& line : lines) {
+        if (line.startsWith(prefix)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+int countLinesContaining(const TerminalWidget* terminal, const QString& text)
+{
+    int n = 0;
+    const QStringList lines = allLines(terminal);
+    for (const QString& line : lines) {
+        if (line.contains(text)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+/// A real shell's prompt ("user@host:~$ ", "# ") is on the last line with text.
+bool realPromptShown(const TerminalWidget* terminal)
+{
+    const QString last = lastNonBlankLine(terminal);
+    return last.endsWith(QLatin1Char('$')) || last.endsWith(QLatin1Char('#'));
+}
+
+bool isReddish(const QColor& color)
+{
+    return color.red() > 150 && color.red() > color.green() + 60 && color.red() > color.blue() + 60;
+}
+
+QColor statusColor(const QLabel* label)
+{
+    return label->palette().color(QPalette::WindowText);
+}
+
+QString sha256Hex(const QByteArray& bytes)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+/// Single-quoted shell word ('' escaping), like the worker's shell fallback.
+QString shellQuote(const QString& path)
+{
+    QString quoted = path;
+    quoted.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+    return QLatin1Char('\'') + quoted + QLatin1Char('\'');
 }
 
 /// The colour in the middle of a tab's 10x10 state dot.
@@ -219,6 +276,7 @@ public:
     // ---- configuration ----
     QString password = kPassword;
     bool rememberHostKey = true;
+    bool rememberSecret = false;     ///< tick the Remember box of every AuthPromptDialog that shows one
     QMessageBox::StandardButton messageAnswer = QMessageBox::Yes;
     std::function<void(SshProfilesDialog*)> profilesHandler;
 
@@ -232,6 +290,7 @@ public:
     QStringList hostKeyFiles;        ///< labelKnownHosts per HostKeyDialog ("known_hosts file: <path>")
     QStringList authTargets;         ///< labelTarget per AuthPromptDialog ("test@127.0.0.1")
     QList<bool> authRememberVisible; ///< the "Remember" box per AuthPromptDialog
+    QStringList authRememberLabels;  ///< its caption per AuthPromptDialog ("Remember password for test@127.0.0.1:port")
     QList<bool> authMasked;          ///< password echo mode per AuthPromptDialog
     QStringList messageTitles;
     QStringList unexpected;          ///< class names of dialogs nothing here expected (rejected)
@@ -270,8 +329,12 @@ private:
             auto* buttons = child<QDialogButtonBox>(auth, "buttonBox");
             authTargets.append(target ? target->text() : QString());
             authRememberVisible.append(remember && remember->isVisible());
+            authRememberLabels.append(remember ? remember->text() : QString());
             authMasked.append(edit && edit->echoMode() == QLineEdit::Password);
             if (edit && buttons && buttons->button(QDialogButtonBox::Ok)) {
+                if (rememberSecret && remember && remember->isVisible()) {
+                    remember->setChecked(true);
+                }
                 QTest::keyClicks(edit, password);
                 buttons->button(QDialogButtonBox::Ok)->click();
             } else {
@@ -325,10 +388,17 @@ private slots:
     void adHocEnterConnectTransferDisconnect();
     void adHocEnterOnComboWidget();
     void adHocConnectButtonAndShellExit();
+    void adHocRememberPasswordSkipsPrompt();
 
     // ---- stored profiles --------------------------------------------------------------
     void storedProfileFromDialog();
     void sessionRestoreAfterClose();
+
+    // ---- file transfer through RemoteFileDialog ---------------------------------------
+    void transferDialogEdgeCases();
+    void transferWithoutSftpUsesShell();
+    void transferMethodSftpVsShell();
+    void probeRealServerTransfers();
 
     // ---- links dropping, other tabs, language, quitting -------------------------------
     void autoReconnectAfterDrop();
@@ -337,7 +407,13 @@ private slots:
     void closeWindowWhileConnected();
 
 private:
-    std::unique_ptr<TestSshServer> startServer(const QString& name, const QString& password = kPassword);
+    std::unique_ptr<TestSshServer> startServer(const QString& name, const QString& password = kPassword,
+                                               bool allowSftp = true);
+    /// sha256sum through the shell of the session itself (no WSL / sudo plumbing): true when a
+    /// line starting with `sha256` appears; false at once on "No such file" / "Permission denied".
+    bool remoteHashMatches(SessionWidget* session, const QString& remotePath, const QString& sha256);
+    /// Run a command in the real shell and wait for its prompt to come back.
+    bool realShellCommand(SessionWidget* session, const QString& command);
     QString tempPath(const QString& name) const;
     /// A new, absent known_hosts file made the AppSettings default (ad-hoc targets and profiles
     /// without their own file use it).
@@ -413,11 +489,13 @@ void Tst_sshsession::cleanupTestCase()
     QFile::remove(SshProfileStore::defaultFilePath());
 }
 
-std::unique_ptr<TestSshServer> Tst_sshsession::startServer(const QString& name, const QString& password)
+std::unique_ptr<TestSshServer> Tst_sshsession::startServer(const QString& name, const QString& password,
+                                                           bool allowSftp)
 {
     TestSshServer::Options options;
     options.user = kUser;
     options.password = password;
+    options.allowSftp = allowSftp;
     options.rootDir = tempPath(name + QStringLiteral("/root"));
     if (!QDir().mkpath(options.rootDir)) {
         return nullptr;
@@ -535,6 +613,47 @@ bool Tst_sshsession::shellRoundTrip(SessionWidget* session, const QString& text,
     return QTest::qWaitFor([terminal]() { return lastNonBlankLine(terminal) == QStringLiteral("$"); }, kSshTimeoutMs);
 }
 
+bool Tst_sshsession::realShellCommand(SessionWidget* session, const QString& command)
+{
+    TerminalWidget* terminal = session->terminal();
+    // The visible grid keeps its row count until it scrolls, so line counts say nothing: wait
+    // for the echo (on the old prompt line) and then for a fresh prompt line below it.
+    const QString marker = command.left(30);
+    const int echoBefore = countLinesContaining(terminal, marker);
+    session->sendBytes(command.toUtf8() + "\r");
+    if (!QTest::qWaitFor([terminal, marker, echoBefore]() {
+            return countLinesContaining(terminal, marker) > echoBefore && realPromptShown(terminal) &&
+                   !lastNonBlankLine(terminal).contains(marker);
+        }, kProbeTimeoutMs)) {
+        qWarning() << "no prompt after" << command << ":" << allText(terminal).right(1500);
+        return false;
+    }
+    return true;
+}
+
+bool Tst_sshsession::remoteHashMatches(SessionWidget* session, const QString& remotePath, const QString& sha256)
+{
+    TerminalWidget* terminal = session->terminal();
+    const int before = countLinesStartingWith(terminal, sha256);
+    const int errorsBefore = countLinesContaining(terminal, QStringLiteral("No such file")) +
+                             countLinesContaining(terminal, QStringLiteral("Permission denied"));
+    session->sendBytes(QStringLiteral("sha256sum %1\r").arg(shellQuote(remotePath)).toUtf8());
+    bool matched = false;
+    bool failed = false;
+    const bool answered = QTest::qWaitFor([&]() {
+        matched = countLinesStartingWith(terminal, sha256) > before;
+        failed = (countLinesContaining(terminal, QStringLiteral("No such file")) +
+                  countLinesContaining(terminal, QStringLiteral("Permission denied"))) > errorsBefore;
+        return matched || failed;
+    }, kProbeTimeoutMs);
+    if (!answered || !matched) {
+        qWarning() << "remote hash of" << remotePath << "does not match" << sha256 << ":" << allText(terminal).right(1500);
+        return false;
+    }
+    // Let the prompt return before the next command.
+    return QTest::qWaitFor([terminal]() { return realPromptShown(terminal); }, kProbeTimeoutMs);
+}
+
 // =======================================================================================
 // Ad-hoc targets typed into the bar
 // =======================================================================================
@@ -602,7 +721,9 @@ void Tst_sshsession::adHocEnterConnectTransferDisconnect()
     QVERIFY2(responder.hostKeyHeadlines.first().contains(QStringLiteral("can't be established")),
              qPrintable(responder.hostKeyHeadlines.first()));
     QCOMPARE(responder.authTargets, QStringList{QStringLiteral("test@127.0.0.1")});
-    QCOMPARE(responder.authRememberVisible, QList<bool>{false});   // no profile id: nowhere to remember
+    // v0.4 contract (SshConnection.h): an ad-hoc target can be remembered too, under the target.
+    QCOMPARE(responder.authRememberVisible, QList<bool>{true});
+    QCOMPARE(responder.authRememberLabels, QStringList{QStringLiteral("Remember password for %1").arg(target)});
     QCOMPARE(responder.authMasked, QList<bool>{true});
     QCOMPARE(hostKeySpy.count(), 1);
     const auto hostKeyInfo = hostKeySpy.at(0).at(0).value<SshConnection::HostKeyInfo>();
@@ -616,7 +737,8 @@ void Tst_sshsession::adHocEnterConnectTransferDisconnect()
     QCOMPARE(promptSpy.count(), 1);
     const auto prompt = promptSpy.at(0).at(0).value<SshConnection::AuthPrompt>();
     QCOMPARE(prompt.kind, SshConnection::PromptKind::Password);
-    QVERIFY(!prompt.canRemember);
+    QVERIFY(prompt.canRemember);                 // v0.4 contract
+    QCOMPARE(prompt.rememberTarget, target);     // "user@host:port"
     QCOMPARE(authSpy.count(), 1);
     QCOMPARE(authSpy.at(0).at(0).toString(), QStringLiteral("password"));
     // "Connect and remember" wrote exactly the server's line into the temporary file.
@@ -685,6 +807,8 @@ void Tst_sshsession::adHocEnterConnectTransferDisconnect()
     QSignalSpy finished(dialog, &RemoteFileDialog::transferFinished);
     QSignalSpy started(conn, &SshConnection::transferStarted);
     start->click();
+    QVERIFY2(status->text().startsWith(QStringLiteral("Uploading up.bin")), qPrintable(status->text()));
+    QVERIFY(!start->isEnabled());
     QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kTransferTimeoutMs);
     QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
     QCOMPARE(started.count(), 1);
@@ -692,7 +816,9 @@ void Tst_sshsession::adHocEnterConnectTransferDisconnect()
     QCOMPARE(child<QProgressBar>(dialog, "progressBar")->value(), 100);
     QVERIFY(start->isEnabled());   // idle again
     QVERIFY(!child<QPushButton>(dialog, "buttonCancel")->isEnabled());
+    QVERIFY(!isReddish(statusColor(status)));
     if (!finished.at(0).at(1).toString().isEmpty()) {
+        QCOMPARE(status->text(), finished.at(0).at(1).toString());   // the connection's own words
         QCOMPARE(w.statusBar()->currentMessage(), finished.at(0).at(1).toString());
     }
 
@@ -802,7 +928,7 @@ void Tst_sshsession::adHocEnterOnComboWidget()
     QCOMPARE(connectSpy.count(), 2);
     QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kSshTimeoutMs);
     QCOMPARE(responder.hostKeyDialogs, 1);   // remembered
-    QCOMPARE(responder.authDialogs, 2);      // ad-hoc: nowhere to remember the password
+    QCOMPARE(responder.authDialogs, 2);      // Remember was left unchecked: asked again
     QCOMPARE(server->connectionCount(), 2);
     action(w, "actionDisconnect")->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
@@ -842,7 +968,7 @@ void Tst_sshsession::adHocConnectButtonAndShellExit()
     QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kSshTimeoutMs);
     QCOMPARE(responder.hostKeyDialogs, 1);
     QCOMPARE(responder.authDialogs, 1);
-    QCOMPARE(responder.authRememberVisible, QList<bool>{false});
+    QCOMPARE(responder.authRememberVisible, QList<bool>{true});   // v0.4: offered for ad-hoc targets too
     QVERIFY2(responder.unexpected.isEmpty(), qPrintable(responder.unexpected.join(QStringLiteral(", "))));
     QCOMPARE(hostKeySpy.count(), 1);
     QCOMPARE(promptSpy.count(), 1);
@@ -1089,6 +1215,713 @@ void Tst_sshsession::sessionRestoreAfterClose()
     action(second, "actionDisconnect")->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
     responder.stop();
+}
+
+void Tst_sshsession::adHocRememberPasswordSkipsPrompt()
+{
+    // v0.4: Remember on an ad-hoc target stores the password under
+    // "ssh/target/<user@host:port>/password", so the reconnect from the bar needs no prompt.
+    // Depends on the ssh-core package: the worker fills AuthPrompt.rememberTarget and honours
+    // answerPrompt(..., remember = true) without a profile id.
+    auto server = startServer(QStringLiteral("adhoc-remember"));
+    QVERIFY(server);
+    const QString target = targetOf(*server);
+    freshKnownHosts(QStringLiteral("adhoc-remember"));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    action(w, "actionNewSshSession")->trigger();
+    SessionWidget* ssh = w.currentSession();
+    QVERIFY(ssh && ssh->isSsh());
+    SshConnectionBar* bar = ssh->sshConnectionBar();
+    auto* combo = child<QComboBox>(bar, "targetCombo");
+    auto* connectButton = child<QPushButton>(bar, "connectButton");
+    QVERIFY(combo && combo->lineEdit() && connectButton);
+    QTest::keyClicks(combo->lineEdit(), target);
+
+    SshConnection* conn = ssh->sshConnection();
+    QSignalSpy promptSpy(conn, &SshConnection::authPromptRequired);
+    DialogResponder responder;
+    responder.rememberSecret = true;   // the user ticks "Remember password for test@127.0.0.1:port"
+    QTest::keyClick(combo->lineEdit(), Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kSshTimeoutMs);
+    QCOMPARE(responder.hostKeyDialogs, 1);
+    QCOMPARE(responder.authDialogs, 1);
+    QCOMPARE(responder.authRememberVisible, QList<bool>{true});
+    QCOMPARE(responder.authRememberLabels, QStringList{QStringLiteral("Remember password for %1").arg(target)});
+    QVERIFY2(responder.unexpected.isEmpty(), qPrintable(responder.unexpected.join(QStringLiteral(", "))));
+    QCOMPARE(promptSpy.count(), 1);
+    const auto prompt = promptSpy.at(0).at(0).value<SshConnection::AuthPrompt>();
+    QVERIFY(prompt.canRemember);
+    QCOMPARE(prompt.rememberTarget, target);
+    const QString secretKey = QStringLiteral("ssh/target/%1/password").arg(target);
+    QTRY_VERIFY2(SecretStore::contains(secretKey), qPrintable(QStringLiteral("SecretStore has no ") + secretKey));
+    QCOMPARE(SecretStore::load(secretKey).value_or(QString()), kPassword);
+    QTRY_COMPARE_WITH_TIMEOUT(lastNonBlankLine(ssh->terminal()), QStringLiteral("$"), kSshTimeoutMs);
+    QVERIFY(shellRoundTrip(ssh, QStringLiteral("echo first"), QStringLiteral("first")));
+
+    // Disconnect from the bar, reconnect from the bar: the host key and the password are known.
+    QTest::mouseClick(connectButton, Qt::LeftButton);
+    QCOMPARE(ssh->transport()->state(), State::Disconnected);
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
+    QCOMPARE(connectButton->text(), QStringLiteral("Connect"));
+    QTest::mouseClick(connectButton, Qt::LeftButton);
+    QCOMPARE(ssh->transport()->state(), State::Connecting);
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kSshTimeoutMs);
+    QCOMPARE(responder.hostKeyDialogs, 1);
+    QCOMPARE(responder.authDialogs, 1);   // not asked again
+    QCOMPARE(promptSpy.count(), 1);
+    QCOMPARE(server->connectionCount(), 2);
+    QCOMPARE(server->lastAuthMethod(), QStringLiteral("password"));
+    QTRY_COMPARE_WITH_TIMEOUT(countLines(ssh->terminal(), QStringLiteral("welcome")), 2, kSshTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(lastNonBlankLine(ssh->terminal()), QStringLiteral("$"), kSshTimeoutMs);
+    QVERIFY(shellRoundTrip(ssh, QStringLiteral("echo remembered"), QStringLiteral("remembered")));
+
+    // The secret is in SecretStore only: never in the profile store's JSON.
+    if (QFile::exists(SshProfileStore::defaultFilePath())) {
+        QVERIFY(!readFile(SshProfileStore::defaultFilePath()).contains(kPassword.toUtf8()));
+    }
+
+    // The same target from a second tab: the remembered host key and password serve every
+    // session to it, so the connect from Session > Connect runs without a single question.
+    SessionWidget* second = w.newSshSession(target);
+    QVERIFY(second && second != ssh && second->isSsh());
+    QCOMPARE(w.currentSession(), second);
+    QCOMPARE(second->sshConnectionBar()->currentProfile().displayTarget(), target);
+    QSignalSpy secondPrompts(second->sshConnection(), &SshConnection::authPromptRequired);
+    QSignalSpy secondHostKeys(second->sshConnection(), &SshConnection::hostKeyVerificationRequired);
+    QVERIFY(connectFromAction(w, second));
+    QCOMPARE(secondPrompts.count(), 0);
+    QCOMPARE(secondHostKeys.count(), 0);
+    QCOMPARE(responder.hostKeyDialogs, 1);
+    QCOMPARE(responder.authDialogs, 1);
+    QCOMPARE(server->connectionCount(), 3);
+    QCOMPARE(server->activeConnections(), 2);
+    QCOMPARE(server->lastAuthMethod(), QStringLiteral("password"));
+    QVERIFY(shellRoundTrip(second, QStringLiteral("echo second"), QStringLiteral("second")));
+    QVERIFY(ssh->isConnected());   // the first tab is untouched
+
+    action(w, "actionDisconnect")->trigger();   // the second tab (current)
+    QCOMPARE(second->transport()->state(), State::Disconnected);
+    tabs(w)->setCurrentWidget(ssh);
+    QCOMPARE(w.currentSession(), ssh);
+    action(w, "actionDisconnect")->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
+    responder.stop();
+    QCOMPARE(responder.messageBoxes, 0);
+    QVERIFY2(responder.unexpected.isEmpty(), qPrintable(responder.unexpected.join(QStringLiteral(", "))));
+}
+
+// =======================================================================================
+// File transfer through RemoteFileDialog
+// =======================================================================================
+
+void Tst_sshsession::transferDialogEdgeCases()
+{
+    // The situations behind "upload/download is not working", against the in-process server
+    // (SFTP on, real files under its root): a Windows path in the remote field, a directory
+    // typed and started without leaving the field, "~", a missing remote file, Cancel half-way,
+    // a second transfer without reopening, the drag-and-drop entry, and a disconnect while the
+    // modeless dialog is open.
+    auto server = startServer(QStringLiteral("edge"));
+    QVERIFY(server);
+    const QString name = QStringLiteral("Edge box");
+    const QString rootDir = tempPath(QStringLiteral("edge/root"));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    const SshProfile stored = storeSilentProfile(w, *server, name);
+    QVERIFY(!stored.id.isEmpty());
+    SessionWidget* ssh = w.newSshSession(kProfileKeyPrefix + stored.id);
+    QVERIFY(connectFromAction(w, ssh));
+    SshConnection* conn = ssh->sshConnection();
+    DialogResponder responder;   // nothing may be asked (saved password, seeded known_hosts)
+
+    const QByteArray payload = randomBytes(256 * 1024);
+    const QString localUp = tempPath(QStringLiteral("edge/local/edge.bin"));
+    QVERIFY(writeFile(localUp, payload));
+    action(w, "actionUploadFile")->trigger();
+    auto* dialog = ssh->findChild<RemoteFileDialog*>();
+    QVERIFY(dialog);
+    QTRY_VERIFY(dialog->isVisible());
+    auto* start = child<QPushButton>(dialog, "buttonStart");
+    auto* cancel = child<QPushButton>(dialog, "buttonCancel");
+    auto* remote = child<QLineEdit>(dialog, "editRemotePath");
+    auto* local = child<QLineEdit>(dialog, "editLocalPath");
+    auto* status = child<QLabel>(dialog, "labelStatus");
+    QVERIFY(start && cancel && remote && local && status);
+    QSignalSpy finished(dialog, &RemoteFileDialog::transferFinished);
+    QSignalSpy started(conn, &SshConnection::transferStarted);
+    dialog->setLocalPath(localUp);
+    QTRY_VERIFY2_WITH_TIMEOUT(remote->text().endsWith(QStringLiteral("/edge.bin")), qPrintable(remote->text()),
+                              kSshTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!conn->remoteHome().isEmpty(), kSshTimeoutMs);
+    const QString home = conn->remoteHome();
+
+    // 1. A Windows path in the remote field (the two fields swapped): refused with a readable
+    //    line in red, nothing sent, Start still usable.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("C:\\boards\\edge.bin"));
+    QVERIFY(start->isEnabled());
+    start->click();
+    QVERIFY2(status->text().contains(QStringLiteral("Windows path")), qPrintable(status->text()));
+    QVERIFY(isReddish(statusColor(status)));
+    QCOMPARE(started.count(), 0);
+    QCOMPARE(finished.count(), 0);
+    QVERIFY(start->isEnabled());
+    // 1b. A folder as the local file (a build output directory dropped or typed): named as such,
+    //     not "not found".
+    local->clear();
+    QTest::keyClicks(local, QDir::toNativeSeparators(tempPath(QStringLiteral("edge/local"))));
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("/tmp/"));
+    start->click();
+    QVERIFY2(status->text().contains(QStringLiteral("is a folder")), qPrintable(status->text()));
+    QVERIFY(isReddish(statusColor(status)));
+    QCOMPARE(started.count(), 0);
+    QVERIFY(start->isEnabled());
+    dialog->setLocalPath(localUp);
+
+    // 2. A directory typed and Start clicked without leaving the field (what Alt+S does): the
+    //    field and the request both get the file name.
+    const QString subDir = rootDir + QStringLiteral("/sub");
+    QVERIFY(QDir().mkpath(subDir));
+    remote->clear();
+    QTest::keyClicks(remote, subDir + QLatin1Char('/'));
+    start->click();   // a programmatic click moves no focus: no editingFinished
+    QCOMPARE(remote->text(), subDir + QStringLiteral("/edge.bin"));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kTransferTimeoutMs);
+    QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+    QCOMPARE(started.count(), 1);
+    QCOMPARE(started.at(0).at(0).value<SshConnection::TransferRequest>().remotePath, subDir + QStringLiteral("/edge.bin"));
+    QCOMPARE(readFile(subDir + QStringLiteral("/edge.bin")), payload);
+    QCOMPARE(status->text(), finished.at(0).at(1).toString());
+    QVERIFY(!isReddish(statusColor(status)));
+    QVERIFY(start->isEnabled());
+
+    // 3. "~/<name>" goes to the remote home.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("~/tilde.bin"));
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kTransferTimeoutMs);
+    QVERIFY2(finished.at(1).at(0).toBool(), qPrintable(finished.at(1).at(1).toString()));
+    QCOMPARE(started.at(1).at(0).value<SshConnection::TransferRequest>().remotePath, home + QStringLiteral("/tilde.bin"));
+    QCOMPARE(readFile(QDir(rootDir).filePath(QStringLiteral("tilde.bin"))), payload);
+
+    // 4. A remote file that does not exist: the connection's message in red, the dialog usable.
+    const QString downDir = tempPath(QStringLiteral("edge/down"));
+    QVERIFY(QDir().mkpath(downDir));
+    dialog->setDirection(SshConnection::TransferDirection::Download);
+    dialog->setRemotePath(rootDir + QStringLiteral("/missing.bin"));
+    dialog->setLocalPath(downDir + QStringLiteral("/missing.bin"));
+    QVERIFY(start->isEnabled());
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, kTransferTimeoutMs);
+    QVERIFY(!finished.at(2).at(0).toBool());
+    const QString missingMessage = finished.at(2).at(1).toString();
+    QVERIFY2(missingMessage.contains(QStringLiteral("missing.bin")), qPrintable(missingMessage));
+    QCOMPARE(status->text(), missingMessage);
+    QVERIFY(isReddish(statusColor(status)));
+    QVERIFY(start->isEnabled());
+    QVERIFY(!cancel->isEnabled());
+    QVERIFY(remote->isEnabled());
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/missing.bin")));
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/missing.bin.part")));
+    QCOMPARE(w.statusBar()->currentMessage(), missingMessage);
+
+    // 5. Cancel half-way through a large download: no .part left, the dialog usable at once.
+    const QByteArray big = randomBytes(16 * 1024 * 1024);
+    QVERIFY(writeFile(QDir(rootDir).filePath(QStringLiteral("big.bin")), big));
+    dialog->setRemotePath(rootDir + QStringLiteral("/big.bin"));
+    dialog->setLocalPath(downDir + QStringLiteral("/big.bin"));
+    bool cancelled = false;
+    QObject hook;
+    connect(conn, &SshConnection::transferProgress, &hook, [&](qint64 done, qint64 total) {
+        if (!cancelled && done > 0 && done < total) {
+            cancelled = true;
+            cancel->click();
+        }
+    });
+    start->click();
+    QVERIFY(cancel->isEnabled());
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, kTransferTimeoutMs);
+    QObject::disconnect(conn, &SshConnection::transferProgress, &hook, nullptr);
+    QVERIFY(cancelled);
+    QVERIFY(!finished.at(3).at(0).toBool());
+    QVERIFY2(finished.at(3).at(1).toString().contains(QStringLiteral("cancel"), Qt::CaseInsensitive),
+             qPrintable(finished.at(3).at(1).toString()));
+    QVERIFY(isReddish(statusColor(status)));
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/big.bin.part")));
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/big.bin")));
+    QVERIFY(start->isEnabled());
+    QVERIFY(!cancel->isEnabled());
+
+    // 6. The same download again, complete this time, in the same dialog.
+    start->click();
+    QVERIFY2(status->text().startsWith(QStringLiteral("Downloading big.bin")), qPrintable(status->text()));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 5, kTransferTimeoutMs);
+    QVERIFY2(finished.at(4).at(0).toBool(), qPrintable(finished.at(4).at(1).toString()));
+    QCOMPARE(readFile(downDir + QStringLiteral("/big.bin")), big);
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/big.bin.part")));
+    QCOMPARE(child<QProgressBar>(dialog, "progressBar")->value(), 100);
+
+    // 7. The drag-and-drop entry: uploadFile(path) presets the local file, the remote name
+    //    follows it into the directory used last, Start works.
+    child<QPushButton>(dialog, "buttonClose")->click();
+    QVERIFY(!dialog->isVisible());
+    const QString dropped = tempPath(QStringLiteral("edge/local/dropped.bin"));
+    QVERIFY(writeFile(dropped, payload));
+    ssh->uploadFile(dropped);
+    QTRY_VERIFY(dialog->isVisible());
+    QVERIFY(child<QRadioButton>(dialog, "radioUpload")->isChecked());
+    QCOMPARE(QDir::fromNativeSeparators(local->text()), dropped);
+    QTRY_COMPARE(remote->text(), rootDir + QStringLiteral("/dropped.bin"));
+    QVERIFY(start->isEnabled());
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 6, kTransferTimeoutMs);
+    QVERIFY2(finished.at(5).at(0).toBool(), qPrintable(finished.at(5).at(1).toString()));
+    QCOMPARE(readFile(QDir(rootDir).filePath(QStringLiteral("dropped.bin"))), payload);
+
+    // 8. The modeless dialog outlives a disconnect and works again after the reconnect.
+    action(w, "actionDisconnect")->trigger();
+    QCOMPARE(ssh->transport()->state(), State::Disconnected);
+    QTRY_COMPARE(status->text(), QStringLiteral("Not connected."));
+    QVERIFY(!start->isEnabled());
+    QCOMPARE(start->toolTip(), QStringLiteral("Connect the session first."));
+    QVERIFY(dialog->isVisible());
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
+    QVERIFY(connectFromAction(w, ssh));
+    QTRY_COMPARE(status->text(), QStringLiteral("Ready."));
+    QTRY_VERIFY(start->isEnabled());
+    dialog->setRemotePath(rootDir + QStringLiteral("/again.bin"));
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 7, kTransferTimeoutMs);
+    QVERIFY2(finished.at(6).at(0).toBool(), qPrintable(finished.at(6).at(1).toString()));
+    QCOMPARE(readFile(QDir(rootDir).filePath(QStringLiteral("again.bin"))), payload);
+    QCOMPARE(started.count(), 6);   // seven Starts; the missing remote file failed before transferStarted()
+
+    child<QPushButton>(dialog, "buttonClose")->click();
+    action(w, "actionDisconnect")->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
+    responder.stop();
+    QCOMPARE(responder.hostKeyDialogs, 0);
+    QCOMPARE(responder.authDialogs, 0);
+    QCOMPARE(responder.messageBoxes, 0);
+}
+
+void Tst_sshsession::transferWithoutSftpUsesShell()
+{
+    // A server that refuses the "sftp" subsystem (dropbear on a buildroot board): the transfer
+    // goes through the exec-channel fallback and the dialog says so. Depends on the ssh-core
+    // package (the SshWorker fallback) and the test-server package (Options::allowSftp).
+    auto server = startServer(QStringLiteral("noSftp"), kPassword, /*allowSftp=*/false);
+    QVERIFY(server);
+    const QString name = QStringLiteral("Dropbear box");
+    const QString rootDir = tempPath(QStringLiteral("noSftp/root"));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    const SshProfile stored = storeSilentProfile(w, *server, name);
+    QVERIFY(!stored.id.isEmpty());
+    SessionWidget* ssh = w.newSshSession(kProfileKeyPrefix + stored.id);
+    int sftpRequests = 0;
+    QObject sftpHook;
+    connect(server.get(), &TestSshServer::sftpRequested, &sftpHook, [&sftpRequests]() { ++sftpRequests; },
+            Qt::QueuedConnection);   // emitted on the server's client thread
+    QVERIFY(connectFromAction(w, ssh));
+    SshConnection* conn = ssh->sshConnection();
+    DialogResponder responder;
+
+    const QByteArray payload = randomBytes(256 * 1024);
+    const QString localUp = tempPath(QStringLiteral("noSftp/local/shell-up.bin"));
+    QVERIFY(writeFile(localUp, payload));
+    action(w, "actionUploadFile")->trigger();
+    auto* dialog = ssh->findChild<RemoteFileDialog*>();
+    QVERIFY(dialog);
+    QTRY_VERIFY(dialog->isVisible());
+    auto* start = child<QPushButton>(dialog, "buttonStart");
+    auto* remote = child<QLineEdit>(dialog, "editRemotePath");
+    auto* status = child<QLabel>(dialog, "labelStatus");
+    QVERIFY(start && remote && status);
+    QSignalSpy finished(dialog, &RemoteFileDialog::transferFinished);
+    QStringList methods;
+    QStringList statusAtStart;
+    QObject hook;
+    connect(conn, &SshConnection::transferStarted, &hook, [&](const SshConnection::TransferRequest&) {
+        methods.append(conn->transferStatus().method);
+        statusAtStart.append(status->text());   // the dialog's slot ran first (connected earlier)
+    });
+
+    // No SFTP: when the remote home cannot be resolved the dialog proposes the bare file name
+    // (relative to the login directory = the server root) instead of leaving Start disabled; a
+    // worker that resolves the home through the shell proposes <home>/<name> as usual.
+    dialog->setLocalPath(localUp);
+    QTRY_VERIFY2_WITH_TIMEOUT(remote->text().endsWith(QStringLiteral("shell-up.bin")), qPrintable(remote->text()),
+                              kSshTimeoutMs);
+    qInfo() << "no-SFTP upload destination proposed:" << remote->text();
+    QTRY_VERIFY(start->isEnabled());
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kTransferTimeoutMs);
+    QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+    QCOMPARE(methods, QStringList{QStringLiteral("shell")});
+    QCOMPARE(statusAtStart, QStringList{QStringLiteral("Uploading shell-up.bin via shell (cat)...")});
+    QVERIFY2(finished.at(0).at(1).toString().contains(QStringLiteral("shell")), qPrintable(finished.at(0).at(1).toString()));
+    QCOMPARE(status->text(), finished.at(0).at(1).toString());
+    QCOMPARE(readFile(QDir(rootDir).filePath(QStringLiteral("shell-up.bin"))), payload);
+    QVERIFY2(server->lastExecCommand().contains(QStringLiteral("shell-up.bin'")), qPrintable(server->lastExecCommand()));
+
+    // Download it back through the shell.
+    const QString localDown = tempPath(QStringLiteral("noSftp/local/shell-down.bin"));
+    dialog->setDirection(SshConnection::TransferDirection::Download);
+    dialog->setRemotePath(QStringLiteral("shell-up.bin"));
+    dialog->setLocalPath(localDown);
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kTransferTimeoutMs);
+    QVERIFY2(finished.at(1).at(0).toBool(), qPrintable(finished.at(1).at(1).toString()));
+    QCOMPARE(methods.size(), 2);
+    QCOMPARE(methods.at(1), QStringLiteral("shell"));
+    QCOMPARE(statusAtStart.at(1), QStringLiteral("Downloading shell-up.bin via shell (cat)..."));
+    QCOMPARE(readFile(localDown), payload);
+    QVERIFY(!QFileInfo::exists(localDown + QStringLiteral(".part")));
+    // The SFTP probe is made exactly once per session (before the first transfer), not once
+    // per transfer - and it did happen: a count of 0 would mean the fallback was never probed.
+    QTRY_COMPARE_WITH_TIMEOUT(sftpRequests, 1, kSshTimeoutMs);   // queued counts from the server thread
+    // The shell kept working next to the exec channels.
+    QVERIFY(shellRoundTrip(ssh, QStringLiteral("echo shell-ok"), QStringLiteral("shell-ok")));
+
+    child<QPushButton>(dialog, "buttonClose")->click();
+    action(w, "actionDisconnect")->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(server->activeConnections(), 0, kSshTimeoutMs);
+    responder.stop();
+    QCOMPARE(responder.authDialogs, 0);
+    QCOMPARE(responder.messageBoxes, 0);
+}
+
+void Tst_sshsession::transferMethodSftpVsShell()
+{
+    // The two transfer methods side by side, through the real RemoteFileDialog of two tabs in
+    // one window: the server with SFTP reports "via SFTP" / "(..., SFTP)", the one refusing the
+    // subsystem (Options::allowSftp = false, a dropbear-like box) "via shell (cat)" /
+    // "(..., via shell)"; both land the same file byte for byte and bring it back. Cross-package:
+    // the ssh-core fallback, the test server's allowSftp and the dialog's method texts.
+    auto sftpServer = startServer(QStringLiteral("method-sftp"));
+    auto shellServer = startServer(QStringLiteral("method-shell"), kPassword, /*allowSftp=*/false);
+    QVERIFY(sftpServer && shellServer);
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    const SshProfile sftpProfile = storeSilentProfile(w, *sftpServer, QStringLiteral("SFTP box"));
+    const SshProfile shellProfile = storeSilentProfile(w, *shellServer, QStringLiteral("Shell box"));
+    QVERIFY(!sftpProfile.id.isEmpty() && !shellProfile.id.isEmpty());
+    DialogResponder responder;
+    const QByteArray payload = randomBytes(300 * 1024 + 17);
+    const QString localUp = tempPath(QStringLiteral("method/local/fw.bin"));
+    QVERIFY(writeFile(localUp, payload));
+
+    struct Method
+    {
+        const char* label;
+        const SshProfile* profile;
+        QString rootDir;
+        QString name;      ///< SshConnection::transferStatus().method
+        QString running;   ///< the tail of the dialog's status line once the transfer started
+        QString suffix;    ///< the end of the connection's finished message
+    };
+    const Method methods[] = {
+        {"sftp", &sftpProfile, tempPath(QStringLiteral("method-sftp/root")), QStringLiteral("sftp"),
+         QStringLiteral("via SFTP..."), QStringLiteral(", SFTP)")},
+        {"shell", &shellProfile, tempPath(QStringLiteral("method-shell/root")), QStringLiteral("shell"),
+         QStringLiteral("via shell (cat)..."), QStringLiteral(", via shell)")},
+    };
+    for (const Method& m : methods) {
+        SessionWidget* ssh = w.newSshSession(kProfileKeyPrefix + m.profile->id);
+        QVERIFY2(connectFromAction(w, ssh), m.label);
+        SshConnection* conn = ssh->sshConnection();
+        action(w, "actionUploadFile")->trigger();
+        auto* dialog = ssh->findChild<RemoteFileDialog*>();
+        QVERIFY(dialog);
+        QTRY_VERIFY(dialog->isVisible());
+        auto* start = child<QPushButton>(dialog, "buttonStart");
+        auto* status = child<QLabel>(dialog, "labelStatus");
+        QVERIFY(start && status);
+        QSignalSpy finished(dialog, &RemoteFileDialog::transferFinished);
+        QStringList methodsSeen;
+        QStringList runningLines;
+        QObject hook;
+        connect(conn, &SshConnection::transferStarted, &hook, [&](const SshConnection::TransferRequest&) {
+            methodsSeen.append(conn->transferStatus().method);
+            runningLines.append(status->text());   // the dialog's own slot ran first (connected earlier)
+        });
+
+        dialog->setLocalPath(localUp);
+        dialog->setRemotePath(QStringLiteral("fw.bin"));   // relative: the login directory = the server root
+        QTRY_VERIFY(start->isEnabled());
+        start->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kTransferTimeoutMs);
+        QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+        const QString uploaded = finished.at(0).at(1).toString();
+        QVERIFY2(uploaded.startsWith(QStringLiteral("Uploaded fw.bin to fw.bin (")) && uploaded.endsWith(m.suffix),
+                 qPrintable(uploaded));
+        QCOMPARE(status->text(), uploaded);
+        QVERIFY(!isReddish(statusColor(status)));
+        QCOMPARE(methodsSeen, QStringList{m.name});
+        QCOMPARE(runningLines, QStringList{QStringLiteral("Uploading fw.bin ") + m.running});
+        QCOMPARE(readFile(QDir(m.rootDir).filePath(QStringLiteral("fw.bin"))), payload);
+
+        const QString localDown = tempPath(QStringLiteral("method/local/%1-down.bin").arg(QLatin1String(m.label)));
+        dialog->setDirection(SshConnection::TransferDirection::Download);
+        dialog->setRemotePath(QStringLiteral("fw.bin"));
+        dialog->setLocalPath(localDown);
+        QVERIFY(start->isEnabled());
+        start->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kTransferTimeoutMs);
+        QVERIFY2(finished.at(1).at(0).toBool(), qPrintable(finished.at(1).at(1).toString()));
+        const QString downloaded = finished.at(1).at(1).toString();
+        QVERIFY2(downloaded.startsWith(QStringLiteral("Downloaded fw.bin to ")) && downloaded.endsWith(m.suffix),
+                 qPrintable(downloaded));
+        QCOMPARE(methodsSeen.size(), 2);
+        QCOMPARE(methodsSeen.at(1), m.name);
+        QCOMPARE(runningLines.at(1), QStringLiteral("Downloading fw.bin ") + m.running);
+        QCOMPARE(readFile(localDown), payload);
+        QVERIFY(!QFileInfo::exists(localDown + QStringLiteral(".part")));
+        child<QPushButton>(dialog, "buttonClose")->click();
+        QVERIFY(shellRoundTrip(ssh, QStringLiteral("echo ") + QLatin1String(m.label), QLatin1String(m.label)));
+    }
+
+    // Both tabs are connected; Session > Disconnect on each.
+    QCOMPARE(w.sessionCount(), 3);
+    for (int i = 2; i >= 1; --i) {
+        tabs(w)->setCurrentIndex(i);
+        SessionWidget* session = w.currentSession();
+        QVERIFY(session->isSsh() && session->isConnected());
+        action(w, "actionDisconnect")->trigger();
+        QCOMPARE(session->transport()->state(), State::Disconnected);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(sftpServer->activeConnections(), 0, kSshTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(shellServer->activeConnections(), 0, kSshTimeoutMs);
+    responder.stop();
+    QCOMPARE(responder.hostKeyDialogs, 0);
+    QCOMPARE(responder.authDialogs, 0);
+    QCOMPARE(responder.messageBoxes, 0);
+}
+
+void Tst_sshsession::probeRealServerTransfers()
+{
+    // The user's report reproduced against a real OpenSSH server (the WSL sshd during
+    // development): New SSH Session, target + Enter, host key remembered into a temporary
+    // known_hosts, password typed into the prompt, then every transfer path of the dialog.
+    // Runs only with SU_SSH_PROBE_TARGET / SU_SSH_PROBE_PASSWORD set. Remote files are
+    // verified through the session's own shell (sha256sum), so no WSL / sudo plumbing is needed.
+    const QString target = qEnvironmentVariable("SU_SSH_PROBE_TARGET").trimmed();
+    const QString password = qEnvironmentVariable("SU_SSH_PROBE_PASSWORD");
+    if (target.isEmpty() || password.isEmpty()) {
+        QSKIP("set SU_SSH_PROBE_TARGET=user@host[:port] and SU_SSH_PROBE_PASSWORD to probe a real OpenSSH server");
+    }
+    const QString knownHosts = freshKnownHosts(QStringLiteral("probe"));
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    action(w, "actionNewSshSession")->trigger();
+    SessionWidget* ssh = w.currentSession();
+    QVERIFY(ssh && ssh->isSsh());
+    SshConnectionBar* bar = ssh->sshConnectionBar();
+    auto* combo = child<QComboBox>(bar, "targetCombo");
+    auto* connectButton = child<QPushButton>(bar, "connectButton");
+    QVERIFY(combo && combo->lineEdit() && connectButton);
+    QTest::keyClicks(combo->lineEdit(), target);
+    QVERIFY(bar->hasValidTarget());
+    SshConnection* conn = ssh->sshConnection();
+    QStringList errors;
+    QObject errorHook;
+    connect(conn, &Transport::errorOccurred, &errorHook, [&errors](const QString& message) { errors.append(message); });
+    DialogResponder responder;
+    responder.password = password;
+    responder.rememberHostKey = true;
+
+    QTest::keyClick(combo->lineEdit(), Qt::Key_Return);
+    QCOMPARE(ssh->transport()->state(), State::Connecting);
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kProbeTimeoutMs);
+    QCOMPARE(responder.hostKeyDialogs, 1);
+    QCOMPARE(responder.authDialogs, 1);
+    QVERIFY2(responder.unexpected.isEmpty(), qPrintable(responder.unexpected.join(QStringLiteral(", "))));
+    QCOMPARE(knownHostsLines(knownHosts).size(), 1);
+    TerminalWidget* terminal = ssh->terminal();
+    QTRY_VERIFY2_WITH_TIMEOUT(realPromptShown(terminal), qPrintable(allText(terminal).right(1000)), kProbeTimeoutMs);
+    QTRY_VERIFY2_WITH_TIMEOUT(!conn->remoteHome().isEmpty(), "remote home not resolved", kProbeTimeoutMs);
+    const QString home = conn->remoteHome();
+    QVERIFY2(home.startsWith(QLatin1Char('/')), qPrintable(home));
+    qInfo() << "probe: connected to" << target << "-" << conn->serverVersion() << "- home" << home;
+
+    // 1. Upload a 3 MB random file with a space and a non-ASCII character in its name; the remote
+    //    path is the dialog's default (<home>/<name>).
+    const QString name = QStringLiteral(u"probe upload \u00FC.bin");
+    const QByteArray payload = randomBytes(3 * 1024 * 1024);
+    const QString sha = sha256Hex(payload);
+    const QString localUp = tempPath(QStringLiteral("probe/local/") + name);
+    QVERIFY(writeFile(localUp, payload));
+    action(w, "actionUploadFile")->trigger();
+    auto* dialog = ssh->findChild<RemoteFileDialog*>();
+    QVERIFY(dialog);
+    QTRY_VERIFY(dialog->isVisible());
+    auto* start = child<QPushButton>(dialog, "buttonStart");
+    auto* cancel = child<QPushButton>(dialog, "buttonCancel");
+    auto* remote = child<QLineEdit>(dialog, "editRemotePath");
+    auto* local = child<QLineEdit>(dialog, "editLocalPath");
+    auto* status = child<QLabel>(dialog, "labelStatus");
+    auto* progress = child<QProgressBar>(dialog, "progressBar");
+    QVERIFY(start && cancel && remote && local && status && progress);
+    QSignalSpy finished(dialog, &RemoteFileDialog::transferFinished);
+    QSignalSpy started(conn, &SshConnection::transferStarted);
+    QSignalSpy progressSpy(conn, &SshConnection::transferProgress);
+    dialog->setLocalPath(localUp);
+    QTRY_COMPARE_WITH_TIMEOUT(remote->text(), home + QLatin1Char('/') + name, kProbeTimeoutMs);
+    QTRY_VERIFY(start->isEnabled());
+    start->click();
+    QVERIFY2(status->text().startsWith(QStringLiteral("Uploading ") + name), qPrintable(status->text()));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kTransferTimeoutMs);
+    QVERIFY2(finished.at(0).at(0).toBool(), qPrintable(finished.at(0).at(1).toString()));
+    qInfo() << "probe: upload 1:" << finished.at(0).at(1).toString() << "method" << conn->transferStatus().method;
+    QCOMPARE(status->text(), finished.at(0).at(1).toString());
+    QVERIFY(!isReddish(statusColor(status)));
+    QCOMPARE(progress->value(), 100);
+    QVERIFY(progressSpy.count() >= 2);   // 0 and the end at least
+    QVERIFY(start->isEnabled());
+    QVERIFY(remoteHashMatches(ssh, home + QLatin1Char('/') + name, sha));
+
+    // 2. An explicit directory with a trailing slash, typed, then Start.
+    remote->clear();
+    QTest::keyClicks(remote, QStringLiteral("/tmp/"));
+    QTest::mouseClick(start, Qt::LeftButton);
+    QCOMPARE(remote->text(), QStringLiteral("/tmp/") + name);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kTransferTimeoutMs);
+    QVERIFY2(finished.at(1).at(0).toBool(), qPrintable(finished.at(1).at(1).toString()));
+    QCOMPARE(started.at(1).at(0).value<SshConnection::TransferRequest>().remotePath, QStringLiteral("/tmp/") + name);
+    QVERIFY(remoteHashMatches(ssh, QStringLiteral("/tmp/") + name, sha));
+
+    // 3. Download it back into a temporary directory, byte for byte, no .part left behind.
+    const QString downDir = tempPath(QStringLiteral("probe/down"));
+    QVERIFY(QDir().mkpath(downDir));
+    dialog->setDirection(SshConnection::TransferDirection::Download);
+    dialog->setRemotePath(QStringLiteral("/tmp/") + name);
+    dialog->setLocalPath(downDir + QLatin1Char('/') + name);
+    start->click();
+    QVERIFY2(status->text().startsWith(QStringLiteral("Downloading ") + name), qPrintable(status->text()));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, kTransferTimeoutMs);
+    QVERIFY2(finished.at(2).at(0).toBool(), qPrintable(finished.at(2).at(1).toString()));
+    qInfo() << "probe: download:" << finished.at(2).at(1).toString();
+    QCOMPARE(readFile(downDir + QLatin1Char('/') + name), payload);
+    QVERIFY(!QFileInfo::exists(downDir + QLatin1Char('/') + name + QStringLiteral(".part")));
+
+    // 4. A remote path that does not exist: a readable error in red, the dialog usable afterwards.
+    const QString missing = QStringLiteral("/tmp/probe-missing-%1.bin").arg(QRandomGenerator::global()->generate());
+    dialog->setRemotePath(missing);
+    dialog->setLocalPath(downDir + QStringLiteral("/missing.bin"));
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, kTransferTimeoutMs);
+    QVERIFY(!finished.at(3).at(0).toBool());
+    const QString missingMessage = finished.at(3).at(1).toString();
+    qInfo() << "probe: missing file:" << missingMessage;
+    QVERIFY2(missingMessage.contains(missing), qPrintable(missingMessage));
+    QCOMPARE(status->text(), missingMessage);
+    QVERIFY(isReddish(statusColor(status)));
+    QVERIFY(start->isEnabled());
+    QVERIFY(!cancel->isEnabled());
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/missing.bin")));
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/missing.bin.part")));
+
+    // 5. Cancel half-way through a 50 MB upload to /tmp/, then upload it completely in the same
+    //    dialog (a second transfer without reopening), then cancel half-way through its download.
+    const QByteArray big = randomBytes(50 * 1024 * 1024);
+    const QString shaBig = sha256Hex(big);
+    const QString localBig = tempPath(QStringLiteral("probe/local/probe-big.bin"));
+    QVERIFY(writeFile(localBig, big));
+    dialog->setDirection(SshConnection::TransferDirection::Upload);
+    dialog->setLocalPath(localBig);
+    dialog->setRemotePath(QStringLiteral("/tmp/"));
+    QCOMPARE(remote->text(), QStringLiteral("/tmp/probe-big.bin"));
+    bool cancelled = false;
+    QObject hook;
+    connect(conn, &SshConnection::transferProgress, &hook, [&](qint64 done, qint64 total) {
+        if (!cancelled && done > 0 && done < total) {
+            cancelled = true;
+            cancel->click();
+        }
+    });
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 5, kTransferTimeoutMs);
+    QVERIFY(cancelled);
+    QVERIFY(!finished.at(4).at(0).toBool());
+    qInfo() << "probe: cancelled upload:" << finished.at(4).at(1).toString();
+    QVERIFY2(finished.at(4).at(1).toString().contains(QStringLiteral("cancel"), Qt::CaseInsensitive),
+             qPrintable(finished.at(4).at(1).toString()));
+    QVERIFY(isReddish(statusColor(status)));
+    QVERIFY(start->isEnabled());
+    QVERIFY(!cancel->isEnabled());
+    cancelled = true;   // the hook stays connected but idle for the complete upload
+    QElapsedTimer uploadClock;
+    uploadClock.start();
+    start->click();
+    QVERIFY(!start->isEnabled());
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 6, kTransferTimeoutMs);
+    const qint64 uploadMs = qMax<qint64>(1, uploadClock.elapsed());
+    QVERIFY2(finished.at(5).at(0).toBool(), qPrintable(finished.at(5).at(1).toString()));
+    // Informational (the pipelined SFTP path of v0.4): the rate to this server, no floor asserted.
+    qInfo() << "probe: 50 MB upload:" << finished.at(5).at(1).toString() << "in" << uploadMs << "ms ="
+            << QString::number(static_cast<double>(big.size()) / 1048576.0 / (static_cast<double>(uploadMs) / 1000.0), 'f', 1)
+            << "MiB/s";
+    QVERIFY(remoteHashMatches(ssh, QStringLiteral("/tmp/probe-big.bin"), shaBig));
+    dialog->setDirection(SshConnection::TransferDirection::Download);
+    dialog->setRemotePath(QStringLiteral("/tmp/probe-big.bin"));
+    dialog->setLocalPath(downDir + QStringLiteral("/probe-big.bin"));
+    cancelled = false;
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 7, kTransferTimeoutMs);
+    QObject::disconnect(conn, &SshConnection::transferProgress, &hook, nullptr);
+    QVERIFY(cancelled);
+    QVERIFY(!finished.at(6).at(0).toBool());
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/probe-big.bin.part")));
+    QVERIFY(!QFileInfo::exists(downDir + QStringLiteral("/probe-big.bin")));
+    QVERIFY(start->isEnabled());
+
+    // 6. The drag-and-drop entry: SessionWidget::uploadFile(path) with the local path preset.
+    child<QPushButton>(dialog, "buttonClose")->click();
+    QVERIFY(!dialog->isVisible());
+    ssh->uploadFile(localUp);
+    QTRY_VERIFY(dialog->isVisible());
+    QVERIFY(child<QRadioButton>(dialog, "radioUpload")->isChecked());
+    QCOMPARE(QDir::fromNativeSeparators(local->text()), localUp);
+    QTRY_COMPARE(remote->text(), QStringLiteral("/tmp/") + name);   // the directory used last
+    QVERIFY(start->isEnabled());
+    start->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 8, kTransferTimeoutMs);
+    QVERIFY2(finished.at(7).at(0).toBool(), qPrintable(finished.at(7).at(1).toString()));
+    QVERIFY(remoteHashMatches(ssh, QStringLiteral("/tmp/") + name, sha));
+
+    // 7. The modeless dialog survives a disconnect; after the reconnect from the bar it works again.
+    action(w, "actionDisconnect")->trigger();
+    QCOMPARE(ssh->transport()->state(), State::Disconnected);
+    QTRY_COMPARE(status->text(), QStringLiteral("Not connected."));
+    QVERIFY(!start->isEnabled());
+    QVERIFY(dialog->isVisible());
+    QTest::qWait(300);
+    QTest::mouseClick(connectButton, Qt::LeftButton);
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Connected, kProbeTimeoutMs);
+    QCOMPARE(responder.hostKeyDialogs, 1);   // remembered in the temporary file
+    QTRY_COMPARE(status->text(), QStringLiteral("Ready."));
+    QTRY_VERIFY(start->isEnabled());
+    QTRY_VERIFY2_WITH_TIMEOUT(realPromptShown(terminal), qPrintable(allText(terminal).right(1000)), kProbeTimeoutMs);
+
+    // Clean up on the remote and finish.
+    QVERIFY(realShellCommand(ssh, QStringLiteral("rm -f %1 %2 %3")
+                                      .arg(shellQuote(home + QLatin1Char('/') + name), shellQuote(QStringLiteral("/tmp/") + name),
+                                           shellQuote(QStringLiteral("/tmp/probe-big.bin")))));
+    child<QPushButton>(dialog, "buttonClose")->click();
+    action(w, "actionDisconnect")->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(ssh->transport()->state(), State::Disconnected, kProbeTimeoutMs);
+    responder.stop();
+    QCOMPARE(responder.messageBoxes, 0);
+    if (!errors.isEmpty()) {
+        qInfo() << "probe: errorOccurred during the run:" << errors;
+    }
 }
 
 // =======================================================================================

@@ -12,7 +12,13 @@ class DeviceSimulator;
 
 /**
  * All parameters needed to open a port. Value type, serialisable to QVariantMap for
- * QSettings (keys: port, baud, dataBits, parity, stopBits, flow, dtr, rts).
+ * QSettings (keys: port, baud, dataBits, parity, stopBits, flow, dtr, rts, autoBaud).
+ *
+ * autoBaud (v0.4) means "the baud rate is detected automatically" (the "Auto" item of the
+ * ConnectionBar's baud combo): baudRate is then the effective rate - the last one detected, or
+ * the one to open the port with before the detection runs - and every consumer of baudRate
+ * (SerialConnection, DeviceSimulator, the log header) keeps using it as a plain rate. The flag
+ * only changes summary() ("Auto (115200) 8N1") and what SessionWidget does after open().
  */
 struct SerialSettings
 {
@@ -24,11 +30,13 @@ struct SerialSettings
     QSerialPort::FlowControl flowControl = QSerialPort::NoFlowControl;
     bool dtr = true;   ///< DTR asserted after open
     bool rts = true;   ///< RTS asserted after open (ignored when hardware flow control is on)
+    bool autoBaud = false;   ///< "Auto": baudRate is the effective (detected / starting) rate, see above
 
     QVariantMap toMap() const;
     static SerialSettings fromMap(const QVariantMap& map);   ///< missing keys -> defaults
 
-    /// Compact summary for the status bar / tab tooltip, e.g. "115200 8N1" or "9600 7E2 RTS/CTS".
+    /// Compact summary for the status bar / tab tooltip, e.g. "115200 8N1" or "9600 7E2 RTS/CTS";
+    /// "Auto (115200) 8N1" while autoBaud is set (the number is the effective rate in baudRate).
     QString summary() const;
 
     /// Baud rates offered in the UI (ascending): 300, 1200, 2400, 4800, 9600, 19200, 38400,
@@ -86,7 +94,12 @@ struct SerialSettings
  *   immediately (QSerialPort supports this) and DTR/RTS via setDtr/setRts. A changed
  *   portName while open is NOT applied until the next open(). A parameter the driver rejects
  *   is reported through errorOccurred() and NOT stored: settings() keeps the last accepted
- *   value for that field; callers re-read settings() after a rejection.
+ *   value for that field; callers re-read settings() after a rejection. A live change is
+ *   never mistaken for a lost device: the QSerialPort errors the setters raise while they run
+ *   are reported by setSettings() itself and ignored by the error handler, so a baud-rate
+ *   change (BaudRateDetector switches rates every few hundred ms while it searches) never
+ *   emits portDisappeared() or starts a reconnect. The autoBaud flag is stored with the
+ *   other fields and shows in summary(); it changes nothing else here.
  * - Error reporting: every QSerialPort error other than NoError/TimeoutError is forwarded
  *   through errorOccurred(message) with a human-readable message that includes the port
  *   name; PermissionError on open is reported as "port busy or access denied".
@@ -148,8 +161,17 @@ public slots:
     /// isOpen()) or when the driver rejects BREAK (errorOccurred() emitted with
     /// "Cannot send BREAK on <port>: <reason>").
     bool sendBreak(int durationMs = 250);
-    /// Discard pending RX/TX buffers (QSerialPort::clear).
-    void clearBuffers();
+    /// Discard the pending RX and/or TX buffers (QSerialPort::clear(directions); a no-op for a
+    /// simulated device or a closed port). Input only is what BaudRateDetector uses between two
+    /// candidate rates: the TX side must be left alone there, because clearing it drops every
+    /// byte the session queued (a SendFileDialog transfer would silently lose chunks) and, on
+    /// Windows, aborts an overlapped write in flight, whose ERROR_OPERATION_ABORTED completion
+    /// Qt reports later as a ResourceError - the "device vanished" signature. An input purge
+    /// can only abort a pending overlapped read, which Qt's Windows backend returns at once
+    /// (ReadIntervalTimeout = MAXDWORD), so that race is practically closed; should it happen,
+    /// the ResourceError takes the usual vanished-device path and the port is reopened, which
+    /// is also the only way to revive QSerialPort's read loop after such an abort.
+    void clearBuffers(QSerialPort::Directions directions = QSerialPort::AllDirections);
 
 signals:
     void pinsChanged(bool dtr, bool rts);
@@ -187,6 +209,7 @@ private:
     QSerialPort m_port;
     SerialSettings m_settings;
     bool m_reconnectParamErrorReported = false;   ///< "port is back but parameters rejected" reported once per outage
+    bool m_applyingParameters = false;   ///< inside setSettings()' live setters: their errors are theirs to report
     QTimer m_reconnectTimer;
     QTimer m_breakTimer;
     DeviceSimulator* m_simulator = nullptr;   ///< QObject child while a SIM: port is open, else nullptr

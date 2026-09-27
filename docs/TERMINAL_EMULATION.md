@@ -253,9 +253,19 @@ terminator); DCS/SOS/PM/APC strings are abandoned after 4096 code points.
 - Ctrl+A..Z → `0x01..0x1A`; Ctrl+[ `0x1B`; Ctrl+\ `0x1C`; Ctrl+] `0x1D`; Ctrl+Space `0x00`
 - Alt+<key> → `ESC` + key bytes
 - Ctrl+Shift+C / Ctrl+Insert → copy selection; Ctrl+Shift+V / Shift+Insert → paste
-- Ctrl+Shift+<letter> is left to the main window's actions (Hex View, Find, Send File, Clear,
-  Replay Log, Quit, ...) even while connected; one that no action uses is sent as the
-  Ctrl+<letter> control byte. Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, / F2 / F3 / F5 pass through too
+- Application shortcuts (v0.4): `MainWindow` pushes the current shortcuts of every action
+  (alternates included) to `TerminalWidget::setReservedShortcuts()`. While connected, a key
+  press equal to a reserved sequence is left to the application (`ShortcutOverride` not
+  accepted); Ctrl+Shift+<anything> and Alt+<digit> (the tab accelerators Alt+1..9) pass
+  through regardless; Ctrl+Alt (AltGr) is text. Every other key that maps to bytes goes to the
+  device - bare Ctrl+letter (Ctrl+W `0x17`, Ctrl+T `0x14`), Alt+letter (`ESC` + letter:
+  readline's Alt+F / Alt+B / Alt+D; the menu bar's mnemonics therefore do not open a menu from
+  a connected terminal - a bare Alt tap or the mouse does), Tab, F-keys included - unless it is
+  reserved: F2 / F3 / F5 reach the application only because Connect / Disconnect / Refresh Ports
+  use them, so reassigning those actions in *Preferences > Keyboard* gives the keys to the shell.
+  A passed-through key that no action claims comes back and is mapped like any other
+  (Ctrl+Shift+A → `0x01`, Alt+1 → `ESC 1`). The defaults changed so that nothing a shell needs
+  is reserved: Close Session = Ctrl+Shift+W (Ctrl+W deletes a word in the shell)
 - Ctrl+C with an active selection → copy (and clear the selection); without → `0x03`
 - Ctrl+wheel / Ctrl+'+' / Ctrl+'-' / Ctrl+0 → zoom (font size); emits `fontZoomed()`
 - Text (incl. IME commit) → encoded with the current encoding (`QStringEncoder`)
@@ -286,8 +296,8 @@ the selection, exactly like the Windows console's mark mode:
 | Right click (*Right Click Pastes* on) | copy, clear, resume - the same as Enter; Shift+right click opens the context menu instead |
 | Ctrl+Shift+V, Shift+Insert, middle click, dropped text | ignored (no paste while paused) |
 | Shift+PgUp / Shift+PgDn, mouse wheel, scrollbar, Ctrl+wheel / Ctrl++ / Ctrl+- / Ctrl+0 | scroll / zoom the view as usual; the selection and the queue stay |
-| Ctrl+Shift+<letter>, Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+, F2 / F3 / F5 | application shortcuts, handled by the main window as always |
-| anything else (text, Tab, arrows, F-keys, Ctrl+letter, IME commit) | swallowed: no bytes, no local echo, the focus stays in the terminal |
+| Ctrl+Shift+<anything>, Alt+<digit> and every reserved application shortcut (the actions' current shortcuts, e.g. Ctrl+T, Ctrl+Tab, F2 / F3 / F5, Ctrl+,) | application shortcuts, handled by the main window as always |
+| anything else (text, Tab, arrows, F-keys, Ctrl+letter, Alt+letter, IME commit) | swallowed: no bytes, no local echo, the focus stays in the terminal |
 
 A left click without a drag, `clearSelection()`, `resumeOutput()` (keeps the selection) and
 turning the feature off resume as well; `clearScreen()`, `clearAll()` (the toolbar's Clear:

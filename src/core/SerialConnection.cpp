@@ -1,5 +1,6 @@
 #include "core/SerialConnection.h"
 
+#include <QCoreApplication>
 #include <QSerialPortInfo>
 #include <QStringList>
 #include <algorithm>
@@ -77,6 +78,7 @@ QVariantMap SerialSettings::toMap() const
     map.insert(QStringLiteral("flow"), static_cast<int>(flowControl));
     map.insert(QStringLiteral("dtr"), dtr);
     map.insert(QStringLiteral("rts"), rts);
+    map.insert(QStringLiteral("autoBaud"), autoBaud);
     return map;
 }
 
@@ -101,13 +103,16 @@ SerialSettings SerialSettings::fromMap(const QVariantMap& map)
                                      QSerialPort::SoftwareControl});
     s.dtr = map.value(QStringLiteral("dtr"), s.dtr).toBool();
     s.rts = map.value(QStringLiteral("rts"), s.rts).toBool();
+    s.autoBaud = map.value(QStringLiteral("autoBaud"), s.autoBaud).toBool();
     return s;
 }
 
 QString SerialSettings::summary() const
 {
+    const QString rate = autoBaud ? QCoreApplication::translate("SerialSettings", "Auto (%1)").arg(baudRate)
+                                  : QString::number(baudRate);
     QString text = QStringLiteral("%1 %2%3%4")
-                       .arg(baudRate)
+                       .arg(rate)
                        .arg(static_cast<int>(dataBits))
                        .arg(parityLetter(parity))
                        .arg(stopBitsText(stopBits));
@@ -170,7 +175,7 @@ bool SerialSettings::operator==(const SerialSettings& other) const
 {
     return portName == other.portName && baudRate == other.baudRate && dataBits == other.dataBits &&
            parity == other.parity && stopBits == other.stopBits && flowControl == other.flowControl &&
-           dtr == other.dtr && rts == other.rts;
+           dtr == other.dtr && rts == other.rts && autoBaud == other.autoBaud;
 }
 
 bool SerialSettings::isSimulatedPort() const
@@ -273,7 +278,11 @@ void SerialConnection::setSettings(const SerialSettings& settings)
         if (!restored) {
             qCDebug(lcSerial) << m_settings.portName << "cannot restore previous" << field << ":" << m_port.errorString();
         }
+        m_port.clearError();   // the rejection is reported below; nothing may mistake it for a lost device
     };
+    // The setters emit QSerialPort::errorOccurred() when they fail; onPortError() ignores errors
+    // while this flag is set (a rejected value is reported once, below, and never starts a reconnect).
+    m_applyingParameters = true;
     if (old.baudRate != settings.baudRate && !m_port.setBaudRate(settings.baudRate)) {
         applied.baudRate = old.baudRate;
         rejected(tr("baud rate %1").arg(settings.baudRate), m_port.setBaudRate(old.baudRate), "baud rate");
@@ -298,7 +307,8 @@ void SerialConnection::setSettings(const SerialSettings& settings)
         rejected(tr("flow control %1").arg(SerialSettings::flowControlText(settings.flowControl)),
                  m_port.setFlowControl(old.flowControl), "flow control");
     }
-    m_settings = applied;   // portName, dtr and rts are always taken from `settings`
+    m_applyingParameters = false;
+    m_settings = applied;   // portName, dtr, rts and autoBaud are always taken from `settings`
 
     if (!failures.isEmpty()) {
         const QString message =
@@ -606,13 +616,14 @@ bool SerialConnection::sendBreak(int durationMs)
     return true;
 }
 
-void SerialConnection::clearBuffers()
+void SerialConnection::clearBuffers(QSerialPort::Directions directions)
 {
-    if (m_simulator || !m_port.isOpen()) {
+    if (m_simulator || !m_port.isOpen() || !directions) {
         return;
     }
-    if (!m_port.clear(QSerialPort::AllDirections)) {
-        qCWarning(lcSerial) << m_settings.portName << "clear() failed:" << m_port.errorString();
+    if (!m_port.clear(directions)) {
+        qCWarning(lcSerial) << m_settings.portName << "clear(" << static_cast<int>(directions)
+                            << ") failed:" << m_port.errorString();
     }
 }
 
@@ -633,6 +644,13 @@ void SerialConnection::handleIncoming(const QByteArray& data)
 void SerialConnection::onPortError(QSerialPort::SerialPortError error)
 {
     if (error == QSerialPort::NoError || error == QSerialPort::TimeoutError) {
+        return;
+    }
+    if (m_applyingParameters) {
+        // A live line-parameter change the driver rejected: setSettings() reports it. It is
+        // not a vanished device, whatever error code the driver chose for it.
+        qCDebug(lcSerial) << m_settings.portName << "error while applying line parameters (reported by setSettings):"
+                          << portErrorName(error) << m_port.errorString();
         return;
     }
     // Errors raised while not connected (during open(), during a reconnect attempt, from a

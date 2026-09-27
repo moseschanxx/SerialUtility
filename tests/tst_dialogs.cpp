@@ -19,6 +19,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -31,6 +33,7 @@
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
 #include <QTimer>
@@ -108,7 +111,44 @@ private:
 namespace {
 
 // Tab indices of PreferencesDialog.ui.
-enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageLogging, PageGeneral };
+enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageKeyboard, PageLogging, PageGeneral };
+
+// Columns of the Keyboard page's table.
+enum ShortcutColumn { ColumnAction = 0, ColumnShortcut, ColumnDefault };
+
+QKeySequence seq(const char* portable)
+{
+    return QKeySequence(QString::fromLatin1(portable), QKeySequence::PortableText);
+}
+
+/// Three entries the way MainWindow::shortcutEntries() would list them.
+QList<ShortcutEntry> sampleShortcutEntries()
+{
+    ShortcutEntry a;
+    a.objectName = QStringLiteral("actionAlpha");
+    a.title = QStringLiteral("File > Alpha");
+    a.defaultSequence = seq("Ctrl+Shift+A");
+    ShortcutEntry b;
+    b.objectName = QStringLiteral("actionBeta");
+    b.title = QStringLiteral("Edit > Beta");
+    ShortcutEntry c;
+    c.objectName = QStringLiteral("actionGamma");
+    c.title = QStringLiteral("Window > Gamma");
+    c.defaultSequence = seq("F7");
+    return {a, b, c};
+}
+
+const QColor kConflictColor(0xC0, 0x39, 0x2B);
+
+/// "115200, 1500000, ..." as the Connection page shows a candidate list.
+QString joinRates(const QList<qint32>& rates)
+{
+    QStringList parts;
+    for (qint32 rate : rates) {
+        parts.append(QString::number(rate));
+    }
+    return parts.join(QStringLiteral(", "));
+}
 
 template <typename T>
 T* child(const QObject* parent, const char* objectName)
@@ -184,6 +224,15 @@ struct PrefControls
     QLineEdit* sshTerminalType = nullptr;
     QSpinBox* sshKeepAlive = nullptr;
     QLabel* sshSecretsNote = nullptr;
+    QLineEdit* autoBaudCandidates = nullptr;
+    QSpinBox* autoBaudSample = nullptr;
+    QCheckBox* autoBaudWatchdog = nullptr;
+    QTableWidget* shortcutTable = nullptr;
+    QKeySequenceEdit* shortcutEdit = nullptr;
+    QPushButton* shortcutClear = nullptr;
+    QPushButton* shortcutRestore = nullptr;
+    QLabel* shortcutConflict = nullptr;
+    QLabel* shortcutNote = nullptr;
     QTabWidget* tabs = nullptr;
     QDialogButtonBox* buttons = nullptr;
 
@@ -194,7 +243,22 @@ struct PrefControls
                rts && autoReconnect && reconnectInterval && showSimulated && logDir && logDirBrowse && autoLog &&
                logFormat && logIncludeTx && confirmClose && restoreSessions && pauseWhileSelecting &&
                rightClickPastes && sshKnownHosts && sshKnownHostsBrowse && sshIdentity && sshIdentityBrowse &&
-               sshTerminalType && sshKeepAlive && sshSecretsNote && tabs && buttons;
+               sshTerminalType && sshKeepAlive && sshSecretsNote && autoBaudCandidates && autoBaudSample &&
+               autoBaudWatchdog && shortcutTable && shortcutEdit && shortcutClear && shortcutRestore &&
+               shortcutConflict && shortcutNote && tabs && buttons;
+    }
+
+    /// Select a row of the Keyboard table the way a click does.
+    void selectShortcutRow(int row) const { shortcutTable->selectRow(row); }
+    QString shortcutCell(int row, int column) const
+    {
+        const QTableWidgetItem* item = shortcutTable->item(row, column);
+        return item ? item->text() : QString();
+    }
+    QColor shortcutColor(int row) const
+    {
+        const QTableWidgetItem* item = shortcutTable->item(row, ColumnShortcut);
+        return item ? item->foreground().color() : QColor();
     }
 };
 
@@ -238,6 +302,15 @@ PrefControls controlsOf(const PreferencesDialog& dialog)
     c.sshTerminalType = child<QLineEdit>(&dialog, "sshTerminalTypeEdit");
     c.sshKeepAlive = child<QSpinBox>(&dialog, "sshKeepAliveSpin");
     c.sshSecretsNote = child<QLabel>(&dialog, "sshSecretsNoteLabel");
+    c.autoBaudCandidates = child<QLineEdit>(&dialog, "autoBaudCandidatesEdit");
+    c.autoBaudSample = child<QSpinBox>(&dialog, "autoBaudSampleSpin");
+    c.autoBaudWatchdog = child<QCheckBox>(&dialog, "autoBaudWatchdogCheck");
+    c.shortcutTable = child<QTableWidget>(&dialog, "shortcutTable");
+    c.shortcutEdit = child<QKeySequenceEdit>(&dialog, "shortcutEdit");
+    c.shortcutClear = child<QPushButton>(&dialog, "shortcutClearButton");
+    c.shortcutRestore = child<QPushButton>(&dialog, "shortcutRestoreButton");
+    c.shortcutConflict = child<QLabel>(&dialog, "shortcutConflictLabel");
+    c.shortcutNote = child<QLabel>(&dialog, "shortcutNoteLabel");
     c.tabs = child<QTabWidget>(&dialog, "tabWidget");
     c.buttons = child<QDialogButtonBox>(&dialog, "buttonBox");
     return c;
@@ -301,6 +374,15 @@ private slots:
     void preferencesEmptyLogDirFallsBack();
     void preferencesInvalidBaudIgnored();
     void preferencesKeepsUnlistedEncodingAndTheme();
+    void preferencesAutoBaudRoundTrip();
+    void preferencesDefaultBaudAuto();
+    void preferencesKeyboardPageShowsEntries();
+    void preferencesKeyboardEditWritesSettings();
+    void preferencesKeyboardClearWritesEmptySequence();
+    void preferencesKeyboardRestoreRemovesOverride();
+    void preferencesKeyboardConflictDisablesOk();
+    void preferencesKeyboardRejectsBareKeys();
+    void preferencesKeyboardFixedConflicts();
 
     // ---- QuickCommandModel ----------------------------------------------------------
     void modelRowsAndColumns();
@@ -420,6 +502,9 @@ void Tst_dialogs::setNonDefaultSettings()
     s.setSshDefaultIdentityFile(tempPath(QStringLiteral("id_ed25519")));
     s.setSshDefaultTerminalType(QStringLiteral("vt100"));
     s.setSshDefaultKeepAliveSeconds(0);
+    s.setAutoBaudCandidates({9600, 57600});
+    s.setAutoBaudSampleMs(800);
+    s.setAutoBaudWatchdog(false);
 }
 
 QString Tst_dialogs::tempPath(const QString& name) const
@@ -442,9 +527,14 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QCOMPARE(dialog.windowTitle(), QStringLiteral("Preferences"));
     const PrefControls c = controlsOf(dialog);
     QVERIFY(c.complete());
-    QCOMPARE(c.tabs->count(), 6);
+    QCOMPARE(c.tabs->count(), 7);
     QCOMPARE(c.tabs->currentIndex(), PageTerminal);
     QCOMPARE(c.tabs->tabText(PageSsh), QStringLiteral("SSH"));
+    QCOMPARE(c.tabs->tabText(PageKeyboard), QStringLiteral("Keyboard"));
+    QCOMPARE(c.tabs->tabText(PageLogging), QStringLiteral("Logging"));
+    QCOMPARE(c.tabs->tabText(PageGeneral), QStringLiteral("General"));
+    QVERIFY(c.tabs->widget(PageKeyboard)->isAncestorOf(c.shortcutTable));
+    QVERIFY(c.tabs->widget(PageConnection)->isAncestorOf(c.autoBaudCandidates));
 
     // Terminal
     QCOMPARE(c.fontPreview->text(), QStringLiteral("Courier New 14"));
@@ -484,6 +574,14 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QCOMPARE(c.reconnectInterval->minimum(), 200);
     QCOMPARE(c.reconnectInterval->maximum(), 60000);
     QVERIFY(!c.showSimulated->isChecked());
+    QCOMPARE(c.autoBaudCandidates->text(), QStringLiteral("9600, 57600"));
+    QVERIFY(c.autoBaudCandidates->validator() != nullptr);
+    QVERIFY(c.autoBaudCandidates->toolTip().contains(QStringLiteral("115200, 1500000")));   // the default list
+    QCOMPARE(c.autoBaudSample->value(), 800);
+    QCOMPARE(c.autoBaudSample->minimum(), 300);
+    QCOMPARE(c.autoBaudSample->maximum(), 10000);
+    QCOMPARE(c.autoBaudSample->suffix(), QStringLiteral(" ms"));
+    QVERIFY(!c.autoBaudWatchdog->isChecked());
 
     // SSH
     QVERIFY(c.tabs->widget(PageSsh)->isAncestorOf(c.sshKnownHosts));
@@ -555,6 +653,9 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     c.autoReconnect->setChecked(false);
     c.reconnectInterval->setValue(3000);
     c.showSimulated->setChecked(false);
+    c.autoBaudCandidates->setText(QStringLiteral("230400, 115200"));
+    c.autoBaudSample->setValue(2000);
+    c.autoBaudWatchdog->setChecked(false);
     // SSH
     const QString knownHosts = tempPath(QStringLiteral("apply-known_hosts"));
     const QString identity = tempPath(QStringLiteral("apply-id_rsa"));
@@ -598,6 +699,9 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!s.autoReconnect());
     QCOMPARE(s.reconnectIntervalMs(), 3000);
     QVERIFY(!s.showSimulatedPorts());
+    QCOMPARE(s.autoBaudCandidates(), (QList<qint32>{230400, 115200}));
+    QCOMPARE(s.autoBaudSampleMs(), 2000);
+    QVERIFY(!s.autoBaudWatchdog());
     QCOMPARE(s.sshKnownHostsFile(), knownHosts);
     QCOMPARE(s.sshDefaultIdentityFile(), identity);
     QCOMPARE(s.sshDefaultTerminalType(), QStringLiteral("xterm"));
@@ -623,6 +727,9 @@ void Tst_dialogs::preferencesApplyWritesEveryControl()
     QVERIFY(!c2.rts->isEnabled());
     QCOMPARE(c2.logDir->text(), QDir::toNativeSeparators(logDir));
     QVERIFY(!c2.showSimulated->isChecked());
+    QCOMPARE(c2.autoBaudCandidates->text(), QStringLiteral("230400, 115200"));
+    QCOMPARE(c2.autoBaudSample->value(), 2000);
+    QVERIFY(!c2.autoBaudWatchdog->isChecked());
     QVERIFY(!c2.pauseWhileSelecting->isChecked());
     QVERIFY(!c2.rightClickPastes->isChecked());
     QCOMPARE(c2.sshKnownHosts->text(), QDir::toNativeSeparators(knownHosts));
@@ -752,14 +859,21 @@ void Tst_dialogs::preferencesRestoreDefaultsConnection()
     QCOMPARE(c.reconnectInterval->value(), 1000);
     QVERIFY(c.reconnectInterval->isEnabled());
     QVERIFY(c.showSimulated->isChecked());
+    QCOMPARE(c.autoBaudCandidates->text(), joinRates(AppSettings::defaultAutoBaudCandidates()));
+    QCOMPARE(c.autoBaudSample->value(), 1500);
+    QVERIFY(c.autoBaudWatchdog->isChecked());
     QVERIFY(c.autoLog->isChecked());   // Logging page untouched
     QCOMPARE(AppSettings::instance().defaultSerialSettings().baudRate, 1500000);
+    QCOMPARE(AppSettings::instance().autoBaudSampleMs(), 800);   // not yet applied
 
     c.buttons->button(QDialogButtonBox::Apply)->click();
     QCOMPARE(AppSettings::instance().defaultSerialSettings(), SerialSettings());
     QVERIFY(AppSettings::instance().autoReconnect());
     QCOMPARE(AppSettings::instance().reconnectIntervalMs(), 1000);
     QVERIFY(AppSettings::instance().showSimulatedPorts());
+    QCOMPARE(AppSettings::instance().autoBaudCandidates(), AppSettings::defaultAutoBaudCandidates());
+    QCOMPARE(AppSettings::instance().autoBaudSampleMs(), 1500);
+    QVERIFY(AppSettings::instance().autoBaudWatchdog());
 }
 
 void Tst_dialogs::preferencesRestoreDefaultsSsh()
@@ -1151,6 +1265,513 @@ void Tst_dialogs::preferencesKeepsUnlistedEncodingAndTheme()
     QCOMPARE(s.scrollbackLines(), 20000);
     QCOMPARE(s.encoding(), QStringLiteral("ISO-8859-15"));
     QCOMPARE(s.themeName(), QStringLiteral("no-such-theme"));
+}
+
+void Tst_dialogs::preferencesAutoBaudRoundTrip()
+{
+    // Connection page: the candidate list, sample time and watchdog round-trip AppSettings; an
+    // empty list stores the default, invalid rates and duplicates are dropped, letters cannot be
+    // typed (validator).
+    AppSettings& s = AppSettings::instance();
+    QCOMPARE(s.autoBaudCandidates(), AppSettings::defaultAutoBaudCandidates());
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    QCOMPARE(c.autoBaudCandidates->text(), joinRates(AppSettings::defaultAutoBaudCandidates()));
+    QCOMPARE(c.autoBaudSample->value(), 1500);
+    QVERIFY(c.autoBaudWatchdog->isChecked());
+    QCOMPARE(c.autoBaudWatchdog->text(), QStringLiteral("Re-detect when the output turns into garbage"));
+
+    c.tabs->setCurrentIndex(PageConnection);
+    c.autoBaudCandidates->clear();
+    QTest::keyClicks(c.autoBaudCandidates, QStringLiteral("9600, abc57600"));
+    QCOMPARE(c.autoBaudCandidates->text(), QStringLiteral("9600, 57600"));
+    c.autoBaudSample->setValue(700);
+    c.autoBaudWatchdog->setChecked(false);
+    QCOMPARE(s.autoBaudSampleMs(), 1500);   // nothing written before Apply
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.autoBaudCandidates(), (QList<qint32>{9600, 57600}));
+    QCOMPARE(s.autoBaudSampleMs(), 700);
+    QVERIFY(!s.autoBaudWatchdog());
+
+    // Duplicates and out-of-range values are dropped; the edit shows what was stored.
+    c.autoBaudCandidates->setText(QStringLiteral("115200,115200, 0, 1500000"));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.autoBaudCandidates(), (QList<qint32>{115200, 1500000}));
+    QCOMPARE(c.autoBaudCandidates->text(), QStringLiteral("115200, 1500000"));
+
+    // Empty -> the default list.
+    c.autoBaudCandidates->clear();
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.autoBaudCandidates(), AppSettings::defaultAutoBaudCandidates());
+    QCOMPARE(c.autoBaudCandidates->text(), joinRates(AppSettings::defaultAutoBaudCandidates()));
+
+    // A second dialog shows the stored values; Cancel discards edits.
+    s.setAutoBaudCandidates({57600, 38400});
+    PreferencesDialog again;
+    const PrefControls c2 = controlsOf(again);
+    QVERIFY(c2.complete());
+    QCOMPARE(c2.autoBaudCandidates->text(), QStringLiteral("57600, 38400"));
+    QCOMPARE(c2.autoBaudSample->value(), 700);
+    QVERIFY(!c2.autoBaudWatchdog->isChecked());
+    c2.autoBaudSample->setValue(5000);
+    c2.autoBaudWatchdog->setChecked(true);
+    c2.buttons->button(QDialogButtonBox::Cancel)->click();
+    QCOMPARE(s.autoBaudSampleMs(), 700);
+    QVERIFY(!s.autoBaudWatchdog());
+}
+
+void Tst_dialogs::preferencesDefaultBaudAuto()
+{
+    // v0.4: the default baud combo offers "Auto" (item 0, data 0, like the ConnectionBar).
+    // Choosing it stores SerialSettings::autoBaud in the default serial settings, so every new
+    // session starts on the bar's Auto item; the stored rate stays the starting rate.
+    AppSettings& s = AppSettings::instance();
+    QVERIFY(!s.defaultSerialSettings().autoBaud);
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    QCOMPARE(c.baud->itemText(0), QStringLiteral("Auto"));
+    QCOMPARE(c.baud->itemData(0).toInt(), 0);
+    QVERIFY(!c.baud->itemData(0, Qt::ToolTipRole).toString().isEmpty());
+    QCOMPARE(c.baud->itemData(1).toInt(), SerialSettings::standardBaudRates().first());
+    QCOMPARE(c.baud->count(), SerialSettings::standardBaudRates().size() + 1);
+    QCOMPARE(c.baud->currentText(), QStringLiteral("115200"));   // a fixed default selects its item, never Auto
+    QVERIFY(c.baud->currentIndex() > 0);
+
+    // The validator takes the word (in any case) and stays a QIntValidator over the baud range.
+    const auto* validator = qobject_cast<const QIntValidator*>(c.baud->validator());
+    QVERIFY(validator);
+    QCOMPARE(validator->bottom(), SerialSettings::kMinBaudRate);
+    QCOMPARE(validator->top(), SerialSettings::kMaxBaudRate);
+    int pos = 0;
+    QString text = QStringLiteral("auto");
+    QCOMPARE(validator->validate(text, pos), QValidator::Acceptable);
+    text = QStringLiteral("Au");
+    QCOMPARE(validator->validate(text, pos), QValidator::Intermediate);
+    text = QStringLiteral("Autox");
+    QCOMPARE(validator->validate(text, pos), QValidator::Invalid);
+    text = QStringLiteral("9600");
+    QCOMPARE(validator->validate(text, pos), QValidator::Acceptable);
+
+    c.baud->setCurrentIndex(0);
+    QCOMPARE(c.baud->currentText(), QStringLiteral("Auto"));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    SerialSettings stored = s.defaultSerialSettings();
+    QVERIFY(stored.autoBaud);
+    QCOMPARE(stored.baudRate, 115200);
+    QCOMPARE(stored.summary(), QStringLiteral("Auto (115200) 8N1"));
+
+    // A fresh dialog shows Auto; a typed rate ends it, the typed word restores it.
+    PreferencesDialog again;
+    QVERIFY(expose(&again));
+    const PrefControls c2 = controlsOf(again);
+    QVERIFY(c2.complete());
+    QCOMPARE(c2.baud->currentIndex(), 0);
+    QCOMPARE(c2.baud->currentText(), QStringLiteral("Auto"));
+    c2.baud->setEditText(QStringLiteral("9600"));
+    c2.buttons->button(QDialogButtonBox::Apply)->click();
+    stored = s.defaultSerialSettings();
+    QVERIFY(!stored.autoBaud);
+    QCOMPARE(stored.baudRate, 9600);
+    c2.baud->setEditText(QStringLiteral("auto"));
+    c2.buttons->button(QDialogButtonBox::Apply)->click();
+    stored = s.defaultSerialSettings();
+    QVERIFY(stored.autoBaud);
+    QCOMPARE(stored.baudRate, 9600);   // the starting rate is what was stored last
+    QCOMPARE(stored.summary(), QStringLiteral("Auto (9600) 8N1"));
+
+    // An unusable entry keeps Auto and re-selects it; Restore Defaults is a fixed 115200 again.
+    c2.baud->setEditText(QStringLiteral("0"));
+    c2.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(s.defaultSerialSettings().autoBaud);
+    QCOMPARE(c2.baud->currentIndex(), 0);
+    QCOMPARE(c2.baud->currentText(), QStringLiteral("Auto"));
+    c2.tabs->setCurrentIndex(PageConnection);
+    c2.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QCOMPARE(c2.baud->currentText(), QStringLiteral("115200"));
+    c2.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(!s.defaultSerialSettings().autoBaud);
+    QCOMPARE(s.defaultSerialSettings().baudRate, 115200);
+}
+
+void Tst_dialogs::preferencesKeyboardPageShowsEntries()
+{
+    AppSettings& s = AppSettings::instance();
+    s.setShortcut(QStringLiteral("actionBeta"), seq("Ctrl+Shift+B"));   // an override on a row without default
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    // Nothing until MainWindow hands the entries over; the editor waits for a selection.
+    QCOMPARE(c.shortcutTable->rowCount(), 0);
+    QCOMPARE(c.shortcutTable->columnCount(), 3);
+    QCOMPARE(c.shortcutTable->horizontalHeaderItem(ColumnAction)->text(), QStringLiteral("Action"));
+    QCOMPARE(c.shortcutTable->horizontalHeaderItem(ColumnShortcut)->text(), QStringLiteral("Shortcut"));
+    QCOMPARE(c.shortcutTable->horizontalHeaderItem(ColumnDefault)->text(), QStringLiteral("Default"));
+    QVERIFY(!c.shortcutEdit->isEnabled());
+    QVERIFY(!c.shortcutClear->isEnabled());
+    QVERIFY(!c.shortcutRestore->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    QCOMPARE(c.shortcutEdit->maximumSequenceLength(), qsizetype(1));
+    QCOMPARE(c.shortcutClear->text(), QStringLiteral("Clear"));
+    QCOMPARE(c.shortcutRestore->text(), QStringLiteral("Restore Default"));
+    QVERIFY2(c.shortcutNote->text().contains(QStringLiteral("not an application shortcut")), qPrintable(c.shortcutNote->text()));
+    QVERIFY(c.shortcutNote->text().contains(QStringLiteral("Ctrl+W")));
+
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    QCOMPARE(c.shortcutTable->rowCount(), 3);
+    QCOMPARE(c.shortcutCell(0, ColumnAction), QStringLiteral("File > Alpha"));
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(0, ColumnDefault), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(1, ColumnAction), QStringLiteral("Edit > Beta"));
+    QCOMPARE(c.shortcutCell(1, ColumnShortcut), seq("Ctrl+Shift+B").toString(QKeySequence::NativeText));   // the override
+    QCOMPARE(c.shortcutCell(1, ColumnDefault), QString());
+    QCOMPARE(c.shortcutCell(2, ColumnAction), QStringLiteral("Window > Gamma"));
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F7").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(2, ColumnDefault), seq("F7").toString(QKeySequence::NativeText));
+    QVERIFY(!c.shortcutEdit->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+
+    c.selectShortcutRow(1);
+    QVERIFY(c.shortcutEdit->isEnabled());
+    QVERIFY(c.shortcutClear->isEnabled());
+    QVERIFY(c.shortcutRestore->isEnabled());
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("Ctrl+Shift+B"));
+    c.selectShortcutRow(2);
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("F7"));
+    c.tabs->setCurrentIndex(PageKeyboard);
+    QVERIFY(c.tabs->widget(PageKeyboard)->isAncestorOf(c.shortcutEdit));
+    QVERIFY(c.tabs->widget(PageKeyboard)->isAncestorOf(c.shortcutNote));
+
+    // Cancel writes nothing.
+    c.buttons->button(QDialogButtonBox::Cancel)->click();
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionBeta")});
+}
+
+void Tst_dialogs::preferencesKeyboardEditWritesSettings()
+{
+    AppSettings& s = AppSettings::instance();
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    QSignalSpy applied(&dialog, &PreferencesDialog::applied);
+    c.tabs->setCurrentIndex(PageKeyboard);
+
+    // A key stroke in the editor is taken over at once (single chord: no waiting).
+    c.selectShortcutRow(0);
+    QTest::keyClick(c.shortcutEdit, Qt::Key_F9);
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("F9"));
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("F9").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(0, ColumnDefault), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    // Another row, set programmatically (what a key press ends in).
+    c.selectShortcutRow(2);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+Z"));
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("Ctrl+Shift+Z").toString(QKeySequence::NativeText));
+    // Selecting the first row again shows its pending value.
+    c.selectShortcutRow(0);
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("F9"));
+
+    QVERIFY(s.customizedShortcutActions().isEmpty());   // nothing before Apply
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(applied.count(), 1);
+    QCOMPARE(s.shortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+A")), seq("F9"));
+    QCOMPARE(s.shortcut(QStringLiteral("actionGamma"), seq("F7")), seq("Ctrl+Shift+Z"));
+    QCOMPARE(s.shortcut(QStringLiteral("actionBeta"), QKeySequence()), QKeySequence());
+    QCOMPARE(s.customizedShortcutActions(),
+             (QStringList{QStringLiteral("actionAlpha"), QStringLiteral("actionGamma")}));   // the untouched row is not stored
+
+    // A second dialog with the same entries shows the stored values; OK writes and closes.
+    PreferencesDialog again;
+    QVERIFY(expose(&again));
+    again.setShortcutEntries(sampleShortcutEntries());
+    const PrefControls c2 = controlsOf(again);
+    QVERIFY(c2.complete());
+    QCOMPARE(c2.shortcutCell(0, ColumnShortcut), seq("F9").toString(QKeySequence::NativeText));
+    QCOMPARE(c2.shortcutCell(1, ColumnShortcut), QString());
+    QCOMPARE(c2.shortcutCell(2, ColumnShortcut), seq("Ctrl+Shift+Z").toString(QKeySequence::NativeText));
+    c2.selectShortcutRow(1);
+    QTest::keyClick(c2.shortcutEdit, Qt::Key_F8, Qt::ControlModifier);
+    QCOMPARE(c2.shortcutEdit->keySequence(), seq("Ctrl+F8"));
+    c2.buttons->button(QDialogButtonBox::Ok)->click();
+    QCOMPARE(again.result(), static_cast<int>(QDialog::Accepted));
+    QCOMPARE(s.shortcut(QStringLiteral("actionBeta"), QKeySequence()), seq("Ctrl+F8"));
+    QCOMPARE(s.customizedShortcutActions().size(), qsizetype(3));
+}
+
+void Tst_dialogs::preferencesKeyboardClearWritesEmptySequence()
+{
+    AppSettings& s = AppSettings::instance();
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+
+    c.selectShortcutRow(0);
+    c.shortcutClear->click();
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), QString());
+    QVERIFY(c.shortcutEdit->keySequence().isEmpty());
+    QCOMPARE(c.shortcutCell(0, ColumnDefault), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    QVERIFY(!QSettings().contains(QStringLiteral("shortcuts/actionAlpha")));
+
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(QSettings().contains(QStringLiteral("shortcuts/actionAlpha")));
+    QCOMPARE(QSettings().value(QStringLiteral("shortcuts/actionAlpha")).toString(), QString());
+    QVERIFY(s.shortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+A")).isEmpty());   // stored "no shortcut"
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionAlpha")});
+
+    // Clearing a row that has no shortcut (and no default) changes nothing.
+    c.selectShortcutRow(1);
+    c.shortcutClear->click();
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionAlpha")});
+}
+
+void Tst_dialogs::preferencesKeyboardRestoreRemovesOverride()
+{
+    AppSettings& s = AppSettings::instance();
+    s.setShortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+Q"));
+    s.setShortcut(QStringLiteral("actionGamma"), seq("F12"));
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("Ctrl+Shift+Q").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F12").toString(QKeySequence::NativeText));
+
+    // "Restore Default" for one row.
+    c.selectShortcutRow(0);
+    c.shortcutRestore->click();
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("Ctrl+Shift+A"));
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F12").toString(QKeySequence::NativeText));
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionGamma")});
+    QVERIFY(!QSettings().contains(QStringLiteral("shortcuts/actionAlpha")));
+    QCOMPARE(s.shortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+A")), seq("Ctrl+Shift+A"));
+
+    // The page-level Restore Defaults (Keyboard page current) resets every row; nothing is
+    // written until Apply.
+    c.selectShortcutRow(1);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+E"));
+    QCOMPARE(c.shortcutCell(1, ColumnShortcut), seq("Ctrl+Shift+E").toString(QKeySequence::NativeText));
+    c.tabs->setCurrentIndex(PageKeyboard);
+    c.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("Ctrl+Shift+A").toString(QKeySequence::NativeText));
+    QCOMPARE(c.shortcutCell(1, ColumnShortcut), QString());
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F7").toString(QKeySequence::NativeText));
+    QVERIFY(c.shortcutEdit->keySequence().isEmpty());   // the selected row's (restored) value
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionGamma")});
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QVERIFY(s.customizedShortcutActions().isEmpty());
+    QCOMPARE(s.shortcut(QStringLiteral("actionGamma"), seq("F7")), seq("F7"));
+
+    // Restore Defaults on another page leaves the Keyboard rows alone.
+    c.selectShortcutRow(2);
+    c.shortcutEdit->setKeySequence(seq("F11"));
+    c.tabs->setCurrentIndex(PageGeneral);
+    c.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F11").toString(QKeySequence::NativeText));
+}
+
+void Tst_dialogs::preferencesKeyboardConflictDisablesOk()
+{
+    AppSettings& s = AppSettings::instance();
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    c.tabs->setCurrentIndex(PageKeyboard);
+    QPushButton* ok = c.buttons->button(QDialogButtonBox::Ok);
+    QPushButton* apply = c.buttons->button(QDialogButtonBox::Apply);
+    QVERIFY(ok->isEnabled());
+    QVERIFY(apply->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    const QColor normal = c.shortcutColor(0);
+    QVERIFY(normal != kConflictColor);
+
+    // The same sequence on two rows: both red, the label names them, OK / Apply disabled.
+    c.selectShortcutRow(1);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+A"));
+    QVERIFY(!ok->isEnabled());
+    QVERIFY(!apply->isEnabled());
+    QVERIFY(!c.shortcutConflict->isHidden());
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("File > Alpha")), qPrintable(c.shortcutConflict->text()));
+    QVERIFY(c.shortcutConflict->text().contains(QStringLiteral("Edit > Beta")));
+    QVERIFY(c.shortcutConflict->text().contains(seq("Ctrl+Shift+A").toString(QKeySequence::NativeText)));
+    QCOMPARE(c.shortcutColor(0), kConflictColor);
+    QCOMPARE(c.shortcutColor(1), kConflictColor);
+    QCOMPARE(c.shortcutColor(2), normal);
+    ok->click();   // disabled: nothing happens
+    QVERIFY(dialog.isVisible());
+    QVERIFY(s.customizedShortcutActions().isEmpty());
+
+    // A different key resolves it.
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+D"));
+    QVERIFY(ok->isEnabled());
+    QVERIFY(apply->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    QCOMPARE(c.shortcutColor(0), normal);
+    QCOMPARE(c.shortcutColor(1), normal);
+
+    // So does Clear ...
+    c.selectShortcutRow(2);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+A"));
+    QVERIFY(!ok->isEnabled());
+    c.shortcutClear->click();
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    // ... and Restore Default; empty rows never conflict with each other.
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Shift+A"));
+    QVERIFY(!ok->isEnabled());
+    c.shortcutRestore->click();
+    QVERIFY(ok->isEnabled());
+    QCOMPARE(c.shortcutCell(2, ColumnShortcut), seq("F7").toString(QKeySequence::NativeText));
+    c.shortcutClear->click();
+    c.selectShortcutRow(0);
+    c.shortcutClear->click();
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+
+    apply->click();
+    QCOMPARE(s.shortcut(QStringLiteral("actionBeta"), QKeySequence()), seq("Ctrl+Shift+D"));
+    QVERIFY(s.shortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+A")).isEmpty());
+    QVERIFY(s.shortcut(QStringLiteral("actionGamma"), seq("F7")).isEmpty());
+    QCOMPARE(s.customizedShortcutActions().size(), qsizetype(3));
+}
+
+void Tst_dialogs::preferencesKeyboardRejectsBareKeys()
+{
+    // Header: a chord without Ctrl / Alt / Meta that is not an F-key is text or a control key of
+    // the connected terminal (a plain "a" typed into the editor by mistake, Enter, Space, ...):
+    // it is refused, the row keeps its value, the editor snaps back and the label says why.
+    AppSettings& s = AppSettings::instance();
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    c.tabs->setCurrentIndex(PageKeyboard);
+    QPushButton* ok = c.buttons->button(QDialogButtonBox::Ok);
+    const QString alpha = seq("Ctrl+Shift+A").toString(QKeySequence::NativeText);
+
+    c.selectShortcutRow(0);
+    // A real key press first (a letter typed into the editor by mistake) ...
+    QTest::keyClick(c.shortcutEdit, Qt::Key_A);
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), alpha);
+    QCOMPARE(c.shortcutEdit->keySequence(), seq("Ctrl+Shift+A"));
+    QVERIFY(!c.shortcutConflict->isHidden());
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("cannot be a shortcut")), qPrintable(c.shortcutConflict->text()));
+    QVERIFY(ok->isEnabled());   // a refusal is not a conflict
+    // ... then what other presses end in (set programmatically, like the other page tests do).
+    const char* refused[] = {"A", "Shift+A", "5", "Return", "Enter", "Space", "Backspace", "Esc",
+                             "Left", "Shift+Home", "Shift+PgUp", "Del", "Shift+Ins", "Shift+Tab"};
+    for (const char* what : refused) {
+        c.shortcutEdit->setKeySequence(seq(what));
+        QVERIFY2(c.shortcutCell(0, ColumnShortcut) == alpha, qPrintable(QLatin1String(what) + QStringLiteral(" changed the row")));
+        QVERIFY2(c.shortcutEdit->keySequence() == seq("Ctrl+Shift+A"), qPrintable(QLatin1String(what) + QStringLiteral(" stayed in the editor")));
+        QVERIFY2(!c.shortcutConflict->isHidden(), qPrintable(QLatin1String(what) + QStringLiteral(": no notice")));
+        QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("cannot be a shortcut")), qPrintable(c.shortcutConflict->text()));
+        QVERIFY2(ok->isEnabled(), qPrintable(QLatin1String(what) + QStringLiteral(" disabled OK")));
+    }
+    // Selecting another row clears the notice; an accepted chord does too.
+    c.selectShortcutRow(1);
+    QVERIFY(c.shortcutConflict->isHidden());
+    c.selectShortcutRow(0);
+    QTest::keyClick(c.shortcutEdit, Qt::Key_A);
+    QVERIFY(!c.shortcutConflict->isHidden());
+    QTest::keyClick(c.shortcutEdit, Qt::Key_F9);
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("F9").toString(QKeySequence::NativeText));
+    QVERIFY(c.shortcutConflict->isHidden());
+    // Accepted: F-keys with Shift, bare Ctrl+letter (the point of the page), Ctrl+digit, Alt+letter,
+    // Ctrl with a control key.
+    const char* accepted[] = {"Shift+F7", "F12", "Ctrl+W", "Ctrl+3", "Alt+G", "Ctrl+Return"};
+    for (const char* what : accepted) {
+        c.shortcutEdit->setKeySequence(seq(what));
+        QVERIFY2(c.shortcutCell(0, ColumnShortcut) == seq(what).toString(QKeySequence::NativeText),
+                 qPrintable(QLatin1String(what) + QStringLiteral(" was not accepted: ") + c.shortcutCell(0, ColumnShortcut)));
+        QVERIFY(c.shortcutConflict->isHidden());
+    }
+    QTest::keyClick(c.shortcutEdit, Qt::Key_W, Qt::ControlModifier);   // and through a real press
+    QCOMPARE(c.shortcutCell(0, ColumnShortcut), seq("Ctrl+W").toString(QKeySequence::NativeText));
+    c.shortcutEdit->setKeySequence(seq("Ctrl+Return"));
+    // Nothing of the refused presses reached the settings.
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.shortcut(QStringLiteral("actionAlpha"), seq("Ctrl+Shift+A")), seq("Ctrl+Return"));
+    QCOMPARE(s.customizedShortcutActions(), QStringList{QStringLiteral("actionAlpha")});
+}
+
+void Tst_dialogs::preferencesKeyboardFixedConflicts()
+{
+    // Header: a row set to a fixed shortcut (a tab alternate such as Ctrl+PgDown, a menu
+    // mnemonic such as Alt+F) is a conflict like a clash between two rows - unless the fixed
+    // entry belongs to that row's own action.
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    dialog.setShortcutEntries(sampleShortcutEntries());
+    ShortcutEntry alternate;
+    alternate.objectName = QStringLiteral("actionGamma");   // Gamma's own always-active alternate
+    alternate.title = QStringLiteral("Window > Gamma");
+    alternate.defaultSequence = seq("Ctrl+PgDown");
+    ShortcutEntry mnemonic;
+    mnemonic.title = QStringLiteral("File menu");
+    mnemonic.defaultSequence = seq("Alt+F");
+    ShortcutEntry empty;   // ignored
+    empty.title = QStringLiteral("nothing");
+    dialog.setFixedShortcuts({alternate, mnemonic, empty});
+    c.tabs->setCurrentIndex(PageKeyboard);
+    QPushButton* ok = c.buttons->button(QDialogButtonBox::Ok);
+    QPushButton* apply = c.buttons->button(QDialogButtonBox::Apply);
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    const QColor normal = c.shortcutColor(0);
+
+    // Alpha set to Gamma's alternate: a conflict naming the fixed owner.
+    c.selectShortcutRow(0);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+PgDown"));
+    QVERIFY(!ok->isEnabled());
+    QVERIFY(!apply->isEnabled());
+    QVERIFY(!c.shortcutConflict->isHidden());
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("File > Alpha")), qPrintable(c.shortcutConflict->text()));
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("Window > Gamma")), qPrintable(c.shortcutConflict->text()));
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("fixed")), qPrintable(c.shortcutConflict->text()));
+    QCOMPARE(c.shortcutColor(0), kConflictColor);
+    QCOMPARE(c.shortcutColor(2), normal);
+    // Gamma itself may use its own alternate.
+    c.shortcutRestore->click();
+    QVERIFY(ok->isEnabled());
+    c.selectShortcutRow(2);
+    c.shortcutEdit->setKeySequence(seq("Ctrl+PgDown"));
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    QCOMPARE(c.shortcutColor(2), normal);
+    // A menu mnemonic is taken for good.
+    c.selectShortcutRow(1);
+    c.shortcutEdit->setKeySequence(seq("Alt+F"));
+    QVERIFY(!ok->isEnabled());
+    QVERIFY2(c.shortcutConflict->text().contains(QStringLiteral("File menu")), qPrintable(c.shortcutConflict->text()));
+    QCOMPARE(c.shortcutColor(1), kConflictColor);
+    c.shortcutEdit->setKeySequence(seq("Alt+G"));
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    // Replacing the fixed list re-evaluates at once.
+    c.shortcutEdit->setKeySequence(seq("Alt+F"));
+    QVERIFY(!ok->isEnabled());
+    dialog.setFixedShortcuts({});
+    QVERIFY(ok->isEnabled());
+    QVERIFY(c.shortcutConflict->isHidden());
+    QCOMPARE(c.shortcutColor(1), normal);
 }
 
 // =======================================================================================

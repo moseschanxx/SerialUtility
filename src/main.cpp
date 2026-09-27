@@ -7,11 +7,41 @@
 
 #include "Version.h"
 #include "app/Logging.h"
+#include "core/SerialConnection.h"
+#include "ui/ConnectionBar.h"
 #include "ui/MainWindow.h"
 #include "ui/SessionWidget.h"
 #include "ui/SystemLogViewer.h"
 
 namespace {
+
+/// --baud <rate|auto> for a serial session: select that fixed rate - or the bar's "Auto" item,
+/// which detects the rate on connect - before the port is opened. Ignored, with a warning, on an
+/// SSH session and for a value outside SerialSettings' baud range.
+void applyBaudArgument(SessionWidget* session, const QString& value)
+{
+    if (session->isSsh()) {
+        qCWarning(lcApp) << "--baud is ignored for an SSH target";
+        return;
+    }
+    ConnectionBar* bar = session->connectionBar();
+    SerialSettings settings = bar->settings();
+    const QString text = value.trimmed();
+    if (text.compare(QLatin1String("auto"), Qt::CaseInsensitive) == 0) {
+        settings.autoBaud = true;   // baudRate stays the bar's starting rate
+    } else {
+        bool ok = false;
+        const qint32 baud = text.toInt(&ok);
+        if (!ok || !SerialSettings::isValidBaudRate(baud)) {
+            qCWarning(lcApp) << "invalid --baud" << value << "- expected a rate between" << SerialSettings::kMinBaudRate
+                             << "and" << SerialSettings::kMaxBaudRate << "or \"auto\"; ignored";
+            return;
+        }
+        settings.autoBaud = false;
+        settings.baudRate = baud;
+    }
+    bar->setSettings(settings);
+}
 
 /// Make `port` (a serial port name or an SSH restore key) the current session: reuse a tab that
 /// already shows it, otherwise fill the current empty tab of the same kind, otherwise open a new
@@ -71,6 +101,11 @@ int main(int argc, char* argv[])
     const QCommandLineOption connectOption({QStringLiteral("c"), QStringLiteral("connect")},
                                            QStringLiteral("Open the given port or SSH target immediately."));
     parser.addOption(connectOption);
+    const QCommandLineOption baudOption(
+        QStringLiteral("baud"),
+        QStringLiteral("Baud rate for the serial port (a number, or \"auto\" to detect it on connect); used with a port name."),
+        QStringLiteral("rate"));
+    parser.addOption(baudOption);
     const QCommandLineOption sshOption(
         QStringLiteral("ssh"),
         QStringLiteral("Open an SSH session tab for user@host[:port] (or ssh://...) instead of a serial port."),
@@ -103,12 +138,20 @@ int main(int argc, char* argv[])
 
     if (!portArg.isEmpty()) {
         SessionWidget* session = selectPortSession(window, portArg);
+        if (parser.isSet(baudOption)) {
+            applyBaudArgument(session, parser.value(baudOption));
+        }
         if (connectNow) {
             // Connect once the event loop runs so status messages land in the visible window.
             QTimer::singleShot(0, session, [session]() { session->connectPort(); });
         }
-    } else if (connectNow) {
-        qCWarning(lcApp) << "--connect given without a port name or --ssh target; ignored";
+    } else {
+        if (connectNow) {
+            qCWarning(lcApp) << "--connect given without a port name or --ssh target; ignored";
+        }
+        if (parser.isSet(baudOption)) {
+            qCWarning(lcApp) << "--baud given without a port name; ignored";
+        }
     }
 
     if (parser.isSet(replayOption)) {

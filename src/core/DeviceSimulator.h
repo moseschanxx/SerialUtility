@@ -64,7 +64,8 @@
  *  - Mcu ("SIM:mcu"): "BuildAI MCU shell v1.0 (STM32F4 @168MHz)" banner, prompt "> ",
  *    echo of typed characters, lines end with "\r\n". Commands: help, version, reset
  *    (banner again), led on|off|toggle, adc (8 channel readings), temp, uptime,
- *    telemetry on|off (every 2 s prints "[  12.345] temp=36.5C vbat=3.98V rssi=-67dBm"),
+ *    telemetry on|off [ms] (every 2 s - or every `ms` ms, 100..60000 - prints
+ *    "[  12.345] temp=36.5C vbat=3.98V rssi=-67dBm"),
  *    echo <text>, AT -> "OK", AT+GMR -> version line + "OK", ATE0/ATE1 (echo off/on),
  *    AT+RST -> "OK" then vanished(1500), any other AT... -> "ERROR". Also accepts "\n"
  *    as a line terminator (many MCU tools send LF).
@@ -73,6 +74,22 @@
  * second (10 bits per byte), with a chunk every ~20 ms, so a 1500000-baud simulation
  * streams the boot log visibly faster than a 115200 one and the widget's coalesced repaint
  * path is exercised. Host->device bytes are processed immediately (receive()).
+ *
+ * Native baud rate (v0.4, for the automatic baud-rate detection): every kind talks at a fixed
+ * rate of its own - nativeBaudRate(Kind): Linux and UBoot 1500000 (a Rockchip debug console),
+ * Mcu 115200, Loopback 0 (= any rate) - and the session's rate (constructor / setBaudRate())
+ * is the rate the host listens at. While the two differ and the native rate is not 0 the
+ * device is "heard at the wrong rate": every chunk that would carry text carries the same
+ * number of GARBAGE bytes instead (a fixed pseudo-random sequence dominated by 0x00, 0xFF,
+ * 0xFE, 0xF8, 0xE0, 0xC0, 0x80, 0x9C and similar, the way a UART decodes a mismatched rate;
+ * BaudRateDetector::textScore() of 512 such bytes is < 0.4), the scripted state machine keeps
+ * running underneath (the boot log still "happens", the prompt still appears - the host just
+ * cannot read it), and bytes the host types are dropped (the device receives garbage and
+ * ignores it). As soon as the rates match again the real text is delivered. setNativeBaudRate()
+ * changes the device's rate mid-session ("the board switched to 115200"); it affects this
+ * instance only - a simulator re-created after a reboot / reconnect starts at
+ * nativeBaudRate(kind) again, so a rebooting SIM:linux keeps its 1500000. wrongRateNoise()
+ * exposes the garbage sequence for tests.
  *
  * Presence: after vanished(ms) the pseudo-port is reported absent by isPresent() for that
  * many milliseconds (a static per-port "down until" table), so SerialConnection's reconnect
@@ -109,8 +126,17 @@ public:
 
     Kind kind() const;
     qint32 baudRate() const;
-    void setBaudRate(qint32 baud);                            ///< live change of pacing
+    void setBaudRate(qint32 baud);                            ///< live change of pacing (and of readability, see above)
     bool isStarted() const;
+
+    /// The rate the device itself talks at: Linux / UBoot 1500000, Mcu 115200, Loopback 0 (any).
+    static qint32 nativeBaudRate(Kind kind);
+    qint32 nativeBaudRate() const;                            ///< this instance's rate (nativeBaudRate(kind()) unless changed)
+    void setNativeBaudRate(qint32 baud);                      ///< the board changed its rate; 0 = any rate is readable
+    /// True when output is readable: nativeBaudRate() is 0 or equals baudRate().
+    bool baudRateMatches() const;
+    /// `count` bytes of the wrong-rate garbage sequence (tests); the same `seed` gives the same bytes.
+    static QByteArray wrongRateNoise(qsizetype count, quint32 seed = 0);
 
     /// Power on: begins the banner / boot output (asynchronously, via the pacing timer).
     void start();
@@ -182,6 +208,8 @@ private:
     void runDelayed(int ms, std::function<void()> action);
     void cancelDelayed();
     void discardPendingOutput();                              ///< drop all queued device->host bytes (tty INTR flush)
+    QByteArray garble(const QByteArray& bytes);               ///< the same number of wrong-rate garbage bytes
+    QByteArray deliverable(const QByteArray& bytes);          ///< `bytes`, or garble(bytes) while the rates differ
     void scheduleVanishIfDrained();                           ///< after reboot(): vanish once the queue is empty
     int bytesPerTick() const;
     double temperature() const;
@@ -190,6 +218,8 @@ private:
 
     Kind m_kind;
     qint32 m_baud;
+    qint32 m_nativeBaud;                                      ///< see nativeBaudRate()
+    quint32 m_noiseState = 0x2545F491u;                       ///< position in the garbage sequence
     Stage m_stage = Stage::Off;
     QList<Segment> m_segments;                                ///< pending device -> host output
     QTimer m_paceTimer;

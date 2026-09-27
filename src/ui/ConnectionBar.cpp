@@ -15,6 +15,7 @@
 #include <QStyle>
 #include <QToolButton>
 
+#include "app/AppSettings.h"
 #include "app/Logging.h"
 
 namespace {
@@ -22,6 +23,40 @@ namespace {
 constexpr int kPortComboMinWidth = 220;
 constexpr int kDotSizePx = 10;
 constexpr qint32 kFallbackBaud = 115200;
+constexpr int kAutoBaudIndex = 0;      ///< the "Auto" item of the baud combo (item data 0)
+const QLatin1String kAutoWord("Auto");  ///< always accepted, whatever the UI language
+
+/// The baud combo's validator: a QIntValidator over the baud range that also accepts the
+/// "Auto" item's text (the English word and its translation, case-insensitively; a prefix
+/// of either is Intermediate so the user can type it).
+class BaudValidator : public QIntValidator
+{
+public:
+    using QIntValidator::QIntValidator;
+
+    void setAutoText(const QString& text) { m_autoText = text; }
+
+    State validate(QString& input, int& pos) const override
+    {
+        const QString typed = input.trimmed();
+        if (!typed.isEmpty() && !typed.at(0).isDigit()) {
+            State best = Invalid;
+            for (const QString& word : {m_autoText, QString(kAutoWord)}) {
+                if (word.compare(typed, Qt::CaseInsensitive) == 0) {
+                    return Acceptable;
+                }
+                if (word.startsWith(typed, Qt::CaseInsensitive)) {
+                    best = Intermediate;
+                }
+            }
+            return best;
+        }
+        return QIntValidator::validate(input, pos);
+    }
+
+private:
+    QString m_autoText = kAutoWord;
+};
 
 /// Item data roles used by the port combo (Qt::UserRole holds the port name).
 constexpr int kPlaceholderRole = Qt::UserRole + 1;
@@ -108,12 +143,17 @@ void ConnectionBar::setupUi()
     m_baudCombo->setObjectName(QStringLiteral("baudCombo"));
     m_baudCombo->setEditable(true);
     m_baudCombo->setInsertPolicy(QComboBox::NoInsert);
-    m_baudCombo->setValidator(
-        new QIntValidator(SerialSettings::kMinBaudRate, SerialSettings::kMaxBaudRate, m_baudCombo));
+    m_baudCombo->setValidator(new BaudValidator(SerialSettings::kMinBaudRate, SerialSettings::kMaxBaudRate, m_baudCombo));
     m_baudCombo->setMinimumContentsLength(8);
     m_baudCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_baudCombo->addItem(kAutoWord, 0);   // kAutoBaudIndex; text set in retranslate()
     for (const qint32 baud : SerialSettings::standardBaudRates()) {
         m_baudCombo->addItem(QString::number(baud), baud);
+    }
+    m_baudCombo->setCurrentIndex(m_baudCombo->findData(kFallbackBaud));   // a fresh bar starts at 115200, not "Auto"
+    const QList<qint32> candidates = AppSettings::instance().autoBaudCandidates();
+    if (!candidates.isEmpty() && SerialSettings::isValidBaudRate(candidates.first())) {
+        m_effectiveBaud = candidates.first();
     }
     m_baudLabel->setBuddy(m_baudCombo);
 
@@ -208,9 +248,15 @@ void ConnectionBar::setupUi()
     connect(m_portCombo, &QComboBox::currentIndexChanged, this, [this](int) { emitSettingsChanged(); });
     connect(m_refreshButton, &QToolButton::clicked, this, &ConnectionBar::refreshRequested);
 
-    connect(m_baudCombo, &QComboBox::currentIndexChanged, this, [this](int) { emitSettingsChanged(); });
+    connect(m_baudCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        updateBaudToolTips();
+        emitSettingsChanged();
+    });
     if (QLineEdit* edit = m_baudCombo->lineEdit()) {
-        connect(edit, &QLineEdit::editingFinished, this, [this]() { emitSettingsChanged(); });
+        connect(edit, &QLineEdit::editingFinished, this, [this]() {
+            updateBaudToolTips();
+            emitSettingsChanged();
+        });
     }
     for (QComboBox* combo : {m_dataBitsCombo, m_parityCombo, m_stopBitsCombo, m_flowCombo}) {
         connect(combo, &QComboBox::currentIndexChanged, this, [this](int) { emitSettingsChanged(); });
@@ -252,7 +298,16 @@ void ConnectionBar::retranslate()
     m_portCombo->setPlaceholderText(tr("Select a port"));
     m_portCombo->setToolTip(tr("Serial port"));
     m_refreshButton->setToolTip(tr("Refresh the port list"));
-    m_baudCombo->setToolTip(tr("Baud rate (type a custom value and press Enter)"));
+    {
+        // The item text follows the language; changing it must not read as a user change.
+        const bool wasUpdating = m_updating;
+        m_updating = true;
+        m_baudCombo->setItemText(kAutoBaudIndex, tr("Auto"));
+        m_updating = wasUpdating;
+    }
+    // setupUi() installed a BaudValidator; the base pointer is all the combo hands back.
+    static_cast<BaudValidator*>(const_cast<QValidator*>(m_baudCombo->validator()))->setAutoText(tr("Auto"));
+    updateBaudToolTips();
     m_dataBitsCombo->setToolTip(tr("Data bits"));
     m_stopBitsCombo->setToolTip(tr("Stop bits"));
     m_flowCombo->setToolTip(tr("Flow control"));
@@ -297,9 +352,15 @@ SerialSettings ConnectionBar::settings() const
     SerialSettings s;
     s.portName = selectedPortName();
 
-    bool ok = false;
-    const qint32 baud = m_baudCombo->currentText().trimmed().toInt(&ok);
-    s.baudRate = (ok && SerialSettings::isValidBaudRate(baud)) ? baud : kFallbackBaud;
+    const QString baudText = m_baudCombo->currentText().trimmed();
+    if (isAutoText(baudText)) {
+        s.autoBaud = true;
+        s.baudRate = m_effectiveBaud;
+    } else {
+        bool ok = false;
+        const qint32 baud = baudText.toInt(&ok);
+        s.baudRate = (ok && SerialSettings::isValidBaudRate(baud)) ? baud : kFallbackBaud;
+    }
 
     s.dataBits = static_cast<QSerialPort::DataBits>(m_dataBitsCombo->currentData().toInt());
     s.parity = static_cast<QSerialPort::Parity>(m_parityCombo->currentData().toInt());
@@ -317,13 +378,22 @@ void ConnectionBar::setSettings(const SerialSettings& settings)
 
     selectPort(settings.portName);
 
-    const int baudIndex = m_baudCombo->findData(settings.baudRate);
-    if (baudIndex >= 0) {
-        m_baudCombo->setCurrentIndex(baudIndex);
+    if (settings.autoBaud) {
+        if (SerialSettings::isValidBaudRate(settings.baudRate)) {
+            m_effectiveBaud = settings.baudRate;
+        }
+        m_baudCombo->setCurrentIndex(kAutoBaudIndex);
+        m_baudCombo->setEditText(m_baudCombo->itemText(kAutoBaudIndex));   // in case "Auto" was already current
     } else {
-        m_baudCombo->setCurrentIndex(-1);
-        m_baudCombo->setEditText(QString::number(settings.baudRate));
+        const int baudIndex = m_baudCombo->findData(settings.baudRate);
+        if (baudIndex > kAutoBaudIndex) {
+            m_baudCombo->setCurrentIndex(baudIndex);
+        } else {
+            m_baudCombo->setCurrentIndex(-1);
+            m_baudCombo->setEditText(QString::number(settings.baudRate));
+        }
     }
+    updateBaudToolTips();
 
     selectByData(m_dataBitsCombo, static_cast<int>(settings.dataBits));
     selectByData(m_parityCombo, static_cast<int>(settings.parity));
@@ -334,6 +404,41 @@ void ConnectionBar::setSettings(const SerialSettings& settings)
 
     m_updating = wasUpdating;
     m_hasEmitted = false;   // programmatic change: report the next user change even if it repeats the last emitted value
+}
+
+void ConnectionBar::setEffectiveBaudRate(qint32 baud)
+{
+    if (!SerialSettings::isValidBaudRate(baud)) {
+        return;
+    }
+    m_effectiveBaud = baud;
+    updateBaudToolTips();
+}
+
+qint32 ConnectionBar::effectiveBaudRate() const
+{
+    return m_effectiveBaud;
+}
+
+bool ConnectionBar::isAutoText(const QString& text) const
+{
+    const QString typed = text.trimmed();
+    return !typed.isEmpty() && (typed.compare(kAutoWord, Qt::CaseInsensitive) == 0 ||
+                                typed.compare(m_baudCombo->itemText(kAutoBaudIndex), Qt::CaseInsensitive) == 0);
+}
+
+void ConnectionBar::updateBaudToolTips()
+{
+    const QString autoTip = tr("Auto (%1)").arg(m_effectiveBaud);
+    m_baudCombo->setItemData(kAutoBaudIndex,
+                             QStringLiteral("%1\n%2").arg(autoTip, tr("Detect the baud rate automatically")),
+                             Qt::ToolTipRole);
+    if (isAutoText(m_baudCombo->currentText())) {
+        m_baudCombo->setToolTip(
+            QStringLiteral("%1\n%2").arg(autoTip, tr("The baud rate is detected automatically; this is the current one")));
+    } else {
+        m_baudCombo->setToolTip(tr("Baud rate (type a custom value and press Enter, or choose Auto)"));
+    }
 }
 
 QString ConnectionBar::selectedPortName() const

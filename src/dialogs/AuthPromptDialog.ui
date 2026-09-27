@@ -89,7 +89,7 @@
    <item>
     <widget class="QCheckBox" name="checkRemember">
      <property name="text">
-      <string>Remember in this profile</string>
+      <string>Remember password</string>
      </property>
     </widget>
    </item>

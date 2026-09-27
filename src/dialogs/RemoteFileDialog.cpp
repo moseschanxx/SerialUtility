@@ -2,6 +2,7 @@
 #include "ui_RemoteFileDialog.h"
 
 #include <QCheckBox>
+#include <QColor>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
@@ -13,6 +14,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QToolButton>
@@ -24,6 +26,7 @@ namespace {
 const auto kSettingsGroup = QStringLiteral("remoteFile");
 const auto kLastLocalKey = QStringLiteral("lastLocalPath");
 const auto kLastRemoteKey = QStringLiteral("lastRemotePath");
+const QColor kErrorColor(0xC0, 0x1C, 0x28);
 
 QString downloadsDirectory()
 {
@@ -58,6 +61,54 @@ QString formatSize(qint64 bytes)
     return QLocale().formattedDataSize(bytes < 0 ? 0 : bytes);
 }
 
+bool hasTilde(const QString& path)
+{
+    return path == QLatin1String("~") || path.startsWith(QLatin1String("~/"));
+}
+
+/// "~" -> "<home>/" and "~/x" -> "<home>/x" when the home is known; "" and "x" (relative to the
+/// login directory, where SFTP and the shell fallback both resolve it) when it is not. Any other
+/// path is returned unchanged.
+QString expandTilde(const QString& path, const QString& home)
+{
+    if (!hasTilde(path)) {
+        return path;
+    }
+    QString rest = path.mid(1);
+    if (rest.startsWith(QLatin1Char('/'))) {
+        rest.remove(0, 1);
+    }
+    if (home.isEmpty()) {
+        return rest;
+    }
+    QString base = home;
+    while (base.size() > 1 && base.endsWith(QLatin1Char('/'))) {
+        base.chop(1);
+    }
+    return base + QLatin1Char('/') + rest;
+}
+
+/// "C:\..." as typed - a Windows path pasted into the remote field (the two fields swapped).
+/// Checked on the raw text: a server whose home is spelled "C:/..." (the in-process test server)
+/// hands out forward slashes, which a paste from Explorer never has.
+bool looksLikeWindowsPath(const QString& rawText)
+{
+    static const QRegularExpression drive(QStringLiteral("^[A-Za-z]:\\\\"));
+    return drive.match(rawText.trimmed()).hasMatch();
+}
+
+/// TransferStatus.method for the status line.
+QString methodText(const QString& method)
+{
+    if (method == QLatin1String("sftp")) {
+        return RemoteFileDialog::tr("SFTP");
+    }
+    if (method == QLatin1String("shell")) {
+        return RemoteFileDialog::tr("shell (cat)");
+    }
+    return method;   // unknown: shown as reported, or nothing
+}
+
 } // namespace
 
 RemoteFileDialog::RemoteFileDialog(SshConnection* connection, QWidget* parent)
@@ -70,6 +121,7 @@ RemoteFileDialog::RemoteFileDialog(SshConnection* connection, QWidget* parent)
     setModal(false);
     ui->progressBar->setRange(0, 100);
     ui->progressBar->setValue(0);
+    m_statusPalette = ui->labelStatus->palette();
 
     if (m_connection) {
         m_remoteHome = m_connection->remoteHome();
@@ -127,6 +179,8 @@ void RemoteFileDialog::changeEvent(QEvent* event)
         updateDirectionUi();
         if (!(m_connection && m_connection->isTransferActive())) {
             setIdleStatus();
+        } else {
+            setStatus(runningText());
         }
         updateControls();
     }
@@ -184,9 +238,31 @@ QString RemoteFileDialog::localPath() const
     return QDir::fromNativeSeparators(ui->editLocalPath->text().trimmed());
 }
 
+QString RemoteFileDialog::remoteText() const
+{
+    QString text = ui->editRemotePath->text().trimmed();
+    text.replace(QLatin1Char('\\'), QLatin1Char('/'));   // a Windows habit; never meant on a Linux host
+    return text;
+}
+
+QString RemoteFileDialog::knownHome() const
+{
+    if (!m_remoteHome.isEmpty()) {
+        return m_remoteHome;
+    }
+    return m_connection ? m_connection->remoteHome() : QString();
+}
+
 QString RemoteFileDialog::remotePath() const
 {
-    return ui->editRemotePath->text().trimmed();
+    const QString text = remoteText();
+    QString path = expandTilde(text, knownHome());
+    if (isUpload() && !text.isEmpty() && (path.isEmpty() || path.endsWith(QLatin1Char('/')))) {
+        // A directory ("/tmp/", "~", "~/" - relative to the login directory when the home is
+        // unknown) gets the file name, whether or not the field was left before Start.
+        path += QFileInfo(localPath()).fileName();
+    }
+    return path;
 }
 
 void RemoteFileDialog::setLocalText(const QString& path, bool derived)
@@ -209,8 +285,9 @@ void RemoteFileDialog::applyDefaults()
         if (name.isEmpty()) {
             return;
         }
-        const QString remote = remotePath();
-        const bool directoryOnly = remote.endsWith(QLatin1Char('/'));
+        const QString remote = remoteText();
+        const QString home = knownHome();
+        const bool directoryOnly = remote.endsWith(QLatin1Char('/')) || remote == QLatin1String("~");
         if (!(remote.isEmpty() || directoryOnly || m_remoteDerived)) {
             return;   // typed by the user: keep it
         }
@@ -220,16 +297,31 @@ void RemoteFileDialog::applyDefaults()
         } else if (m_remoteDerived && !remoteDirectory(remote).isEmpty()) {
             dir = remoteDirectory(remote);   // keep the directory of the previous derived value
         } else {
-            dir = m_remoteHome.isEmpty() && m_connection ? m_connection->remoteHome() : m_remoteHome;
+            dir = home;
+        }
+        if (!home.isEmpty()) {
+            dir = expandTilde(dir, home);   // "~" / "~/sub/" -> "/home/x/" / "/home/x/sub/"
         }
         if (dir.isEmpty()) {
-            // The home is not known yet: ask for it, onRemoteHomeReceived() completes the path.
-            if (m_connection && m_connection->isOpen()) {
+            // The home is not known yet: ask for it once, onRemoteHomeReceived() completes the path.
+            // A derived bare name (proposed when the home could not be resolved) follows the file
+            // meanwhile, like any other derived destination.
+            if (m_remoteDerived && !remote.isEmpty()) {
+                setRemoteText(name, true);
+            }
+            if (m_connection && m_connection->isOpen() && !m_homeAsked) {
+                m_homeAsked = true;
                 m_connection->requestRemoteHome();
             }
             return;
         }
         setRemoteText(joinRemote(dir, name), true);
+        if (hasTilde(dir) && m_connection && m_connection->isOpen() && !m_homeAsked) {
+            // "~/<name>" is kept literally until the home arrives (request() makes it relative
+            // meanwhile); ask so it can be spelled out.
+            m_homeAsked = true;
+            m_connection->requestRemoteHome();
+        }
     } else {
         // Local destination = <Downloads or the chosen directory>/<remote file name>.
         const QString name = remoteFileName(remotePath());
@@ -284,7 +376,7 @@ void RemoteFileDialog::savePaths() const
     QSettings settings;
     settings.beginGroup(kSettingsGroup);
     settings.setValue(kLastLocalKey, localPath());
-    settings.setValue(kLastRemoteKey, remotePath());
+    settings.setValue(kLastRemoteKey, remoteText());
     settings.endGroup();
 }
 
@@ -320,17 +412,14 @@ void RemoteFileDialog::onBrowseLocal()
 
 void RemoteFileDialog::onRemoteHome()
 {
-    QString home = m_remoteHome;
-    if (home.isEmpty() && m_connection) {
-        home = m_connection->remoteHome();
-    }
+    const QString home = knownHome();
     if (home.isEmpty()) {
         if (m_connection && m_connection->isOpen()) {
             m_homeWanted = true;
             m_connection->requestRemoteHome();
-            ui->labelStatus->setText(tr("Resolving the remote home directory..."));
+            setStatus(tr("Resolving the remote home directory..."));
         } else {
-            ui->labelStatus->setText(tr("The remote home directory is known once the session is connected."));
+            setStatus(tr("The remote home directory is known once the session is connected."));
         }
         return;
     }
@@ -339,14 +428,30 @@ void RemoteFileDialog::onRemoteHome()
 
 void RemoteFileDialog::onRemoteHomeReceived(const QString& path)
 {
+    const bool active = m_connection && m_connection->isTransferActive();
     if (path.isEmpty()) {
+        // Not resolvable (no SFTP on this server, e.g. dropbear). A relative path still lands in
+        // the login directory with either method, so an upload without a destination proposes
+        // the bare file name and Start stays usable.
+        const bool wanted = m_homeWanted;
+        m_homeWanted = false;
+        if (isUpload() && remoteText().isEmpty()) {
+            const QString name = QFileInfo(localPath()).fileName();
+            if (!name.isEmpty()) {
+                setRemoteText(name, true);
+            }
+        }
+        if (wanted && !active) {
+            setStatus(tr("The remote home directory could not be resolved; a relative path is written to the "
+                         "login directory."));
+        }
         return;
     }
     m_remoteHome = path;
     if (m_homeWanted) {
         m_homeWanted = false;
         fillRemoteHome(path);
-        if (!(m_connection && m_connection->isTransferActive())) {
+        if (!active) {
             setIdleStatus();
         }
     } else {
@@ -379,15 +484,17 @@ void RemoteFileDialog::updateDirectionUi()
         ui->labelRemote->setText(tr("&Remote path:"));
         ui->editLocalPath->setToolTip(tr("The file to upload"));
         ui->editRemotePath->setToolTip(
-            tr("Where to write it on the remote host (a directory ending in / keeps the file name)"));
+            tr("Where to write it on the remote host (a directory ending in / keeps the file name; ~ is the remote home)"));
         // "&Start ..." rather than "&Upload": the radio button already owns Alt+U (Alt+D below).
         ui->buttonStart->setText(tr("&Start upload"));
     } else {
-        ui->labelLocal->setText(tr("&Save as:"));
+        // Not "&Save" (Start owns Alt+S) and not "Save &as" (Alt+A is WeChat's global screenshot
+        // hotkey on the team's desktops - it froze the screen in the smoke run).
+        ui->labelLocal->setText(tr("Save &to:"));
         ui->labelRemote->setText(tr("&Remote file:"));
         ui->editLocalPath->setToolTip(
             tr("Where to write the downloaded file (an existing directory keeps the file name)"));
-        ui->editRemotePath->setToolTip(tr("The remote file to download"));
+        ui->editRemotePath->setToolTip(tr("The remote file to download (~ is the remote home)"));
         ui->buttonStart->setText(tr("&Start download"));
     }
 }
@@ -397,19 +504,36 @@ void RemoteFileDialog::onStart()
     if (!m_connection) {
         return;
     }
+    // Alt+S straight from a field skips editingFinished: complete a directory / "~" in the field
+    // now, so what is shown is what is sent.
+    applyDefaults();
+    if (looksLikeWindowsPath(ui->editRemotePath->text())) {
+        setStatus(tr("%1 looks like a Windows path. Enter a path on the remote host, for example /tmp/ or ~/.")
+                      .arg(ui->editRemotePath->text().trimmed()),
+                  true);
+        return;
+    }
     const SshConnection::TransferRequest req = request();
     if (req.localPath.isEmpty() || req.remotePath.isEmpty()) {
-        ui->labelStatus->setText(tr("Enter both the local and the remote path."));
+        setStatus(tr("Enter both the local and the remote path."), true);
         return;
     }
     const bool upload = (req.direction == SshConnection::TransferDirection::Upload);
+    if (upload && QFileInfo(req.localPath).isDir()) {
+        // A folder dropped or typed as the source (a build output directory): say so instead of
+        // "not found" for something that plainly exists.
+        setStatus(tr("%1 is a folder. Select a single file to upload (folders are not supported yet).")
+                      .arg(QDir::toNativeSeparators(req.localPath)),
+                  true);
+        return;
+    }
     if (upload && !QFileInfo(req.localPath).isFile()) {
-        ui->labelStatus->setText(tr("Local file not found: %1").arg(QDir::toNativeSeparators(req.localPath)));
+        setStatus(tr("Local file not found: %1").arg(QDir::toNativeSeparators(req.localPath)), true);
         return;
     }
     if (!upload && !req.overwrite && QFileInfo::exists(req.localPath)) {
-        ui->labelStatus->setText(
-            tr("%1 already exists (enable Overwrite to replace it).").arg(QDir::toNativeSeparators(req.localPath)));
+        setStatus(tr("%1 already exists (enable Overwrite to replace it).").arg(QDir::toNativeSeparators(req.localPath)),
+                  true);
         return;
     }
     savePaths();
@@ -417,14 +541,15 @@ void RemoteFileDialog::onStart()
     ui->progressBar->setRange(0, 100);
     ui->progressBar->setValue(0);
     if (!m_connection->startTransfer(req)) {
-        ui->labelStatus->setText(
-            tr("The transfer could not be started (not connected, or another transfer is running)."));
-        qCWarning(lcSsh) << "SFTP transfer refused:" << req.localPath << "<->" << req.remotePath;
+        setStatus(tr("The transfer could not be started (not connected, or another transfer is running)."), true);
+        qCWarning(lcSsh) << "file transfer refused:" << req.localPath << "<->" << req.remotePath;
         updateControls();
         return;
     }
-    ui->labelStatus->setText(upload ? tr("Uploading %1...").arg(QFileInfo(req.localPath).fileName())
-                                    : tr("Downloading %1...").arg(remoteFileName(req.remotePath)));
+    m_activeUpload = upload;
+    m_activeName = upload ? QFileInfo(req.localPath).fileName() : remoteFileName(req.remotePath);
+    m_method = m_connection->transferStatus().method;   // usually empty until transferStarted()
+    setStatus(runningText());
     qCInfo(lcSsh) << (upload ? "upload started:" : "download started:") << req.localPath << "<->" << req.remotePath;
     updateControls();
 }
@@ -433,30 +558,51 @@ void RemoteFileDialog::onCancel()
 {
     if (m_connection && m_connection->isTransferActive()) {
         m_connection->cancelTransfer();
-        ui->labelStatus->setText(tr("Cancelling..."));
+        setStatus(tr("Cancelling..."));
     }
 }
 
 void RemoteFileDialog::onTransferStarted(const SshConnection::TransferRequest& req)
 {
-    const bool upload = (req.direction == SshConnection::TransferDirection::Upload);
-    ui->labelStatus->setText(upload ? tr("Uploading %1...").arg(QFileInfo(req.localPath).fileName())
-                                    : tr("Downloading %1...").arg(remoteFileName(req.remotePath)));
+    m_activeUpload = (req.direction == SshConnection::TransferDirection::Upload);
+    m_activeName = m_activeUpload ? QFileInfo(req.localPath).fileName() : remoteFileName(req.remotePath);
+    applyTransferStatus(m_connection ? m_connection->transferStatus() : SshConnection::TransferStatus());
+}
+
+void RemoteFileDialog::applyTransferStatus(const SshConnection::TransferStatus& status)
+{
+    if (status.active) {
+        m_activeUpload = (status.direction == SshConnection::TransferDirection::Upload);
+        const QString name =
+            m_activeUpload ? QFileInfo(status.localPath).fileName() : remoteFileName(status.remotePath);
+        if (!name.isEmpty()) {
+            m_activeName = name;
+        }
+    }
+    if (!status.method.isEmpty()) {
+        m_method = status.method;
+    }
+    setStatus(runningText());
     updateControls();
 }
 
 void RemoteFileDialog::onProgress(qint64 done, qint64 total)
 {
+    if (m_method.isEmpty() && m_connection) {
+        m_method = m_connection->transferStatus().method;   // published after the SFTP probe
+    }
+    QString progress;
     if (total > 0) {
         const qint64 ratio = done * 100 / total;
         const int percent = static_cast<int>(ratio < 0 ? 0 : (ratio > 100 ? 100 : ratio));
         ui->progressBar->setRange(0, 100);
         ui->progressBar->setValue(percent);
-        ui->labelStatus->setText(QStringLiteral("%1 / %2 (%3%)").arg(formatSize(done), formatSize(total)).arg(percent));
+        progress = QStringLiteral("%1 / %2 (%3%)").arg(formatSize(done), formatSize(total)).arg(percent);
     } else {
         ui->progressBar->setRange(0, 0);   // size unknown: busy indicator
-        ui->labelStatus->setText(formatSize(done));
+        progress = formatSize(done);
     }
+    setStatus(m_activeName.isEmpty() ? progress : runningText(progress));
 }
 
 void RemoteFileDialog::onFinished(bool ok, const QString& message)
@@ -465,15 +611,32 @@ void RemoteFileDialog::onFinished(bool ok, const QString& message)
     if (ok) {
         ui->progressBar->setValue(100);
     }
-    ui->labelStatus->setText(message.isEmpty() ? (ok ? tr("Transfer complete.") : tr("Transfer failed.")) : message);
-    qCInfo(lcSsh) << "SFTP transfer finished:" << (ok ? "ok" : "failed") << message;
+    // The connection's own words ("Uploaded x to y (1.2 MB, SFTP)", "Remote file not found: ...",
+    // "Transfer cancelled", or why neither SFTP nor the shell fallback works); failures in red.
+    setStatus(message.isEmpty() ? (ok ? tr("Transfer complete.") : tr("Transfer failed.")) : message, !ok);
+    qCInfo(lcSsh) << "file transfer finished:" << (ok ? "ok" : "failed") << message;
+    m_activeName.clear();
+    m_method.clear();
     emit transferFinished(ok, message);
     updateControls();
 }
 
 void RemoteFileDialog::onConnectionState(Transport::State state)
 {
-    if (!(m_connection && m_connection->isTransferActive())) {
+    if (state == Transport::State::Disconnected) {
+        m_remoteHome.clear();   // the next connect may reach another host
+        m_homeAsked = false;
+    } else if (state == Transport::State::Connected) {
+        m_homeAsked = false;
+        if (m_connection && !m_connection->remoteHome().isEmpty()) {
+            m_remoteHome = m_connection->remoteHome();
+        }
+    }
+    // A failure line stays while the link is down: "Transfer aborted: the connection was closed"
+    // (from the connection's close() or the dropped link) is the explanation the user needs next
+    // to the disabled Start; a fresh Connected starts from "Ready." again.
+    const bool keepError = m_statusIsError && state != Transport::State::Connected;
+    if (!(m_connection && m_connection->isTransferActive()) && !keepError) {
         setIdleStatus();
     }
     if (state != Transport::State::Connected) {
@@ -485,7 +648,31 @@ void RemoteFileDialog::onConnectionState(Transport::State state)
 void RemoteFileDialog::setIdleStatus()
 {
     const bool connected = m_connection && m_connection->state() == Transport::State::Connected;
-    ui->labelStatus->setText(connected ? tr("Ready.") : tr("Not connected."));
+    setStatus(connected ? tr("Ready.") : tr("Not connected."));
+}
+
+void RemoteFileDialog::setStatus(const QString& text, bool error)
+{
+    QPalette palette = m_statusPalette;
+    if (error) {
+        palette.setColor(QPalette::WindowText, kErrorColor);
+    }
+    m_statusIsError = error;
+    ui->labelStatus->setPalette(palette);
+    ui->labelStatus->setText(text);
+}
+
+QString RemoteFileDialog::runningText(const QString& progress) const
+{
+    const QString method = methodText(m_method);
+    QString text;
+    if (m_activeUpload) {
+        text = method.isEmpty() ? tr("Uploading %1").arg(m_activeName) : tr("Uploading %1 via %2").arg(m_activeName, method);
+    } else {
+        text = method.isEmpty() ? tr("Downloading %1").arg(m_activeName)
+                                : tr("Downloading %1 via %2").arg(m_activeName, method);
+    }
+    return progress.isEmpty() ? text + QStringLiteral("...") : text + QStringLiteral(": ") + progress;
 }
 
 void RemoteFileDialog::updateControls()

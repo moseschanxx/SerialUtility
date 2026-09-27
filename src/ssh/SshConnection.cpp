@@ -12,13 +12,23 @@
 #include <QThread>
 #include <QTimer>
 
+#include <optional>
+#include <utility>
+
 namespace {
 
 constexpr int kStartupCommandDelayMs = 300;
 
-QString secretKeyFor(const QString& profileId, const char* what)
+/// Append the SecretStore entry `key` to `list` when the store holds one (empty keys are skipped).
+void appendSavedSecret(QList<SshWorker::SavedSecret>* list, const QString& key)
 {
-    return QStringLiteral("ssh/%1/%2").arg(profileId, QLatin1String(what));
+    if (key.isEmpty()) {
+        return;
+    }
+    const std::optional<QString> value = SecretStore::load(key);
+    if (value && !value->isEmpty()) {
+        list->append({key, *value});
+    }
 }
 
 } // namespace
@@ -451,9 +461,32 @@ bool SshConnection::open()
     request.profile = profile;
     request.cols = d->cols;
     request.rows = d->rows;
-    if (!profile.id.isEmpty()) {
-        request.savedPassword = SecretStore::load(secretKeyFor(profile.id, "password")).value_or(QString());
-        request.savedPassphrase = SecretStore::load(secretKeyFor(profile.id, "passphrase")).value_or(QString());
+    // Remembered credentials (SecretStore is GUI-thread only, so they travel with the request;
+    // the key scheme is documented in SshWorker.h): the profile-id entry first, then the
+    // target / key-file entry.
+    appendSavedSecret(&request.savedPasswords, SshWorker::profilePasswordKey(profile));
+    appendSavedSecret(&request.savedPasswords, SshWorker::targetPasswordKey(profile));
+    QStringList keyFiles;
+    const QString identity = profile.identityFile.trimmed();
+    if (!identity.isEmpty()) {
+        keyFiles.append(identity);
+    }
+    if (profile.auth == SshProfile::Auth::Auto || (profile.auth == SshProfile::Auth::PublicKey && identity.isEmpty())) {
+        keyFiles.append(defaultIdentityFiles());
+    }
+    for (const QString& keyFile : std::as_const(keyFiles)) {
+        const QString normalized = SshWorker::normalizedKeyPath(keyFile);
+        if (normalized.isEmpty() || request.savedPassphrases.contains(normalized)) {
+            continue;
+        }
+        QList<SshWorker::SavedSecret> candidates;
+        if (keyFile == identity) {
+            appendSavedSecret(&candidates, SshWorker::profilePassphraseKey(profile));
+        }
+        appendSavedSecret(&candidates, SshWorker::keyPassphraseKey(keyFile));
+        if (!candidates.isEmpty()) {
+            request.savedPassphrases.insert(normalized, candidates);
+        }
     }
     d->workerBusy = true;
     qCInfo(lcSsh) << "opening" << profile.displayTarget();
@@ -470,9 +503,17 @@ void SshConnection::close()
     }
     qCInfo(lcSsh) << "closing" << displayName();
     d->abortWorker();
+    bool transferWasActive = false;
     {
         QMutexLocker lock(&d->shared->mutex);
+        transferWasActive = d->shared->transfer.active;
         d->shared->transfer.active = false;
+    }
+    if (transferWasActive) {
+        // The worker ends the transfer (and removes an incomplete upload) for the generation
+        // that was just closed, so its report is dropped by the relay: tell the listeners here,
+        // before the state change, so a dialog can keep the reason next to "Not connected".
+        emit transferFinished(false, tr("Transfer aborted: the connection was closed"));
     }
     setState(State::Disconnected);
 }
@@ -513,7 +554,9 @@ void SshConnection::answerHostKey(bool accept, bool remember)
 
 void SshConnection::answerPrompt(const QString& response, bool remember)
 {
-    d->worker->deliverPromptAnswer(response, remember && !d->profile.id.isEmpty());
+    // "Remember" is valid for every prompt: the worker picks the SecretStore key (profile id,
+    // target or key file) and reports it through storeSecret() once the credential worked.
+    d->worker->deliverPromptAnswer(response, remember);
 }
 
 void SshConnection::cancelPrompt()

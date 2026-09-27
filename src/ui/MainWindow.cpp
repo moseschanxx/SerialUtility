@@ -15,17 +15,24 @@
 #include <QLibraryInfo>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QUrl>
+
+#include <utility>
 
 #include "Version.h"
 #include "app/AppSettings.h"
@@ -53,7 +60,29 @@ const QLatin1String kShowQuickCommandsKey("ui/showQuickCommands");
 const QLatin1String kLanguageEnglish("en_US");
 const QLatin1String kLanguageChinese("zh_CN");
 const QLatin1String kSshTargetKeyPrefix("ssh:target:");
+const QLatin1String kShortcutsKeyPrefix("shortcuts/");
+const QLatin1String kLanguageActionPrefix("actionLanguage");
 constexpr int kSshProfilesSaveDelayMs = 250;
+constexpr int kSelectTabActions = 9;   ///< actionSelectTab1 .. actionSelectTab9
+
+/// "&File" -> "File", "&&" -> "&" (a menu / action text without its mnemonic marker).
+QString stripMnemonic(const QString& text)
+{
+    QString out;
+    out.reserve(text.size());
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (ch == QLatin1Char('&')) {
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('&')) {
+                out.append(QLatin1Char('&'));
+                ++i;
+            }
+            continue;
+        }
+        out.append(ch);
+    }
+    return out;
+}
 
 QString historyFilePath()
 {
@@ -102,10 +131,18 @@ MainWindow::MainWindow(QWidget* parent)
     addButton->setObjectName(QStringLiteral("newSessionButton"));
     addButton->setText(QStringLiteral("+"));
     addButton->setAutoRaise(true);
-    addButton->setToolTip(tr("New Session (Ctrl+T)"));
     addButton->setFocusPolicy(Qt::NoFocus);
     m_tabs->setCornerWidget(addButton, Qt::TopRightCorner);
     connect(addButton, &QToolButton::clicked, this, [this]() { newSession(); });
+    // Middle click closes a tab (eventFilter); the Window menu follows drag-reordering.
+    m_tabs->tabBar()->installEventFilter(this);
+    connect(m_tabs->tabBar(), &QTabBar::tabMoved, this, &MainWindow::onTabMoved);
+
+    // Configurable shortcuts: the .ui values are the defaults, AppSettings may override them
+    // (Preferences > Keyboard). Captured before any session exists; sessions receive the
+    // reserved list in connectSession().
+    captureDefaultShortcuts();
+    applyShortcuts();
 
     // Shared data.
     m_quickCommands = new QuickCommandStore(this);
@@ -189,6 +226,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->actionDownloadFile, &QAction::triggered, this, &MainWindow::onDownloadFile);
     connect(ui->actionSendBreak, &QAction::triggered, this, &MainWindow::onSendBreak);
     connect(ui->actionSyncTerminalSize, &QAction::triggered, this, &MainWindow::onSyncTerminalSize);
+    connect(ui->actionDetectBaudRate, &QAction::triggered, this, &MainWindow::onDetectBaudRate);
     connect(ui->actionRefreshPorts, &QAction::triggered, this, &MainWindow::onRefreshPorts);
 
     // ---- Edit ----
@@ -206,16 +244,29 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->actionShowQuickCommands, &QAction::toggled, this, &MainWindow::onShowQuickCommandsToggled);
     connect(ui->actionPauseWhileSelecting, &QAction::toggled, this, &MainWindow::onPauseWhileSelectingToggled);
     connect(ui->actionRightClickPastes, &QAction::toggled, this, &MainWindow::onRightClickPastesToggled);
-    // The Preferences dialog writes the same settings: keep the menu actions in step with it.
-    connect(&AppSettings::instance(), &AppSettings::changed, this, [this](const QString&) {
+    // The Preferences dialog writes the same settings: keep the menu actions in step with it,
+    // and re-apply the shortcuts when one of them changed.
+    connect(&AppSettings::instance(), &AppSettings::changed, this, [this](const QString& key) {
         syncPauseWhileSelectingAction();
         syncRightClickPastesAction();
+        if (key.startsWith(kShortcutsKeyPrefix)) {
+            applyShortcuts();
+        }
     });
     connect(ui->actionZoomIn, &QAction::triggered, this, &MainWindow::onZoomIn);
     connect(ui->actionZoomOut, &QAction::triggered, this, &MainWindow::onZoomOut);
     connect(ui->actionZoomReset, &QAction::triggered, this, &MainWindow::onZoomReset);
+
+    // ---- Window ----
     connect(ui->actionNextTab, &QAction::triggered, this, &MainWindow::onNextTab);
     connect(ui->actionPreviousTab, &QAction::triggered, this, &MainWindow::onPreviousTab);
+    for (int i = 1; i <= kSelectTabActions; ++i) {
+        if (QAction* select = findChild<QAction*>(QStringLiteral("actionSelectTab%1").arg(i))) {
+            connect(select, &QAction::triggered, this, [this, i]() { onSelectTab(i - 1); });
+        }
+    }
+    m_sessionGroup = new QActionGroup(this);
+    m_sessionGroup->setExclusive(true);
 
     // ---- Help ----
     connect(ui->actionAbout, &QAction::triggered, this, &MainWindow::onAbout);
@@ -359,6 +410,7 @@ void MainWindow::addSessionTab(SessionWidget* session, const QString& logName)
 
     const int index = m_tabs->addTab(session, stateIcon(Transport::State::Disconnected), session->title());
     updateTabAppearance(session);
+    rebuildWindowMenu();
     m_tabs->setCurrentIndex(index);
     session->focusTerminal();
 
@@ -393,7 +445,9 @@ void MainWindow::closeSession(int index)
     session->deleteLater();
 
     if (m_tabs->count() == 0) {
-        newSession();   // the window always has at least one tab
+        newSession();   // the window always has at least one tab (rebuilds the Window menu)
+    } else {
+        rebuildWindowMenu();
     }
 
     updateActions();
@@ -410,6 +464,9 @@ void MainWindow::closeCurrentSession()
 
 void MainWindow::connectSession(SessionWidget* session)
 {
+    if (TerminalWidget* terminal = session->terminal()) {
+        terminal->setReservedShortcuts(reservedShortcuts());
+    }
     connect(session, &SessionWidget::titleChanged, this, &MainWindow::onSessionTitleChanged);
     connect(session, &SessionWidget::connectionStateChanged, this, &MainWindow::onSessionStateChanged);
     connect(session, &SessionWidget::statusMessage, this, &MainWindow::onSessionStatusMessage);
@@ -507,20 +564,44 @@ void MainWindow::changeEvent(QEvent* event)
 {
     if (event->type() == QEvent::LanguageChange) {
         ui->retranslateUi(this);
+        // retranslateUi() re-sets every .ui shortcut: put the configured ones (and the "+"
+        // button tooltip that names one of them) back.
+        applyShortcuts();
         if (m_systemLogDock) {
             m_systemLogDock->setWindowTitle(tr("System Log"));
-        }
-        if (auto* addButton = m_tabs ? m_tabs->cornerWidget(Qt::TopRightCorner) : nullptr) {
-            addButton->setToolTip(tr("New Session (Ctrl+T)"));
         }
         retranslateStatusBar();
         updateWindowTitle();
         for (int i = 0; i < sessionCount(); ++i) {
             updateTabAppearance(sessionAt(i));
         }
+        rebuildWindowMenu();   // the status tips of the per-session entries
         updateSessionHint();   // the "Output paused" hint, if shown, in the new language
     }
     QMainWindow::changeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_tabs && watched == m_tabs->tabBar() &&
+        (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)) {
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        if (mouse->button() == Qt::MiddleButton) {
+            QTabBar* bar = m_tabs->tabBar();
+            const int index = bar->tabAt(mouse->position().toPoint());
+            if (event->type() == QEvent::MouseButtonPress) {
+                m_middlePressedTab = index;
+            } else {
+                const int pressed = std::exchange(m_middlePressedTab, -1);
+                if (index >= 0 && index == pressed) {
+                    qCDebug(lcUi) << "middle click closes tab" << index;
+                    closeSession(index);   // same confirmation as the tab's close button
+                }
+            }
+            return true;   // QTabBar has no middle-button behaviour of its own
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -529,13 +610,20 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::onTabChanged(int index)
 {
-    updateActions();
+    updateActions();   // includes syncWindowMenu(): the new current tab's entry is checked
     updateStatusBar();
     updateWindowTitle();
     updateSessionHint();
     if (SessionWidget* session = sessionAt(index)) {
         session->focusTerminal();
     }
+}
+
+void MainWindow::onTabMoved(int from, int to)
+{
+    Q_UNUSED(from);
+    Q_UNUSED(to);
+    rebuildWindowMenu();
 }
 
 void MainWindow::updateSessionHint()
@@ -571,6 +659,7 @@ void MainWindow::onSessionTitleChanged(const QString& title)
         m_tabs->setTabText(index, title);
     }
     updateTabAppearance(session);
+    rebuildWindowMenu();   // the entry carries the title
     if (session == currentSession()) {
         updateActions();
         updateStatusBar();
@@ -703,6 +792,13 @@ void MainWindow::onSyncTerminalSize()
 {
     if (SessionWidget* session = currentSession()) {
         session->syncTerminalSize();
+    }
+}
+
+void MainWindow::onDetectBaudRate()
+{
+    if (SessionWidget* session = currentSession()) {
+        session->detectBaudRate();   // serial only; the session reports refusals in the status bar
     }
 }
 
@@ -917,6 +1013,239 @@ void MainWindow::onPreviousTab()
     }
 }
 
+void MainWindow::onSelectTab(int index)
+{
+    if (m_tabs && index >= 0 && index < m_tabs->count()) {
+        m_tabs->setCurrentIndex(index);
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Window menu (per-session entries)
+// ---------------------------------------------------------------------------------------
+
+void MainWindow::rebuildWindowMenu()
+{
+    if (!ui || !m_sessionGroup) {
+        return;
+    }
+    QMenu* menu = ui->menuWindow;
+    for (QAction* action : std::as_const(m_sessionActions)) {
+        menu->removeAction(action);
+        m_sessionGroup->removeAction(action);
+        action->deleteLater();   // never delete an action that may be the one being triggered
+    }
+    m_sessionActions.clear();
+
+    for (int i = 0; i < sessionCount(); ++i) {
+        SessionWidget* session = sessionAt(i);
+        const QString title = session ? session->title() : QString();
+        QString text = title;
+        text.replace(QLatin1Char('&'), QLatin1String("&&"));   // a literal '&' in a title is no mnemonic
+        auto* action = new QAction(text, this);
+        action->setCheckable(true);
+        action->setStatusTip(tr("Switch to %1").arg(title));
+        connect(action, &QAction::triggered, this, [this, i]() { onSelectTab(i); });
+        m_sessionGroup->addAction(action);
+        menu->addAction(action);
+        m_sessionActions.append(action);
+    }
+    syncWindowMenu();
+}
+
+void MainWindow::syncWindowMenu()
+{
+    if (!ui) {
+        return;
+    }
+    const int count = sessionCount();
+    const int current = m_tabs ? m_tabs->currentIndex() : -1;
+    for (int i = 0; i < m_sessionActions.size(); ++i) {
+        const QSignalBlocker blocker(m_sessionActions.at(i));
+        m_sessionActions.at(i)->setChecked(i == current);
+    }
+    QAction* const selectActions[kSelectTabActions] = {
+        ui->actionSelectTab1, ui->actionSelectTab2, ui->actionSelectTab3, ui->actionSelectTab4, ui->actionSelectTab5,
+        ui->actionSelectTab6, ui->actionSelectTab7, ui->actionSelectTab8, ui->actionSelectTab9};
+    for (int i = 0; i < kSelectTabActions; ++i) {
+        selectActions[i]->setEnabled(i < count);
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Configurable shortcuts
+// ---------------------------------------------------------------------------------------
+
+void MainWindow::captureDefaultShortcuts()
+{
+    m_configurableActions.clear();
+    m_defaultShortcuts.clear();
+    QSet<const QAction*> seen;
+    const auto consider = [this, &seen](QAction* action) {
+        if (!action || action->isSeparator() || action->menu() || action->objectName().isEmpty() ||
+            action->objectName().startsWith(kLanguageActionPrefix) || seen.contains(action)) {
+            return;
+        }
+        seen.insert(action);
+        m_configurableActions.append(action);
+        m_defaultShortcuts.insert(action->objectName(), action->shortcut());
+    };
+    // Menu order first (the order the Preferences page lists them in) ...
+    const QList<QAction*> menus = menuBar()->actions();
+    for (QAction* menuAction : menus) {
+        if (QMenu* menu = menuAction->menu()) {
+            const QList<QAction*> actions = menu->actions();
+            for (QAction* action : actions) {
+                consider(action);
+            }
+        }
+    }
+    // ... then any named action of the window that sits in no menu (none in MainWindow.ui today).
+    const QList<QAction*> direct = findChildren<QAction*>(QString(), Qt::FindDirectChildrenOnly);
+    for (QAction* action : direct) {
+        consider(action);
+    }
+    qCDebug(lcUi) << m_configurableActions.size() << "configurable action(s)";
+}
+
+void MainWindow::applyShortcuts()
+{
+    if (!ui) {
+        return;
+    }
+    const AppSettings& settings = AppSettings::instance();
+    for (QAction* action : std::as_const(m_configurableActions)) {
+        const QString name = action->objectName();
+        const QKeySequence primary = settings.shortcut(name, m_defaultShortcuts.value(name));
+        QList<QKeySequence> sequences;
+        if (!primary.isEmpty()) {
+            sequences.append(primary);
+        }
+        // Fixed alternates: Ctrl+PgDown / Ctrl+PgUp cycle the tabs whatever the primary is.
+        const QKeySequence alternate = fixedAlternateOf(action);
+        if (!alternate.isEmpty() && alternate != primary) {
+            sequences.append(alternate);
+        }
+        if (action->shortcuts() != sequences) {
+            action->setShortcuts(sequences);
+        }
+    }
+    if (auto* addButton = m_tabs ? m_tabs->cornerWidget(Qt::TopRightCorner) : nullptr) {
+        const QKeySequence shortcut = ui->actionNewSession->shortcut();
+        addButton->setToolTip(shortcut.isEmpty()
+                                  ? tr("New Session")
+                                  : tr("New Session (%1)").arg(shortcut.toString(QKeySequence::NativeText)));
+    }
+    pushReservedShortcuts();
+}
+
+QList<QKeySequence> MainWindow::reservedShortcuts() const
+{
+    QList<QKeySequence> result;
+    for (const QAction* action : m_configurableActions) {
+        const QList<QKeySequence> shortcuts = action->shortcuts();
+        for (const QKeySequence& sequence : shortcuts) {
+            if (!sequence.isEmpty() && !result.contains(sequence)) {
+                result.append(sequence);
+            }
+        }
+    }
+    return result;
+}
+
+void MainWindow::pushReservedShortcuts()
+{
+    const QList<QKeySequence> reserved = reservedShortcuts();
+    for (int i = 0; i < sessionCount(); ++i) {
+        if (SessionWidget* session = sessionAt(i); session && session->terminal()) {
+            session->terminal()->setReservedShortcuts(reserved);
+        }
+    }
+}
+
+QList<ShortcutEntry> MainWindow::shortcutEntries() const
+{
+    QList<ShortcutEntry> entries;
+    entries.reserve(m_configurableActions.size());
+    for (const QAction* action : m_configurableActions) {
+        ShortcutEntry entry;
+        entry.objectName = action->objectName();
+        const QString menu = menuTitleOf(action);
+        const QString text = plainActionText(action);
+        entry.title = menu.isEmpty() ? text : QStringLiteral("%1 > %2").arg(menu, text);
+        entry.defaultSequence = m_defaultShortcuts.value(entry.objectName);
+        entries.append(entry);
+    }
+    return entries;
+}
+
+QKeySequence MainWindow::fixedAlternateOf(const QAction* action) const
+{
+    if (!ui) {
+        return {};
+    }
+    if (action == ui->actionNextTab) {
+        return QKeySequence(Qt::CTRL | Qt::Key_PageDown);
+    }
+    if (action == ui->actionPreviousTab) {
+        return QKeySequence(Qt::CTRL | Qt::Key_PageUp);
+    }
+    return {};
+}
+
+QList<ShortcutEntry> MainWindow::fixedShortcutEntries() const
+{
+    QList<ShortcutEntry> entries;
+    for (const QAction* action : m_configurableActions) {
+        const QKeySequence alternate = fixedAlternateOf(action);
+        if (alternate.isEmpty()) {
+            continue;
+        }
+        ShortcutEntry entry;
+        entry.objectName = action->objectName();
+        const QString menu = menuTitleOf(action);
+        const QString text = plainActionText(action);
+        entry.title = menu.isEmpty() ? text : QStringLiteral("%1 > %2").arg(menu, text);
+        entry.defaultSequence = alternate;
+        entries.append(entry);
+    }
+    // The menu bar's mnemonics (Alt+F, Alt+S, ...): QMenuBar registers them as shortcuts of its own.
+    const QList<QAction*> menus = menuBar()->actions();
+    for (const QAction* menuAction : menus) {
+        const QKeySequence mnemonic = QKeySequence::mnemonic(menuAction->text());
+        if (mnemonic.isEmpty()) {
+            continue;
+        }
+        ShortcutEntry entry;
+        entry.title = tr("%1 menu").arg(stripMnemonic(menuAction->text()));
+        entry.defaultSequence = mnemonic;
+        entries.append(entry);
+    }
+    return entries;
+}
+
+QString MainWindow::menuTitleOf(const QAction* action)
+{
+    const QList<QObject*> objects = action->associatedObjects();
+    for (QObject* object : objects) {
+        if (const auto* menu = qobject_cast<const QMenu*>(object)) {
+            return stripMnemonic(menu->title());
+        }
+    }
+    return {};
+}
+
+QString MainWindow::plainActionText(const QAction* action)
+{
+    QString text = stripMnemonic(action->text()).trimmed();
+    if (text.endsWith(QLatin1String("..."))) {
+        text.chop(3);
+    } else if (text.endsWith(QChar(0x2026))) {   // the single-character ellipsis
+        text.chop(1);
+    }
+    return text.trimmed();
+}
+
 void MainWindow::onQuickCommands()
 {
     QuickCommandsDialog dialog(m_quickCommands, this);
@@ -964,6 +1293,8 @@ void MainWindow::saveSshProfiles()
 void MainWindow::onPreferences()
 {
     PreferencesDialog dialog(this);
+    dialog.setShortcutEntries(shortcutEntries());
+    dialog.setFixedShortcuts(fixedShortcutEntries());
     connect(&dialog, &PreferencesDialog::applied, this, &MainWindow::onPreferencesApplied);
     dialog.exec();
 }
@@ -1121,6 +1452,7 @@ void MainWindow::updateActions()
     ui->actionUploadFile->setEnabled(connected && ssh);
     ui->actionDownloadFile->setEnabled(connected && ssh);
     ui->actionSendBreak->setEnabled(connected && !ssh);
+    ui->actionDetectBaudRate->setEnabled(connected && !ssh);
     ui->actionRefreshPorts->setEnabled(!ssh);
     ui->actionSyncTerminalSize->setEnabled(connected);
     ui->actionClear->setEnabled(hasSession);
@@ -1147,6 +1479,7 @@ void MainWindow::updateActions()
     const bool severalTabs = sessionCount() > 1;
     ui->actionNextTab->setEnabled(severalTabs);
     ui->actionPreviousTab->setEnabled(severalTabs);
+    syncWindowMenu();
 }
 
 void MainWindow::updateTabAppearance(SessionWidget* session)

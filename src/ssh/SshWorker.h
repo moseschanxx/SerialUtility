@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QMutex>
 #include <QString>
@@ -44,7 +45,7 @@ struct SshSharedState
  *    tick; an exit status ends the shell only once the read loop ran dry, so a tail buffered
  *    behind it is never lost), drains the outgoing queue (a short ssh_channel_write() caused by
  *    a closed remote window re-queues the rest instead of dropping it), bridges the
- *    local-forward sockets and runs the active SFTP transfer in slices; a second timer sends
+ *    local-forward sockets and runs the active file transfer in slices; a second timer sends
  *    the keep-alive.
  *  - Local forwards: one QTcpServer per profile forward, bound to the loopback address for an
  *    empty / "localhost" bind address and to a literal IP address otherwise (a host name is
@@ -58,23 +59,88 @@ struct SshSharedState
  *    with 2/4/8..30 s backoff using only the credentials that worked during the first connect
  *    until it succeeds, hits a hard failure, or close() arrives.
  *  - close() ends everything for the given generation.
+ *
+ * Remembered credentials (SecretStore keys; the store itself is GUI-thread only, so the facade
+ * loads the candidates into the OpenRequest and stores / removes on the storeSecret() /
+ * secretRejected() signals):
+ *    "ssh/<profile id>/password"                  password or keyboard-interactive answer of a
+ *                                                 stored profile
+ *    "ssh/target/<user@host:port>/password"       the same for an ad-hoc target (no profile id;
+ *                                                 <target> is SshProfile::displayTarget())
+ *    "ssh/<profile id>/passphrase"                passphrase of the profile's identity file
+ *    "ssh/key/<absolute key path>/passphrase"     passphrase of that key file, whatever the target
+ *                                                 (<path> is normalizedKeyPath())
+ * Lookup order when authenticating: the profile-id secret, then the target / key secret; a stored
+ * secret the server (or the key file) rejects is removed - that key only - and the user is
+ * prompted. A prompt answered with "remember" is stored under the id key when the profile has
+ * an id and under the target key otherwise; a passphrase is stored under the key-path key as well
+ * (for profiles and ad-hoc targets alike), so a key needs its passphrase only once. Secret
+ * values are never logged. Reconnects reuse the credentials that worked during the connect.
+ *
+ * File transfer (SshConnection.h has the user-visible contract): the SFTP subsystem is probed
+ * once per session; when it is refused (dropbear without sftp-server) or fails to initialise,
+ * transfers run through exec channels driving the remote shell tools (`: > 'p'` then
+ * `cat > 'p'` for an upload, `cat 'p'`, `wc -c < 'p'`, `test -e 'p'`, `chmod NNN 'p'`,
+ * `rm -f 'p'`, `pwd`). The data command runs in
+ * slices inside the tick like SFTP does (64 KiB reads / writes, at most 1 MiB or 50 ms per
+ * tick); the short helper commands run synchronously with a bounded wait. Every path is
+ * single-quoted with '\'' escaping and a relative path starting with '-' gets "./" in front
+ * (shellPath(): the utilities would read it as an option, and `cat -` as stdin). The `: > 'p'`
+ * probe runs before the data command so a file that cannot be created or truncated fails with
+ * the shell's reason and is never touched; once it succeeded the file is the transfer's, and
+ * finishTransfer() removes it (`rm -f`, ExecMode::Cleanup) whenever the upload does not
+ * complete - cancel, a write or read error, a non-zero exit status such as "No space left on
+ * device", close() - on a link that is still alive. An upload whose exec channel ends without
+ * an exit status (the deadline after EOF passed, or the channel closed without one) is
+ * confirmed by `wc -c < 'p'` against the local size: only a matching size is a success, since
+ * Transfer::done counts bytes the channel accepted, not bytes cat wrote. SFTP keeps up to 16 requests in flight
+ * (libssh's sftp_aio_begin_read / _write, replies collected oldest first) so a transfer is not
+ * bounded by one round trip per 64 KiB; a short read reply drops the requests queued behind it
+ * and continues from the byte after it, EOF ends the download once every reply is collected,
+ * and a cancel or failure collects (live link) or frees (dead link) the outstanding requests
+ * before the remote handle is closed. Transfer progress counts acknowledged bytes.
  */
 class SshWorker : public QObject
 {
     Q_OBJECT
 public:
+    /// One SecretStore entry loaded by the facade: the key it lives under (reported back through
+    /// secretRejected() when the server refuses it) and the secret itself.
+    struct SavedSecret
+    {
+        QString key;
+        QString value;
+    };
+
     struct OpenRequest
     {
         quint64 generation = 0;
         SshProfile profile;
-        QString savedPassword;      ///< SecretStore "ssh/<id>/password" (empty = none)
-        QString savedPassphrase;    ///< SecretStore "ssh/<id>/passphrase" (empty = none)
+        /// Saved passwords to try before prompting, in lookup order: the profile's
+        /// "ssh/<id>/password", then "ssh/target/<target>/password" - only entries that exist.
+        QList<SavedSecret> savedPasswords;
+        /// Saved passphrases per normalizedKeyPath(), each list in lookup order: the profile's
+        /// "ssh/<id>/passphrase" (for its identity file only), then "ssh/key/<path>/passphrase".
+        QHash<QString, QList<SavedSecret>> savedPassphrases;
         int cols = 80;
         int rows = 24;
     };
 
     explicit SshWorker(std::shared_ptr<SshSharedState> shared, QObject* parent = nullptr);
     ~SshWorker() override;
+
+    // ---- SecretStore key scheme (see the class comment) ---------------------------------
+    static QString normalizedKeyPath(const QString& keyFile);        ///< "~" expanded, absolute, cleaned
+    static QString profilePasswordKey(const SshProfile& profile);    ///< "ssh/<id>/password", empty without an id
+    static QString profilePassphraseKey(const SshProfile& profile);  ///< "ssh/<id>/passphrase", empty without an id
+    static QString targetPasswordKey(const SshProfile& profile);     ///< "ssh/target/<displayTarget>/password"
+    static QString keyPassphraseKey(const QString& keyFile);         ///< "ssh/key/<normalizedKeyPath>/passphrase"
+    /// `'path'` with every embedded quote written as '\'' - the only way a path reaches a command line.
+    static QString shellQuote(const QString& path);
+    /// shellQuote() of the path as the remote utilities must see it: a relative path starting
+    /// with '-' is prefixed with "./" so `cat`, `rm`, `chmod` do not parse it as an option (and
+    /// `cat -` does not read stdin); every other path is quoted as it is.
+    static QString shellPath(const QString& path);
 
     // ---- Thread-safe entry points (called from the GUI thread while a slot may be blocking) ----
     void requestAbort(quint64 generation);                 ///< close(): abort the blocking connect phase of `generation`
@@ -127,6 +193,7 @@ private:
     struct Bridge;
     struct ForwardListener;
     struct Transfer;
+    struct ExecRun;          // one exec channel of the shell fallback
 
     enum class Step {
         Ok,
@@ -151,6 +218,7 @@ private:
     Step methodError(QString* error);
     void setAuthMethod(const QString& method);
     SshConnection::AuthPrompt makePrompt(SshConnection::PromptKind kind, int attempt) const;
+    QString rememberPasswordKey() const;   ///< where a remembered password goes: the id key or the target key
 
     void setupForwards();
     void acceptForward(ForwardListener* listener);
@@ -172,19 +240,48 @@ private:
     void pumpShell();
     void pumpForwards();
     void serviceTransfer();
+    /// SFTP pipeline helpers (serviceTransfer): each returns false after finishTransfer() ran on
+    /// an error. awaitSftpWrite() collects the oldest acknowledgement into Transfer::done;
+    /// awaitSftpRead() the oldest data reply into m_readBuffer (*bytes = 0 at EOF, *requested =
+    /// what that request asked for); discardSftpReplies() collects every reply still in flight
+    /// and drops it.
+    bool awaitSftpWrite();
+    bool awaitSftpRead(qint64* bytes, qint64* requested);
+    bool discardSftpReplies();
     void completeTransfer();
+    /// Ends the transfer (both methods) and reports it: closes the remote handle / exec channel
+    /// and the local file, removes the ".part" of a failed download and the remote file of a
+    /// failed or cancelled upload (SFTP unlink / `rm -f`) on a live link, then emits
+    /// transferFinished(). A cancel is a failure with "Transfer cancelled".
     void finishTransfer(bool ok, const QString& message);
     void publishTransfer();
     void emitProgress(bool force);
-    bool ensureSftp(QString* error);
+    bool probeSftp();                             ///< true when the session has a usable SFTP subsystem (probed once)
     void sendKeepAlive();
+
+    // Shell fallback (exec channels)
+    void startShellTransfer(const SshConnection::TransferRequest& request);
+    void serviceShellTransfer();
+    void completeShellTransfer();
+    std::unique_ptr<ExecRun> startExec(const QString& command, QString* error);
+    void closeExec(ExecRun& run);
+    void pumpExecStderr(ExecRun& run);
+    /// How runExec() behaves around the session's life: Normal helper commands stop waiting
+    /// when an abort (close()) is requested and tear the session down on a dead link
+    /// (handleConnectionLost); Cleanup - the `rm -f` of a broken upload, possibly issued from
+    /// inside teardownLive() - runs despite an abort request, waits at most
+    /// kCleanupExecTimeoutMs and only reports a dead link, never tears down.
+    enum class ExecMode { Normal, Cleanup };
+    /// Run `command` to its end (bounded wait): false with *error on a transport failure,
+    /// otherwise *exitStatus (-1 when the server sent none), stdout in *output, stderr in *errorText.
+    bool runExec(const QString& command, QByteArray* output, QString* errorText, int* exitStatus, QString* error,
+                 ExecMode mode = ExecMode::Normal);
+    QString execFailureText(const ExecRun& run) const;   ///< stderr text, or "exit status N"
 
     QString target() const;                ///< "user@host:port" for messages
     QString displayName() const;
     QString libsshError() const;
     QString sftpError() const;
-    QString passwordSecretKey() const;
-    QString passphraseSecretKey() const;
 
     std::shared_ptr<SshSharedState> m_shared;
     std::unique_ptr<Live> m_live;
@@ -195,7 +292,7 @@ private:
 
     // Credentials that worked during this open(); reused by reconnects only.
     QString m_password;
-    QString m_passphrase;
+    QHash<QString, QString> m_passphrases;   ///< normalizedKeyPath() -> passphrase that opened the key
     QString m_acceptedKeyLine;    ///< host key the user accepted (also without "remember")
 
     mutable QMutex m_outgoingMutex;
