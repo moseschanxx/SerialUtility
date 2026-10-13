@@ -275,6 +275,11 @@ packaging-docs), integration on both compilers, a read-only review, a fix round,
 | GCC 11 `-Werror` (WSL Ubuntu 22.04, Qt 6.8.3) | two GCC-only defects found and fixed before CI (an in-class `= Options()` default argument; stdin written while a `QProcess` is still Starting); full tree 0 warnings; see the final table |
 | Windows MSVC 2022 Release | full tree 0 warnings at `/W4`; see the final table |
 
+After the fix round the two real-board cases were started again on the final build: the board had been
+unplugged from this PC meanwhile (no 2207 device on the bus), so both ended at "no board"; the log of that
+attempt shows the fixed Read path (`killall rfmcu` before `rfmcu cmd version`). The results above are from
+the runs at 12:51-12:58 on the pre-fix tab.
+
 Not re-flashed: the CC1310 runs 0.8.2 and the only 0.8.2 package disappeared from the local CC1310 checkout
 while the run was prepared (a branch switch there), so the real MCU test used Set role instead of Update MCU;
 Update MCU with a package is covered by the fake-bridge GUI case and the updater suite, and the DATA path is the
@@ -284,8 +289,8 @@ Final numbers on the tagged tree:
 
 | Platform | Suites | Result |
 |---|---|---|
-| Windows MSVC 2022 Release (`build\Release`) | 28 | FINAL_MSVC |
-| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`) | 28 | FINAL_GCC |
+| Windows MSVC 2022 Release (`build\Release`, after the fix round) | 28 | 100 % passed (338 s); 0 compiler warnings in project files at `/W4 /WX` |
+| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`, after the fix round) | 28 | 100 % passed; 0 warnings, 0 errors |
 
 Known limitations: `UF` in U-Boot Loader mode needs the U-Boot chip-info change above (until then: MASKROM mode,
 or the Rockchip GUI tool); the SoC flash cannot be cancelled once `UF` writes (the window refuses to close
