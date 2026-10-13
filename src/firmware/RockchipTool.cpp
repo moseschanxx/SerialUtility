@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QPair>
 #include <QRegularExpression>
 
@@ -193,17 +194,35 @@ ToolInvocation* RockchipTool::listDevices()
     return m_runner->run(m_tool, {QStringLiteral("LD")}, options);
 }
 
-ToolInvocation* RockchipTool::firmwareInfo(const QString& image)
+namespace {
+
+/// The image commands run with the image path in native separators (upgrade_tool does its own
+/// path handling: it derives folders for its log and the loader extraction, and its Windows
+/// build has only been seen with backslash paths) and in the image's folder (a writable one:
+/// the tools folder of an installed copy is not, and upgrade_tool may write its Log folder into
+/// the working directory).
+ToolRunner::Options imageCommandOptions(const QString& image, int timeoutMs)
 {
     ToolRunner::Options options;
-    options.timeoutMs = m_timeoutMs;
-    return m_runner->run(m_tool, {QStringLiteral("SFI"), image}, options);
+    options.timeoutMs = timeoutMs;
+    if (!image.isEmpty()) {
+        options.workingDirectory = QFileInfo(image).absolutePath();
+    }
+    return options;
+}
+
+} // namespace
+
+ToolInvocation* RockchipTool::firmwareInfo(const QString& image)
+{
+    return m_runner->run(m_tool, {QStringLiteral("SFI"), QDir::toNativeSeparators(image)},
+                         imageCommandOptions(image, m_timeoutMs));
 }
 
 ToolInvocation* RockchipTool::upgradeFirmware(const QString& image)
 {
     // No timeout: UF writes the flash, and killing it half way is what the owner must never do.
-    return m_runner->run(m_tool, {QStringLiteral("UF"), image});
+    return m_runner->run(m_tool, {QStringLiteral("UF"), QDir::toNativeSeparators(image)}, imageCommandOptions(image, 0));
 }
 
 QList<RockusbDevice> RockchipTool::parseDeviceList(const QString& output)

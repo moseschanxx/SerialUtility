@@ -55,8 +55,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 ; Firmware tab (v0.5): the USB drivers a Node board needs once per PC (ADB for the running board, rockusb
-; for Loader / Maskrom mode). Off by default: most PCs already have them or do not flash boards.
-Name: "installdrivers"; Description: "Install the Rockchip USB drivers (DriverAssistant)"; GroupDescription: "Firmware tab (Node board):"; Flags: unchecked
+; for Loader / Maskrom mode). Off by default: most PCs already have them or do not flash boards. Offered
+; only in an administrative install: a driver install needs admin rights, and the [Run] entry below runs
+; with Setup's own (in "install for me only" it would fail without Setup noticing). Without it, the Firmware
+; tab's Install drivers button starts the same installer (tools\DriverAssistant) or says to run it as admin.
+Name: "installdrivers"; Description: "Install the Rockchip USB drivers (DriverAssistant)"; GroupDescription: "Firmware tab (Node board):"; Flags: unchecked; Check: IsAdminInstallMode
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

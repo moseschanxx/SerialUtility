@@ -60,7 +60,8 @@ private:
  * Shortcuts: addScript(pattern, output, exitCode, delayMs) answers with a fixed output;
  * addHandler(pattern, fn) hands the invocation to a function (hang it, answer according to the
  * arguments, start a FakeMcuServer, ...). invocations() lists every command line run so far,
- * count(pattern) how many matched; reset() clears handlers and the record.
+ * optionsAt(i) the Options it was run with (timeout, working directory, detached), count(pattern)
+ * how many matched; reset() clears handlers and the record.
  */
 class FakeToolRunner : public ToolRunner
 {
@@ -83,6 +84,8 @@ public:
     int count(const QRegularExpression& commandLine) const;
     QString lastInvocation() const { return m_invocations.isEmpty() ? QString() : m_invocations.last(); }
     Options lastOptions() const { return m_lastOptions; }
+    /// The Options of invocations().at(index) (default Options for an index out of range).
+    Options optionsAt(int index) const { return index >= 0 && index < m_options.size() ? m_options.at(index) : Options(); }
 
 signals:
     void invocationStarted(FakeToolInvocation* invocation);
@@ -95,5 +98,6 @@ private:
     };
     QList<Entry> m_handlers;
     QStringList m_invocations;
+    QList<Options> m_options;   ///< parallel to m_invocations
     Options m_lastOptions;
 };

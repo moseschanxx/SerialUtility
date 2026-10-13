@@ -178,6 +178,7 @@ ToolInvocation* FakeToolRunner::run(const QString& program, const QStringList& a
     auto* invocation = new FakeToolInvocation(program, arguments, this);
     const QString commandLine = invocation->commandLine();
     m_invocations << commandLine;
+    m_options << options;
     m_lastOptions = options;
     emit invocationStarted(invocation);
 
@@ -215,6 +216,7 @@ void FakeToolRunner::reset()
 {
     m_handlers.clear();
     m_invocations.clear();
+    m_options.clear();
 }
 
 QList<FakeToolInvocation*> FakeToolRunner::liveInvocations() const

@@ -3000,7 +3000,7 @@ QString SshWorker::shellPath(const QString& path)
 
 namespace {
 
-/// The reply of `stat -c '%s %Y %F' 'p'`: "<size> <mtime epoch> <file type>" ("regular file",
+/// The reply of `stat -L -c '%s %Y %F' 'p'`: "<size> <mtime epoch> <file type>" ("regular file",
 /// "regular empty file", "directory", "symbolic link"...). The last non-empty line counts, so a
 /// banner a login shell prints in front of the command's own output does no harm. A directory's
 /// size is not a file size, so it stays -1 like the SFTP answer.
@@ -3111,12 +3111,14 @@ void SshWorker::statRemote(quint64 generation, int id, const QString& path)
     }
 
     // No SFTP (dropbear): the file tools of the remote shell. Relative paths are relative to
-    // the home directory there too, because an exec channel starts in it.
+    // the home directory there too, because an exec channel starts in it. -L follows a symbolic
+    // link like sftp_stat() does (Rockchip SDKs symlink their images; the download follows the
+    // link, so the size and mtime must be the target's); GNU and busybox stat both take it.
     QByteArray output;
     QString errorText;
     int status = -1;
     QString error;
-    if (!runExec(QStringLiteral("stat -c '%s %Y %F' ") + shellPath(path), &output, &errorText, &status, &error)) {
+    if (!runExec(QStringLiteral("stat -L -c '%s %Y %F' ") + shellPath(path), &output, &errorText, &status, &error)) {
         info.error = error;   // transport failure, close() or timeout; a lost link was already reported
         emit remoteStatReceived(generation, id, path, info);
         return;

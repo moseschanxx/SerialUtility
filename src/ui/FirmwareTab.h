@@ -66,27 +66,35 @@ class McuLink;
  * is missing). The image line shows RockchipTool SFI info of the selected image. Flash SoC runs
  * the SocFlasher (its downloadModeNeeded() asks, through sessionProvider(), whether to send
  * "reboot loader\r" through a connected session tab - a QMessageBox naming the tab, Yes sends it
- * with SessionWidget::sendBytes() - or shows the MASKROM instructions); Cancel is enabled only
- * while waiting, never during UF; after the flash the board info is shown and logged.
+ * with SessionWidget::sendBytes() - or shows the MASKROM instructions; the question closes by
+ * itself, and nothing is sent, once the flasher stops waiting for Loader mode, e.g. because the
+ * user held MASKROM meanwhile); Cancel is enabled only while waiting, never during UF; after the
+ * flash the board info is shown and logged.
  *
  * MCU: the package picker loads a CcPackage (header and both CRC32s checked; target, version,
- * size shown; a bad file is refused with the reason); Read runs `rfmcu cmd version` through adb
- * (McuLink::cliCommand(), no bridge) and fills "Running: <version> <role>" and pre-selects the
- * reported role; the role radios are what the user confirms (never guessed silently: Update MCU
- * is disabled until the running role was read or the user picked one). Update MCU opens the
- * McuLink, runs McuUpdater::flash(role) with throughSoc on, shows progress per ACK and the
- * restart banner, closes the link; Set role does McuUpdater::setRole(role) the same way.
+ * size shown; a bad file is refused with the reason); Read stops a stale rfmcu first
+ * (`killall rfmcu 2>/dev/null; true`, as McuLink::open() does: an open `rfmcu console` holds the
+ * UART lock), then runs `rfmcu cmd version` through adb (McuLink::cliCommand(), no bridge) and
+ * fills "Running: <version> <role>" and pre-selects the reported role; the role radios are what
+ * the user confirms (never guessed silently: Update MCU is disabled until the running role was
+ * read or the user picked one in this session - last session's role is shown in the radios but
+ * not confirmed). Update MCU opens the McuLink, runs McuUpdater::flash(role) with throughSoc on,
+ * shows progress per ACK and the restart banner, closes the link; Set role does
+ * McuUpdater::setRole(role) the same way.
  *
  * Pull & Flash: pull (skipped when unchanged) -> Flash SoC -> wait for ADB -> when a package is
  * selected and its version differs from the running MCU version (read after the SoC is back),
- * Update MCU with the selected role; stops at the first failure. SoC first, because the MCU path
- * needs rfmcu on the SoC.
+ * Update MCU with the selected role; an MCU that does not answer the version read (rfmcu exit 3,
+ * or 2: in its UART updater after an interrupted transfer, runbook Part J) is updated too, with
+ * the confirmed role; stops at the first failure (adb errors included). SoC first, because the
+ * MCU path needs rfmcu on the SoC.
  *
  * Every step writes a time-stamped line to the log pane (and the System Log through lcFirmware)
  * - the command lines run, the tools' output, the flasher / updater narration (McuUpdater's
  * fw_update.py wording), never a secret. Save writes the pane to a text file; Clear empties it.
  * isBusy() is true from the start of any operation to its finished(); busyChanged() lets
- * MainWindow refuse to close the tab (and ask on quit) while a flash is under way;
+ * MainWindow refuse to close the tab (and ask on quit, or refuse to quit while socFlasher() is
+ * Flashing) while a flash is under way;
  * statusMessage() goes to the status bar like a session's.
  *
  * Tests (tst_firmwaretab, offscreen) construct the tab with a FakeToolRunner, set the tool paths

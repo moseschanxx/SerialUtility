@@ -23,11 +23,15 @@
  *  1. Detecting: queryStatus(). Loader / Maskrom -> 4. ADB device -> 2. Nothing -> 3.
  *  2. RebootingToLoader: logLine("board running <kernel> ..., rebooting it into loader mode")
  *     (`adb shell cat /proc/version` first; busybox on the Node board has no uname) then
- *     `adb reboot loader` (its exit status ignored, like the script) -> 4.
+ *     `adb reboot loader` (its exit status ignored, like the script) -> 4. Without a serial()
+ *     the board found here is the flow's from now on: every later adb command of the flow
+ *     carries `-s <its serial>` (a second ADB device appearing meanwhile changes nothing); the
+ *     end of the flow restores serial().
  *  3. downloadModeNeeded(): the owner may send "reboot loader" through a session tab or tell the
  *     user to hold MASKROM and replug; the flasher waits like 4 for the board to appear (a Yes /
  *     an appearing board continues, cancel() ends it). The signal is informational: nothing
- *     blocks on it.
+ *     blocks on it. Boards that are there but cannot be used (DeviceStatus::detail: several ADB
+ *     boards, an unauthorized one) are logged first ("no usable board: <detail>").
  *  4. WaitingForLoader: `LD` every pollIntervalMs (1 s) until a Loader / Maskrom device is
  *     listed, at most waitTimeoutSeconds (30; usb_update.sh TIMEOUT) ->
  *     finished(false, "board did not enter MASKROM/Loader within 30 s"). cancel() here ->
@@ -36,7 +40,9 @@
  *     from RockchipTool::ProgressParser; the output's success line is required:
  *     finished(false, "upgrade_tool did not report success: <tail>") otherwise (tail =
  *     RockchipTool::tailForMessage()). Not cancellable: cancel() is refused with
- *     logLine("cannot cancel while upgrade_tool writes the flash").
+ *     logLine("cannot cancel while upgrade_tool writes the flash"). No timeout either: after
+ *     5 min without output (and after every further 5 min) logLine() says that upgrade_tool is
+ *     silent and left running - log only, the flasher never stops it.
  *  6. WaitingForAdb (unless waitForAdb() is off): `adb get-state` every pollIntervalMs until
  *     "device", at most adbReturnTimeoutSeconds (60) -> finished(true, "board flashed, but ADB did
  *     not come back within 60 s; check the serial console") - a success with a warning, as the

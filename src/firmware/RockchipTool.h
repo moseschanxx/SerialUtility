@@ -89,6 +89,8 @@ public:
     ToolRunner* runner() const;
 
     ToolInvocation* listDevices();                       ///< upgrade_tool LD
+    /// The image commands pass the path with native separators and run in the image's folder
+    /// (Options::workingDirectory), a writable place for whatever upgrade_tool writes next to it.
     ToolInvocation* firmwareInfo(const QString& image);  ///< upgrade_tool SFI <image>
     ToolInvocation* upgradeFirmware(const QString& image);   ///< upgrade_tool UF <image>; never cancelled by SocFlasher
 

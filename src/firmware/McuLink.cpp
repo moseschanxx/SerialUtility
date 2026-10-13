@@ -515,7 +515,10 @@ struct McuLink::Private
     }
 
     /// The destructor cannot wait for the asynchronous cleanup: end the bridge and fire the two
-    /// cleanup commands at the runner, which owns them and lets them finish on their own.
+    /// cleanup commands detached (ToolRunner::Options::detached). They must outlive the runner
+    /// too: the link is destroyed while its owner goes away (the Firmware tab at quit), the
+    /// runner right after it, and a runner's process invocations are killed with it - a killed
+    /// `killall rfmcu` leaves the board's bridge holding the UART lock and the forward in place.
     void abandon()
     {
         ++generation;
@@ -542,12 +545,18 @@ struct McuLink::Private
             socket->abort();
         }
         if (runner && !selectedSerial.isEmpty() && state != State::Closed) {
-            adb->setSerial(selectedSerial);
+            // The same command lines as AdbTool::shell() / removeForward(), with the serial.
+            ToolRunner::Options detached;
+            detached.detached = true;
+            const QStringList board{QStringLiteral("-s"), selectedSerial};
             if (touchedBoard) {
-                adb->shell(kStopRfmcuCommand);
+                runner->run(adb->adbPath(), board + QStringList{QStringLiteral("shell"), kStopRfmcuCommand}, detached);
             }
             if (localPort != 0) {
-                adb->removeForward(localPort);
+                runner->run(adb->adbPath(),
+                            board + QStringList{QStringLiteral("forward"), QStringLiteral("--remove"),
+                                                QStringLiteral("tcp:%1").arg(localPort)},
+                            detached);
             }
         }
         state = State::Closed;

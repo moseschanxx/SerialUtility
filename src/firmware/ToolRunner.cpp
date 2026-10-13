@@ -154,26 +154,15 @@ public:
 
     void begin()
     {
+        if (m_options.detached) {
+            beginDetached();
+            return;
+        }
         qCInfo(lcFirmware).noquote() << "run:" << m_result.commandLine;
 
         m_process = new QProcess(this);
         m_process->setProcessChannelMode(QProcess::MergedChannels);
-        if (!m_options.workingDirectory.isEmpty()) {
-            m_process->setWorkingDirectory(m_options.workingDirectory);
-        }
-        if (!m_options.environment.isEmpty()) {
-            QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-            for (const QString& entry : std::as_const(m_options.environment)) {
-                // "NAME=value"; a leading '=' belongs to the name (Windows' "=C:" variables).
-                const qsizetype eq = entry.indexOf(QLatin1Char('='), 1);
-                if (eq < 1) {
-                    qCWarning(lcFirmware) << "ignoring environment entry without '=':" << entry;
-                    continue;
-                }
-                environment.insert(entry.left(eq), entry.mid(eq + 1));
-            }
-            m_process->setProcessEnvironment(environment);
-        }
+        configure(m_process);
 
         connect(m_process, &QProcess::readyRead, this, [this] { drain(); });
         connect(m_process, &QProcess::started, this, [this] {
@@ -255,6 +244,59 @@ public:
     }
 
 private:
+    /// Working directory and environment of Options, for a process started either way.
+    void configure(QProcess* process) const
+    {
+        if (!m_options.workingDirectory.isEmpty()) {
+            process->setWorkingDirectory(m_options.workingDirectory);
+        }
+        if (!m_options.environment.isEmpty()) {
+            QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+            for (const QString& entry : std::as_const(m_options.environment)) {
+                // "NAME=value"; a leading '=' belongs to the name (Windows' "=C:" variables).
+                const qsizetype eq = entry.indexOf(QLatin1Char('='), 1);
+                if (eq < 1) {
+                    qCWarning(lcFirmware) << "ignoring environment entry without '=':" << entry;
+                    continue;
+                }
+                environment.insert(entry.left(eq), entry.mid(eq + 1));
+            }
+            process->setProcessEnvironment(environment);
+        }
+    }
+
+    /// Options::detached: QProcess::startDetached() owns nothing afterwards, so neither this
+    /// invocation's destructor nor the runner's can kill the command (McuLink's cleanup at
+    /// shutdown, which must reach the board after the application is gone). Its output goes
+    /// nowhere; the result only says whether it started.
+    void beginDetached()
+    {
+        qCInfo(lcFirmware).noquote() << "run detached:" << m_result.commandLine;
+        QProcess process;
+        process.setProgram(m_program);
+        process.setArguments(m_arguments);
+        configure(&process);
+        process.setStandardInputFile(QProcess::nullDevice());
+        process.setStandardOutputFile(QProcess::nullDevice());
+        process.setStandardErrorFile(QProcess::nullDevice());
+        qint64 pid = 0;
+        const bool started = process.startDetached(&pid);
+        const QString reason = started ? QString() : process.errorString();
+        if (!started) {
+            qCWarning(lcFirmware).noquote() << "cannot start:" << m_result.commandLine << "-" << reason;
+        }
+        QTimer::singleShot(0, this, [this, started, reason] {
+            if (started) {
+                announceStarted();
+            }
+            ToolResult result = m_result;
+            result.started = started;
+            result.exitCode = started ? 0 : -1;
+            result.error = reason;
+            finish(result);
+        });
+    }
+
     void announceStarted()
     {
         markStarted();   // no-op when already announced or finished

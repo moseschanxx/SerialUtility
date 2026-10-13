@@ -859,9 +859,32 @@ void Tst_imagepuller::cancelBeforeTransfer()
     QCOMPARE(started.count(), 0);
     QVERIFY(!QFileInfo::exists(local()));
 
+    // Cancelled from a slot of remoteInfo() (the facts are in, the transfer is next): the run
+    // ends there, no transfer is started for it and nothing is left in the cache.
+    bool cancelOnInfo = true;
+    const QMetaObject::Connection onInfo = QObject::connect(m_puller.get(), &ImagePuller::remoteInfo, m_puller.get(), [&] {
+        if (cancelOnInfo) {
+            cancelOnInfo = false;
+            m_puller->cancel();
+        }
+    });
+    QVERIFY(m_puller->start());
+    QTRY_COMPARE_WITH_TIMEOUT(s.finished.count(), 2, kTimeoutMs);
+    QCOMPARE(s.info.count(), 1);
+    QVERIFY(!s.ok(1));
+    QCOMPARE(s.message(1), QStringLiteral("cancelled"));
+    QVERIFY(!m_puller->isRunning());
+    QTest::qWait(300);
+    QCOMPARE(started.count(), 0);
+    QCOMPARE(s.finished.count(), 2);
+    QVERIFY(!m_conn->isTransferActive());
+    QVERIFY(!QFileInfo::exists(local(QStringLiteral("update.img.new"))));
+    QVERIFY(!QFileInfo::exists(local()));
+    QObject::disconnect(onInfo);
+
     // And the puller is reusable.
     PULL(s);
-    QVERIFY2(s.ok(1), qPrintable(s.message(1)));
+    QVERIFY2(s.ok(2), qPrintable(s.message(2)));
     QCOMPARE(started.count(), 1);
     QVERIFY2(readAll(local()) == image, "pull after a cancel differs");
 }
@@ -1077,7 +1100,7 @@ void Tst_imagepuller::shellFallbackPull()
     QCOMPARE(s.info.at(0).at(3).toString(), kGit);
     QCOMPARE(started.count(), 1);
     QCOMPARE(ImagePuller::cachedImage(m_cache).remoteModified.toSecsSinceEpoch(), kStampA.toSecsSinceEpoch());
-    for (const QString& command : {QStringLiteral("stat -c '%s %Y %F' 'rk/sdk/output/image/update.img'"),
+    for (const QString& command : {QStringLiteral("stat -L -c '%s %Y %F' 'rk/sdk/output/image/update.img'"),
                                    QStringLiteral("git -C 'rk/sdk' describe --tags --dirty 2>/dev/null"),
                                    QStringLiteral("wc -c < 'rk/sdk/output/image/update.img'"),
                                    QStringLiteral("cat 'rk/sdk/output/image/update.img'")}) {

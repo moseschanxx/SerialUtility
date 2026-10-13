@@ -505,7 +505,7 @@
 <context>
     <name>FirmwareTab</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+667"/>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+697"/>
         <source>Choose the Local Image Cache</source>
         <translation>Choose the Local Image Cache</translation>
     </message>
@@ -631,12 +631,12 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+691"/>
+        <location line="+699"/>
         <source>Pull</source>
         <translation>Pull</translation>
     </message>
     <message>
-        <location line="-690"/>
+        <location line="-698"/>
         <source>Copy update.img from the build machine (skipped when it did not change)</source>
         <translation>Copy update.img from the build machine (skipped when it did not change)</translation>
     </message>
@@ -688,12 +688,12 @@
     </message>
     <message>
         <location line="+2"/>
-        <location line="+681"/>
+        <location line="+689"/>
         <source>Flash SoC</source>
         <translation>Flash SoC</translation>
     </message>
     <message>
-        <location line="-680"/>
+        <location line="-688"/>
         <source>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</source>
         <translation>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</translation>
     </message>
@@ -759,23 +759,23 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+669"/>
+        <location line="+677"/>
         <source>Update MCU</source>
         <translation>Update MCU</translation>
     </message>
     <message>
-        <location line="-668"/>
+        <location line="-676"/>
         <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
         <translation>Send the package to the CC1310 through the board (needs a confirmed role)</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+670"/>
+        <location line="+678"/>
         <source>Set role</source>
         <translation>Set role</translation>
     </message>
     <message>
-        <location line="-669"/>
+        <location line="-677"/>
         <source>Store the selected role in the CC1310</source>
         <translation>Store the selected role in the CC1310</translation>
     </message>
@@ -820,7 +820,7 @@
         <translation>Ready</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="+50"/>
         <source>Firmware</source>
         <translation>Firmware</translation>
     </message>
@@ -860,7 +860,7 @@
         <translation>Package %1: %2</translation>
     </message>
     <message>
-        <location line="+147"/>
+        <location line="+140"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>the SSH profile of the build machine no longer exists</translation>
     </message>
@@ -966,7 +966,7 @@
         <translation>unknown</translation>
     </message>
     <message>
-        <location line="+61"/>
+        <location line="+71"/>
         <source>upgrade_tool: %1</source>
         <translation>upgrade_tool: %1</translation>
     </message>
@@ -1048,15 +1048,16 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+339"/>
-        <location line="+178"/>
+        <location line="+350"/>
+        <location line="+36"/>
+        <location line="+210"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-539"/>
+        <location line="-618"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -1092,7 +1093,7 @@
         <translation>the SoC flasher did not start</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+18"/>
         <source>Flashing SoC: looking for the board</source>
         <translation>Flashing SoC: looking for the board</translation>
     </message>
@@ -1147,7 +1148,12 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>No, use the MASKROM button</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+19"/>
+        <source>The board appeared meanwhile; nothing sent</source>
+        <translation>The board appeared meanwhile; nothing sent</translation>
+    </message>
+    <message>
+        <location line="+15"/>
         <source>Sent &quot;reboot loader&quot; through %1</source>
         <translation>Sent &quot;reboot loader&quot; through %1</translation>
     </message>
@@ -1192,27 +1198,34 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>the MCU updater did not start</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+39"/>
         <source>Reading the MCU version through ADB...</source>
         <translation>Reading the MCU version through ADB...</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+41"/>
         <source>rfmcu cmd %1</source>
         <translation>rfmcu cmd %1</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="-14"/>
+        <location line="+36"/>
         <source>adb could not be started: %1</source>
         <translation>adb could not be started: %1</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-1835"/>
+        <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
+        <translation>Role %1 remembered from the last session: click it or press Read to confirm it</translation>
+    </message>
+    <message>
+        <location line="+1803"/>
+        <location line="+36"/>
         <source>adb did not answer in time</source>
         <translation>adb did not answer in time</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
         <source>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</source>
         <translation>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</translation>
     </message>
@@ -1237,7 +1250,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>nothing</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+34"/>
         <source>MCU application version=%1 role=%2</source>
         <translation>MCU application version=%1 role=%2</translation>
     </message>
@@ -1250,6 +1263,16 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <location line="+3"/>
         <source>SoC flashed; no MCU package chosen</source>
         <translation>SoC flashed; no MCU package chosen</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</source>
+        <translation>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>MCU version unknown (%1): it may sit in its UART updater; updating it</source>
+        <translation>MCU version unknown (%1): it may sit in its UART updater; updating it</translation>
     </message>
     <message>
         <location line="+6"/>
@@ -1512,12 +1535,12 @@ Only replace the stored key if you are sure the change is expected.</translation
     <message>
         <location line="+109"/>
         <location line="+30"/>
-        <location line="+307"/>
+        <location line="+311"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
     <message>
-        <location line="-333"/>
+        <location line="-337"/>
         <source>No remote folder given</source>
         <translation>No remote folder given</translation>
     </message>
@@ -1563,12 +1586,12 @@ Only replace the stored key if you are sure the change is expected.</translation
     </message>
     <message>
         <location line="+10"/>
-        <location line="+109"/>
+        <location line="+113"/>
         <source>Skipping %1: %2</source>
         <translation>Skipping %1: %2</translation>
     </message>
     <message>
-        <location line="-107"/>
+        <location line="-111"/>
         <source>it is a folder</source>
         <translation>it is a folder</translation>
     </message>
@@ -1593,7 +1616,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>No git version (git describe ended with status %1)</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+19"/>
         <source>%1 unchanged (%2, %3)</source>
         <translation>%1 unchanged (%2, %3)</translation>
     </message>
@@ -2431,7 +2454,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>BuildAI &amp;Homepage</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+552"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+553"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>Session %1 is still connected.
@@ -2460,12 +2483,12 @@ Close them anyway?</numerusform>
     </message>
     <message>
         <location line="+107"/>
-        <location line="+47"/>
+        <location line="+58"/>
         <source>Quit %1</source>
         <translation>Quit %1</translation>
     </message>
     <message numerus="yes">
-        <location line="-46"/>
+        <location line="-57"/>
         <source>%n session(s) are still connected (%1).
 Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>
@@ -2477,24 +2500,29 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+3"/>
-        <location line="+46"/>
+        <location line="+57"/>
         <source>Quit</source>
         <translation>Quit</translation>
     </message>
     <message>
-        <location line="-41"/>
+        <location line="-52"/>
         <source>Close</source>
         <translation>Close</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+27"/>
+        <source>upgrade_tool is writing the flash: wait for it to finish before quitting</source>
+        <translation>upgrade_tool is writing the flash: wait for it to finish before quitting</translation>
+    </message>
+    <message>
+        <location line="+8"/>
         <source>The Firmware tab is still working (%1).
-Quitting now interrupts it; an interrupted flash can leave the board in Loader mode.</source>
+Quitting now stops it: a board left in Loader mode needs a replug, and an interrupted MCU transfer leaves the CC1310 in its UART updater until Update MCU runs again.</source>
         <translation>The Firmware tab is still working (%1).
-Quitting now interrupts it; an interrupted flash can leave the board in Loader mode.</translation>
+Quitting now stops it: a board left in Loader mode needs a replug, and an interrupted MCU transfer leaves the CC1310 in its UART updater until Update MCU runs again.</translation>
     </message>
     <message numerus="yes">
-        <location line="+9"/>
+        <location line="+10"/>
         <source>%n session(s) are still connected (%1).</source>
         <translation>
             <numerusform>%n session is still connected (%1).</numerusform>
@@ -4043,7 +4071,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RkFirmwareInfo</name>
     <message>
-        <location filename="../src/firmware/RockchipTool.cpp" line="+161"/>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+162"/>
         <source>chip %1</source>
         <translation>chip %1</translation>
     </message>
@@ -4071,7 +4099,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+145"/>
+        <location line="+163"/>
         <source>no firmware image selected</source>
         <translation>no firmware image selected</translation>
     </message>
@@ -4893,7 +4921,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+141"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+151"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -4943,7 +4971,7 @@ Nothing is saved until you press OK.</translation>
         <translation>no tool runner</translation>
     </message>
     <message>
-        <location line="+52"/>
+        <location line="+66"/>
         <source>cannot cancel while upgrade_tool writes the flash</source>
         <translation>cannot cancel while upgrade_tool writes the flash</translation>
     </message>
@@ -4958,7 +4986,12 @@ Nothing is saved until you press OK.</translation>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="+37"/>
+        <location line="+23"/>
+        <source>no usable board: %1</source>
+        <translation>no usable board: %1</translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <source>board running %1, rebooting it into loader mode</source>
         <translation>board running %1, rebooting it into loader mode</translation>
     </message>
@@ -4979,7 +5012,7 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+22"/>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>board is in download mode</source>
         <translation>board is in download mode</translation>
     </message>
@@ -4994,12 +5027,17 @@ Nothing is saved until you press OK.</translation>
         <translation>board flashed, but ADB did not come back within %1 s; check the serial console</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+28"/>
         <source>flashing %1 (%2 mode)</source>
         <translation>flashing %1 (%2 mode)</translation>
     </message>
     <message>
-        <location line="+60"/>
+        <location line="+44"/>
+        <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
+        <translation>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</translation>
+    </message>
+    <message>
+        <location line="+38"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>cannot run upgrade_tool: %1</translation>
     </message>
@@ -6032,7 +6070,7 @@ You will be asked for it when connecting.</translation>
     </message>
     <message>
         <location line="+42"/>
-        <location line="+29"/>
+        <location line="+31"/>
         <source>Cannot stat %1: %2</source>
         <translation>Cannot stat %1: %2</translation>
     </message>
@@ -6047,7 +6085,7 @@ You will be asked for it when connecting.</translation>
         <translation>stat exited with status %1</translation>
     </message>
     <message>
-        <location line="-981"/>
+        <location line="-983"/>
         <location line="+19"/>
         <location line="+19"/>
         <location line="+30"/>
@@ -6294,7 +6332,7 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>ToolRunner</name>
     <message>
-        <location filename="../src/firmware/ToolRunner.cpp" line="+298"/>
+        <location filename="../src/firmware/ToolRunner.cpp" line="+340"/>
         <source>timed out after %1 ms</source>
         <translation>timed out after %1 ms</translation>
     </message>

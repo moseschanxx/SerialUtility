@@ -44,6 +44,7 @@
 #include "dialogs/QuickCommandsDialog.h"
 #include "dialogs/SshProfilesDialog.h"
 #include "dialogs/VersionDialog.h"
+#include "firmware/SocFlasher.h"
 #include "ssh/SshProfile.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
@@ -573,11 +574,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
 
+    if (m_firmwareTab && m_firmwareTab->socFlasher()->phase() == SocFlasher::Phase::Flashing) {
+        // Never while upgrade_tool writes the flash, whatever the user answers: the window going
+        // away destroys the tab and its tool runner, which kills the process half way (a board
+        // that no longer boots, MASKROM recovery). The spec's "never cancel UF" covers quitting.
+        // Alt+F4, Ctrl+Q and a session logoff all arrive here.
+        statusBar()->showMessage(tr("upgrade_tool is writing the flash: wait for it to finish before quitting"), 5000);
+        qCInfo(lcUi) << "quit refused while upgrade_tool writes the flash";
+        event->ignore();
+        return;
+    }
     if (m_firmwareTab && m_firmwareTab->isBusy()) {
-        // One question for everything, always asked: quitting interrupts a flash or an MCU
-        // transfer, whatever the "ask before closing" preference says about sessions.
-        QString text = tr("The Firmware tab is still working (%1).\nQuitting now interrupts it; an interrupted flash "
-                          "can leave the board in Loader mode.")
+        // One question for everything else, always asked: quitting interrupts a pull, a waiting
+        // flash step or an MCU transfer, whatever the "ask before closing" preference says about sessions.
+        QString text = tr("The Firmware tab is still working (%1).\nQuitting now stops it: a board left in Loader mode "
+                          "needs a replug, and an interrupted MCU transfer leaves the CC1310 in its UART updater "
+                          "until Update MCU runs again.")
                            .arg(m_firmwareTab->persistentStatusMessage());
         if (!connected.isEmpty()) {
             QStringList names;

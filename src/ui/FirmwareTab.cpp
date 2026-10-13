@@ -76,8 +76,18 @@ const QLatin1String kProfileKeyPrefix("ssh:profile:");
 const QLatin1String kTargetKeyPrefix("ssh:target:");
 
 /// AppSettings.h has no accessor for the confirmed MCU role, so it lives next to the other
-/// firmware keys in plain QSettings ("rx" / "tx"; empty = none confirmed).
+/// firmware keys in plain QSettings ("rx" / "tx"; empty = none confirmed). The next session shows
+/// it in the radios without confirming it (loadSettings()).
 const QLatin1String kRoleSettingsKey("firmware/role");
+
+/// What McuLink::open() runs before its bridge (adb_link.py): an rfmcu left by an earlier session
+/// (an open `rfmcu console`, a bridge of a killed task) holds the UART's flock, and `rfmcu cmd`
+/// would exit 2 "port busy". Its exit status is ignored; nothing to kill is the usual case.
+const QString kStopRfmcuCommand = QStringLiteral("killall rfmcu 2>/dev/null; true");
+
+/// `rfmcu cmd` exit codes (rockchip-platforms project/app/rfmcu/README.md).
+constexpr int kRfmcuPortBusy = 2;
+constexpr int kRfmcuNoReply = 3;
 
 const QColor kErrorText(0xC0, 0x39, 0x2B);
 
@@ -109,9 +119,11 @@ int findRecentItem(const QComboBox* combo, const QString& text)
     return -1;
 }
 
+/// Decimal units in the C locale, exactly as ImagePuller words its log lines ("11.4 MB"), so the
+/// pull log never shows one image in two units.
 QString formatSize(qint64 bytes)
 {
-    return QLocale().formattedDataSize(qMax<qint64>(0, bytes), 1, QLocale::DataSizeTraditionalFormat);
+    return QLocale::c().formattedDataSize(qMax<qint64>(0, bytes), 1, QLocale::DataSizeSIFormat);
 }
 
 QString formatTime(const QDateTime& time)
@@ -251,6 +263,7 @@ struct FirmwareTab::Private
     QString mcuPackagePath;
     QString packageProblem;         ///< why the last package was refused (shown while none is loaded)
     quint32 confirmedRole = 0;      ///< the role radios: 0 none, 1 rx, 2 tx
+    quint32 rememberedRole = 0;     ///< last session's role, shown in the radios but not confirmed
     QString runningVersion;
     QString runningRole;
     SocFlasher::DeviceStatus deviceStatus;
@@ -278,9 +291,11 @@ struct FirmwareTab::Private
     QString mcuMessage;
     QString linkLostMessage;
     quint32 mcuRole = 0;
-    QPointer<ToolInvocation> cliInvocation;
+    QPointer<ToolInvocation> cliInvocation;   ///< the stale-rfmcu stop or the `rfmcu cmd` under way
     QString pendingVersion;         ///< "version" answered without a role: "help" decides it
+    int lastCliExit = -1;           ///< exit code of the last `rfmcu cmd` that ran to its end, else -1
     std::function<void(bool, const QString&)> cliDone;
+    QPointer<QMessageBox> downloadBox;   ///< the open "send reboot loader through <tab>" question
     bool lastLogWasProgress = false;
     QString lastProgressStage;
 
@@ -305,6 +320,7 @@ struct FirmwareTab::Private
     void renderDeviceStatus();
     void renderPackage();
     void renderMcuStatus();
+    void showRole(quint32 role);    ///< the radios only; confirmedRole is the caller's business
     void updateControls();
     bool cancellable() const;
     void updateStatusTimer();
@@ -339,6 +355,7 @@ struct FirmwareTab::Private
     void completeMcu();
 
     void startMcuRead(std::function<void(bool, const QString&)> done);
+    void onStaleRfmcuStopped(const ToolResult& result);
     void runCli(const QString& command);
     void onCliFinished(const QString& command, const ToolResult& result);
     void finishCli(bool ok, const QString& message);
@@ -356,12 +373,19 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
     , d(std::make_unique<Private>(this))
 {
     d->profiles = profiles;
-    d->runner = runner ? runner : new ProcessToolRunner(this);
+    // An own runner becomes a child only after the collaborators that use it: QObject deletes
+    // children in creation order, and McuLink's destructor still sends the board's cleanup
+    // (`killall rfmcu`, the forward removal) through the runner when the tab goes away.
+    auto* ownRunner = runner ? nullptr : new ProcessToolRunner;
+    d->runner = runner ? runner : ownRunner;
     d->flasher = new SocFlasher(d->runner, this);
     d->link = new McuLink(d->runner, this);
     d->updater = new McuUpdater(this);
     d->puller = new ImagePuller(this);
     d->ssh = new SshConnection(this);
+    if (ownRunner) {
+        ownRunner->setParent(this);
+    }
     // The pull connection is short-lived and on demand: a dropped link ends the pull, it is not
     // re-established behind the user's back.
     d->ssh->setAutoReconnect(false);
@@ -392,6 +416,10 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
     d->retranslate();
     d->loadSettings();
     applyPreferences();
+    if (d->rememberedRole != 0) {
+        appendLog(tr("Role %1 remembered from the last session: click it or press Read to confirm it")
+                      .arg(roleText(d->rememberedRole)));
+    }
     d->updateControls();
 }
 
@@ -422,9 +450,11 @@ FirmwareTab::~FirmwareTab()
         d->updater->cancel();
     }
     if (d->flasher->isRunning()) {
-        d->flasher->cancel();   // refused while upgrade_tool writes; MainWindow never closes a busy tab
+        // Refused while upgrade_tool writes; MainWindow never closes a busy tab and refuses to quit
+        // while it writes, because the runner kills its processes when it is destroyed.
+        d->flasher->cancel();
     }
-    d->link->close();
+    d->link->close();   // McuLink's destructor (below, before the runner's) sends the cleanup detached
     d->ssh->close();
 }
 
@@ -998,7 +1028,12 @@ void FirmwareTab::Private::loadSettings()
         }
     }
     packageEdit->setText(nativePath(mcuPackagePath));
-    q->setSelectedRole(roleFromText(QSettings().value(kRoleSettingsKey).toString()));
+    // Last session's role is shown, never confirmed: the board plugged in now may be another one
+    // (REQUIREMENTS: "the user confirms, never guess silently"). Update MCU / Set role wait for a
+    // Read (which pre-selects the reported role) or a click on a radio in this session.
+    rememberedRole = roleFromText(QSettings().value(kRoleSettingsKey).toString());
+    confirmedRole = 0;
+    showRole(rememberedRole);   // logged by the constructor, after the tool paths
     restoring = false;
 
     refreshImage();
@@ -1223,14 +1258,7 @@ void FirmwareTab::setSelectedRole(quint32 role)
 {
     const quint32 valid = (role == CcProtocol::RoleRx || role == CcProtocol::RoleTx) ? role : 0;
     d->confirmedRole = valid;
-    {
-        const QSignalBlocker rxBlocker(d->roleRxRadio);
-        const QSignalBlocker txBlocker(d->roleTxRadio);
-        d->roleGroup->setExclusive(false);   // an exclusive group cannot show "none chosen"
-        d->roleRxRadio->setChecked(valid == CcProtocol::RoleRx);
-        d->roleTxRadio->setChecked(valid == CcProtocol::RoleTx);
-        d->roleGroup->setExclusive(true);
-    }
+    d->showRole(valid);
     if (!d->restoring) {
         QSettings().setValue(kRoleSettingsKey, roleText(valid));
     }
@@ -1546,6 +1574,16 @@ void FirmwareTab::Private::renderMcuStatus()
     } else {
         mcuStatusLabel->setText(QStringLiteral("%1 %2").arg(runningVersion, runningRole).trimmed());
     }
+}
+
+void FirmwareTab::Private::showRole(quint32 role)
+{
+    const QSignalBlocker rxBlocker(roleRxRadio);
+    const QSignalBlocker txBlocker(roleTxRadio);
+    roleGroup->setExclusive(false);   // an exclusive group cannot show "none chosen"
+    roleRxRadio->setChecked(role == CcProtocol::RoleRx);
+    roleTxRadio->setChecked(role == CcProtocol::RoleTx);
+    roleGroup->setExclusive(true);
 }
 
 bool FirmwareTab::Private::cancellable() const
@@ -1929,6 +1967,9 @@ void FirmwareTab::Private::startFlash()
 
 void FirmwareTab::Private::onFlasherPhase(SocFlasher::Phase phase)
 {
+    if (downloadBox && phase != SocFlasher::Phase::WaitingForLoader) {
+        downloadBox->reject();   // the question is moot: askDownloadMode() sends nothing
+    }
     if (!flasherActive) {
         return;
     }
@@ -2015,9 +2056,21 @@ void FirmwareTab::Private::askDownloadMode()
         extra.append(box.addButton(FirmwareTab::tr("Send through %1").arg(connected.at(i)->title()), QMessageBox::AcceptRole));
     }
     QPointer<FirmwareTab> self(q);
+    downloadBox = &box;   // onFlasherPhase() closes it once the flasher stops waiting for Loader mode
     const int answer = box.exec();
-    if (!self || !flasherActive) {
-        return;   // the tab went away or the flasher stopped waiting meanwhile
+    if (!self) {
+        return;   // the tab went away meanwhile
+    }
+    downloadBox = nullptr;
+    const SocFlasher::Phase now = flasher->phase();
+    if (!flasherActive || now != SocFlasher::Phase::WaitingForLoader) {
+        // The flasher stopped waiting meanwhile: the board appeared (the user held MASKROM and
+        // replugged; the flash may even be done - "reboot loader" now would take a freshly flashed
+        // board back into Loader mode and the ADB wait would time out), or the wait ended.
+        if (now != SocFlasher::Phase::Failed && now != SocFlasher::Phase::Cancelled) {
+            q->appendLog(FirmwareTab::tr("The board appeared meanwhile; nothing sent"));
+        }
+        return;
     }
     QPointer<SessionWidget> chosen;
     if (answer == QMessageBox::Yes) {
@@ -2134,10 +2187,42 @@ void FirmwareTab::Private::startMcuRead(std::function<void(bool, const QString&)
 {
     cliDone = std::move(done);
     pendingVersion.clear();
+    lastCliExit = -1;
     pushToolPaths();
     const QString text = FirmwareTab::tr("Reading the MCU version through ADB...");
     setProgressBusy(text);
     setPersistent(text);
+    // First the stale rfmcu, exactly as McuLink::open() does before its bridge (same board: the
+    // serial cliCommand() uses); `rfmcu cmd version` follows when it is done.
+    link->adb()->setSerial(link->serial());
+    ToolInvocation* invocation = link->adb()->shell(kStopRfmcuCommand);
+    cliInvocation = invocation;   // cancellable like the command itself
+    q->appendLog(invocation->commandLine());
+    connect(invocation, &ToolInvocation::finished, q, [this, invocation](const ToolResult& result) {
+        if (cliInvocation != invocation) {
+            return;
+        }
+        cliInvocation = nullptr;
+        onStaleRfmcuStopped(result);
+    });
+    updateControls();
+}
+
+void FirmwareTab::Private::onStaleRfmcuStopped(const ToolResult& result)
+{
+    // Its exit status is ignored (nothing to kill is the usual case); a dead adb is not.
+    if (result.cancelled || cancelRequested) {
+        finishCli(false, FirmwareTab::tr("cancelled"));
+        return;
+    }
+    if (!result.started) {
+        finishCli(false, FirmwareTab::tr("adb could not be started: %1").arg(result.error));
+        return;
+    }
+    if (result.timedOut) {
+        finishCli(false, FirmwareTab::tr("adb did not answer in time"));
+        return;
+    }
     runCli(QStringLiteral("version"));
 }
 
@@ -2174,14 +2259,16 @@ void FirmwareTab::Private::onCliFinished(const QString& command, const ToolResul
         finishCli(false, FirmwareTab::tr("adb did not answer in time"));
         return;
     }
-    // rfmcu cmd: 0 OK, 1 ERR, 2 port busy, 3 no reply (project/app/rfmcu/README.md).
+    // rfmcu cmd: 0 OK, 1 ERR, 2 port busy, 3 no reply (project/app/rfmcu/README.md). The chain
+    // tells "the MCU is there but not talking" (2, 3) from adb-level failures by lastCliExit.
+    lastCliExit = result.exitCode;
     switch (result.exitCode) {
     case 0:
         break;
-    case 2:
+    case kRfmcuPortBusy:
         finishCli(false, FirmwareTab::tr("the MCU port is busy (another rfmcu holds /dev/ttyS1): %1").arg(output));
         return;
-    case 3:
+    case kRfmcuNoReply:
         finishCli(false, FirmwareTab::tr("the MCU did not answer \"%1\"").arg(command));
         return;
     default:
@@ -2257,6 +2344,26 @@ void FirmwareTab::Private::startChainMcu()
     }
     step = kOpMcu;
     startMcuRead([this](bool ok, const QString& message) {
+        if (!ok && !cancelRequested && pendingVersion.isEmpty()
+            && (lastCliExit == kRfmcuNoReply || lastCliExit == kRfmcuPortBusy)) {
+            // rfmcu ran on the board but the application CLI did not answer: a CC1310 left in its
+            // UART updater (an interrupted transfer, a bootloader-only J-Link flash: runbook
+            // Part B / Part J) has no CLI. McuUpdater::flash() handles exactly that board (HELLO is
+            // answered by INFO), so the chain updates it instead of stopping - with the role the
+            // user confirmed, since such a board cannot report one. (Port busy after the stale
+            // rfmcu was stopped: the link's open stops it again right before its bridge.)
+            if (confirmedRole == 0) {
+                stepFinished(kOpMcu, false,
+                             FirmwareTab::tr("cannot read the running MCU version (%1) and no role is confirmed: "
+                                             "choose rx or tx, then press Update MCU")
+                                 .arg(message));
+                return;
+            }
+            q->appendLog(FirmwareTab::tr("MCU version unknown (%1): it may sit in its UART updater; updating it")
+                             .arg(message));
+            startMcuUpdate(kOpMcu);
+            return;
+        }
         if (!ok) {
             stepFinished(kOpMcu, false, FirmwareTab::tr("cannot read the running MCU version: %1").arg(message));
             return;

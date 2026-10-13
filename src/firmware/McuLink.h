@@ -33,7 +33,10 @@ class QTcpSocket;
  * close() (idempotent; also run by the destructor): the socket is closed, the bridge process
  * cancelled (terminate, kill after 3 s), then on a board that was selected `killall rfmcu` again
  * (adbd does not reliably end the board process) and `adb forward --remove tcp:<local>`; adb
- * errors during close are ignored (cable pulled). closed() when done. The bridge process ending
+ * errors during close are ignored (cable pulled). closed() when done. The destructor cannot wait:
+ * it cancels the bridge and sends `killall rfmcu` and the forward removal detached
+ * (ToolRunner::Options::detached), so they still reach the board when the runner and the
+ * application go away right after the link. The bridge process ending
  * on its own while open (cable pulled, rfmcu killed by someone) -> linkLost(message) and the
  * state is closed the same way.
  *

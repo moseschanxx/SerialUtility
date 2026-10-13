@@ -534,7 +534,8 @@ failure.
 
 **SSH stack additions** (no behaviour change for session tabs): `SshConnection::runCommand()`
 (an exec channel without PTY, `commandFinished(id, exitStatus, output, errorText)`) and
-`statRemote()` (SFTP stat, falling back to `stat -c '%s %Y %F'`; `remoteStatReceived(...)`), both
+`statRemote()` (SFTP stat, falling back to `stat -L -c '%s %Y %F'`, which follows a symlinked image like
+SFTP does; `remoteStatReceived(...)`), both
 asynchronous on the worker; `tests/support/TestSshServer` answers the stat and the scripted
 `git describe` commands.
 

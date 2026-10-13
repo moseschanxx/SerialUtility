@@ -42,11 +42,13 @@
  *    whether the file can be written at all), `cat 'p'` (file -> stdout, streamed in 64 KiB
  *    pieces as the window allows), `wc -c < 'p'` (size + LF), `test -e 'p'` (exit 0 / 1),
  *    `chmod NNN 'p'`, `rm -f 'p'`, `mkdir -p 'p'`, `mv 'a' 'b'`, `pwd` (the canonical rootDir +
- *    LF, what the fallback's remote-home lookup runs), `stat -c '%s %Y %F' 'p'` (v0.5, what
+ *    LF, what the fallback's remote-home lookup runs), `stat -L -c '%s %Y %F' 'p'` (v0.5, what
  *    SshConnection::statRemote() runs without SFTP: "<size> <mtime epoch> <type>" + LF with the
  *    type "regular file" ("regular empty file" for a zero-length one, like GNU and busybox) or
- *    "directory" - a directory's size is printed as 4096; a missing path exits 1 with
- *    "stat: cannot statx 'p': No such file or directory" on stderr) and
+ *    "directory" - a directory's size is printed as 4096; a symbolic link is followed, as -L
+ *    asks; a missing path exits 1 with "stat: cannot statx 'p': No such file or directory" on
+ *    stderr; `stat` without -L is refused as unsupported, so a client that would report a
+ *    link's own size fails loudly) and
  *    `git -C 'p' describe --tags --dirty 2>/dev/null` (v0.5, the Firmware tab's version probe:
  *    prints Options::gitDescribeOutput + LF and exits 0; an empty option, or a 'p' that is not
  *    a directory, exits 128 with no output, like git outside a repository); commands may be joined with " && " (stop

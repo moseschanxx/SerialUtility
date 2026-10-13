@@ -136,8 +136,10 @@ class FirmwareTab;
  *    the status bar treat "no session" like an empty window, it is never saved as a restore key
  *    nor counted by sessionCount()'s callers as a port, and the Window menu lists it under its
  *    title "Firmware" (Alt+N selects it like any tab). Closing it (tab button, middle click,
- *    Close Session) is refused with a status message while FirmwareTab::isBusy(); quitting with a
- *    busy Firmware tab asks once like a connected session. The tab's statusMessage() /
+ *    Close Session) is refused with a status message while FirmwareTab::isBusy(); quitting is
+ *    refused the same way while upgrade_tool writes the flash (SocFlasher::Phase::Flashing: the
+ *    window going away would kill it) and, with a Firmware tab busy otherwise, asks once like a
+ *    connected session. The tab's statusMessage() /
  *    persistentStatusMessage() reach the status bar exactly like a session's. showFirmwareTab()
  *    creates it on first use (with the window's SshProfileStore and a ProcessToolRunner) and
  *    selects it; its sessionProvider is connectedSessions() ("send reboot loader through a tab").

@@ -532,7 +532,11 @@ void ImagePuller::Private::onCommand(int id, int exitStatus, const QByteArray& o
 
 void ImagePuller::Private::remoteFactsComplete()
 {
+    const quint64 token = runToken;
     emit q->remoteInfo(QLatin1String(kImageName), remote.size, remote.modified, git);
+    if (!running || runToken != token) {
+        return;   // a slot of remoteInfo() cancelled (or cancelled and started again): not this run's transfer
+    }
 
     const CacheEntry cached = ImagePuller::readNote(ImagePuller::imagePath(runCache));
     const bool sameBuild = cached.isValid() && remote.size >= 0 && cached.size == remote.size

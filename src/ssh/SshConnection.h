@@ -237,8 +237,9 @@ public slots:
     int runCommand(const QString& command, int timeoutMs = 30000);
     /// v0.5: stat `path` (absolute, or relative to the remote home like the transfer paths) ->
     /// remoteStatReceived(id, path, info): SFTP stat when the session has the subsystem,
-    /// otherwise `stat -c '%s %Y %F' 'path'` on an exec channel (busybox and GNU stat; "%F" tells
-    /// a directory apart). A missing path is exists = false with an empty error. 0 while not
+    /// otherwise `stat -L -c '%s %Y %F' 'path'` on an exec channel (busybox and GNU stat; "%F"
+    /// tells a directory apart; -L follows a symbolic link as sftp_stat() does, so both report the
+    /// target). A missing path is exists = false with an empty error. 0 while not
     /// Connected, like runCommand().
     int statRemote(const QString& path);
 

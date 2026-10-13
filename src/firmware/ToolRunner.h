@@ -83,6 +83,11 @@ public:
         QString workingDirectory;     ///< empty = the parent process's
         int timeoutMs = 0;            ///< > 0: the command is killed after this time (result.timedOut)
         QStringList environment;      ///< "NAME=value" entries added to the process environment
+        /// Start and forget (v0.5 fix): the command outlives its invocation, the runner and the
+        /// application (QProcess::startDetached). No output, no timeout, nothing to cancel;
+        /// finished() follows from the event loop with started (and exit code 0) or the reason it
+        /// could not be started. For cleanup commands sent while the owner is being destroyed.
+        bool detached = false;
     };
 
     explicit ToolRunner(QObject* parent = nullptr);

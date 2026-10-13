@@ -1,6 +1,7 @@
 #include "firmware/SocFlasher.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QRegularExpression>
@@ -12,6 +13,10 @@
 #include "app/Logging.h"
 
 namespace {
+
+/// UF is never stopped, but a USB stall can make it hang without a word: after this long without
+/// output the log says so (again after every further period), so the user knows what is going on.
+constexpr int kUfSilenceLogMs = 5 * 60 * 1000;
 
 /// A rockusb device in Loader / Maskrom mode is one `UF` can write to; anything else `upgrade_tool LD`
 /// may list (a mass-storage mode, an unknown mode) is not.
@@ -62,6 +67,9 @@ struct SocFlasher::Private
         pollTimer = new QTimer(owner);
         pollTimer->setSingleShot(true);
         QObject::connect(pollTimer, &QTimer::timeout, owner, [this] { onPollTimer(); });
+        silenceTimer = new QTimer(owner);
+        silenceTimer->setSingleShot(true);
+        QObject::connect(silenceTimer, &QTimer::timeout, owner, [this] { onFlashSilence(); });
     }
 
     SocFlasher* q;
@@ -69,6 +77,8 @@ struct SocFlasher::Private
     RockchipTool* upgradeTool;
     AdbTool* adb;
     QTimer* pollTimer = nullptr;
+    QTimer* silenceTimer = nullptr;            ///< UF printed nothing for kUfSilenceLogMs
+    QElapsedTimer lastFlashOutput;
 
     QString serial;
     QString imagePath;
@@ -321,15 +331,29 @@ struct SocFlasher::Private
         return true;
     }
 
+    /// The board the flow found on ADB is the one it talks to from then on (`adb -s <serial>
+    /// reboot loader`, the get-state polls, the board info), as usb_update.sh does: a second ADB
+    /// device appearing meanwhile (a phone plugged in during the 60 s wait) would otherwise make
+    /// every serial-less command fail with "more than one device/emulator". The owner's own
+    /// choice (setSerial()) wins; endFlow() puts it back.
+    void adoptSerial(const DeviceStatus& seen)
+    {
+        if (serial.isEmpty() && seen.mode == DeviceStatus::Mode::Adb && !seen.serial.isEmpty()) {
+            adb->setSerial(seen.serial);
+        }
+    }
+
     void endFlow(Phase endPhase, bool ok, const QString& message)
     {
         ++flowId;   // retire every callback of this flow
         pollTimer->stop();
+        silenceTimer->stop();
         abortQuery();
         if (stepInvocation && !stepInvocation->isFinished()) {
             stepInvocation->cancel();
         }
         stepInvocation.clear();
+        adb->setSerial(serial);
         qCInfo(lcFirmware).noquote() << "soc flash finished:" << ok << message;
         setPhase(endPhase);
         emit q->finished(ok, message);
@@ -367,6 +391,7 @@ struct SocFlasher::Private
             enterWaitingForLoader(false);
             break;
         case DeviceStatus::Mode::Adb:
+            adoptSerial(detected);
             rebootToLoader();
             break;
         case DeviceStatus::Mode::NoDriver:
@@ -374,6 +399,11 @@ struct SocFlasher::Private
             enterWaitingForLoader(true);
             break;
         case DeviceStatus::Mode::None:
+            if (!detected.detail.isEmpty()) {
+                // Boards that are there but cannot be used (two ADB boards, an unauthorized one) or
+                // a tool that could not run: said before the MASKROM advice, which does not help then.
+                log(QCoreApplication::translate("SocFlasher", "no usable board: %1").arg(detected.detail));
+            }
             enterWaitingForLoader(true);
             break;
         }
@@ -440,6 +470,7 @@ struct SocFlasher::Private
                     log(QCoreApplication::translate("SocFlasher", "board is in download mode"));
                     startFlash(seen.mode == DeviceStatus::Mode::Maskrom ? QStringLiteral("Maskrom") : QStringLiteral("Loader"));
                 } else if (seen.mode == DeviceStatus::Mode::Adb) {
+                    adoptSerial(seen);
                     rebootToLoader();
                 } else {
                     pollAgain();
@@ -503,9 +534,12 @@ struct SocFlasher::Private
     {
         setPhase(Phase::Flashing);
         const quint64 id = flowId;
-        log(QCoreApplication::translate("SocFlasher", "flashing %1 (%2 mode)").arg(imagePath, modeText));
+        // The path as upgrade_tool gets it (RockchipTool: native separators).
+        log(QCoreApplication::translate("SocFlasher", "flashing %1 (%2 mode)").arg(QDir::toNativeSeparators(imagePath), modeText));
         progressParser = RockchipTool::ProgressParser();
         lineBuffer.clear();
+        lastFlashOutput.start();
+        silenceTimer->start(kUfSilenceLogMs);
         // Not kept in stepInvocation: endFlow() and ~SocFlasher() cancel that one, and UF is never cancelled.
         ToolInvocation* invocation = tracked(upgradeTool->upgradeFirmware(imagePath));
         QObject::connect(invocation, &ToolInvocation::outputReceived, q, [this, id](const QByteArray& chunk) {
@@ -536,8 +570,27 @@ struct SocFlasher::Private
         }
     }
 
+    /// Log only: UF is never stopped by the flasher (a half-written flash needs MASKROM recovery),
+    /// the user decides whether to end the process by hand.
+    void onFlashSilence()
+    {
+        if (phase != Phase::Flashing) {
+            return;
+        }
+        const qint64 minutes = lastFlashOutput.elapsed() / 60000;
+        qCWarning(lcFirmware) << "upgrade_tool silent for" << minutes << "min";
+        log(QCoreApplication::translate("SocFlasher",
+                                        "upgrade_tool has printed nothing for %1 min; it is left running, because "
+                                        "stopping it half way needs MASKROM recovery (if it hangs for good, end the "
+                                        "upgrade_tool process by hand)")
+                .arg(minutes));
+        silenceTimer->start(kUfSilenceLogMs);
+    }
+
     void onFlashOutput(const QByteArray& chunk)
     {
+        lastFlashOutput.restart();
+        silenceTimer->start(kUfSilenceLogMs);
         for (const RockchipTool::Progress& progress : progressParser.feed(chunk)) {
             emitProgress(progress);
         }
@@ -555,6 +608,7 @@ struct SocFlasher::Private
 
     void onFlashFinished(const ToolResult& result)
     {
+        silenceTimer->stop();
         for (const RockchipTool::Progress& progress : progressParser.flush()) {
             emitProgress(progress);
         }
@@ -678,6 +732,7 @@ SocFlasher::~SocFlasher()
 {
     // Waiting commands go; a running UF does not (RockchipTool::upgradeFirmware(): never cancelled).
     d->pollTimer->stop();
+    d->silenceTimer->stop();
     d->abortQuery();
     if (d->stepInvocation && !d->stepInvocation->isFinished()) {
         d->stepInvocation->cancel();

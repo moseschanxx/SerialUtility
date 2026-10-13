@@ -48,9 +48,12 @@
 #include <memory>
 
 #include "app/AppSettings.h"
+#include "core/CommandHistory.h"
+#include "core/QuickCommand.h"
 #include "core/Transport.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/McuLink.h"
+#include "firmware/SocFlasher.h"
 #include "ssh/SshConnection.h"
 #include "ssh/SshProfile.h"
 #include "support/FakeMcu.h"
@@ -92,6 +95,7 @@ public:
     void stop() { m_timer.stop(); }
     int count() const { return m_count; }
     QStringList windowTitles() const { return m_windowTitles; }
+    QStringList texts() const { return m_texts; }   ///< QMessageBox::text() of every box dismissed
 
 private:
     void poll()
@@ -102,6 +106,9 @@ private:
         }
         ++m_count;
         m_windowTitles.append(modal->windowTitle());
+        if (auto* box = qobject_cast<QMessageBox*>(modal)) {
+            m_texts.append(box->text());
+        }
         if (auto* box = qobject_cast<QMessageBox*>(modal); box && m_answer != Answer::Reject) {
             if (QAbstractButton* button = box->button(m_answer == Answer::Yes ? QMessageBox::Yes : QMessageBox::No)) {
                 button->click();
@@ -119,6 +126,7 @@ private:
     QTimer m_timer;
     int m_count = 0;
     QStringList m_windowTitles;
+    QStringList m_texts;
 };
 
 /// Translates every FirmwareTab string to "[zz] <source>", so a LanguageChange shows exactly which
@@ -259,6 +267,56 @@ void scriptMcuBridge(FakeToolRunner& runner, quint16 bridgePort)
     runner.addScript(QRegularExpression(QStringLiteral("forward --remove tcp:\\d+$")), QByteArray());
 }
 
+/// A stand-in upgrade_tool for a tab that MainWindow created (its runner starts real processes):
+/// a script in `dir` whose `LD` lists one board in Loader mode, `SFI` describes an image and `UF`
+/// prints a progress line, then waits until a file "release" appears next to it, prints the
+/// success line and ends. Killing it before that is what the window must never do.
+QString writeFakeUpgradeTool(const QString& dir)
+{
+#ifdef Q_OS_WIN
+    const QString path = dir + QStringLiteral("/upgrade_tool.cmd");
+    const QByteArray script = "@echo off\r\n"
+                              "if /i \"%~1\"==\"LD\" goto ld\r\n"
+                              "if /i \"%~1\"==\"SFI\" goto sfi\r\n"
+                              "if /i \"%~1\"==\"UF\" goto uf\r\n"
+                              "exit /b 1\r\n"
+                              ":ld\r\n"
+                              "echo List of rockusb connected(1)\r\n"
+                              "echo DevNo=1\tVid=0x2207,Pid=0x110e,LocationID=104\tMode=Loader\tSerialNo=\r\n"
+                              "exit /b 0\r\n"
+                              ":sfi\r\n"
+                              "echo Type:Update Firmware\r\n"
+                              "exit /b 0\r\n"
+                              ":uf\r\n"
+                              "echo Download Image... (10%%)\r\n"
+                              ":wait\r\n"
+                              "if exist \"%~dp0release\" goto done\r\n"
+                              "ping -n 2 127.0.0.1 >nul\r\n"
+                              "goto wait\r\n"
+                              ":done\r\n"
+                              "echo Upgrade firmware ok.\r\n"
+                              "exit /b 0\r\n";
+#else
+    const QString path = dir + QStringLiteral("/upgrade_tool.sh");
+    const QByteArray script = "#!/bin/sh\n"
+                              "case \"$1\" in\n"
+                              "LD) printf 'List of rockusb connected(1)\\nDevNo=1\\tVid=0x2207,Pid=0x110e,LocationID=104\\tMode=Loader\\tSerialNo=\\n'; exit 0;;\n"
+                              "SFI) echo 'Type:Update Firmware'; exit 0;;\n"
+                              "UF) echo 'Download Image... (10%)'\n"
+                              "    while [ ! -f \"$(dirname \"$0\")/release\" ]; do sleep 0.2; done\n"
+                              "    echo 'Upgrade firmware ok.'; exit 0;;\n"
+                              "esac\n"
+                              "exit 1\n";
+#endif
+    if (!writeFile(path, script)) {
+        return QString();
+    }
+#ifndef Q_OS_WIN
+    QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+#endif
+    return path;
+}
+
 /// The in-process build machine: TestSshServer serving `<root>/image/update.img`, a stored profile
 /// with a test key (never the developer's ~/.ssh keys) and a known_hosts file holding the server.
 struct BuildMachine
@@ -348,11 +406,16 @@ private slots:
     void mcuNeedsPackageAndRole();
     void readMcuInfoFillsRole();       // needs McuUpdater::parseCliFields
     void readMcuInfoPortBusy();
+    void readMcuInfoStopsStaleRfmcu();
+    void readMcuInfoRoleFromHelpRows();
     void pullWithoutTargetFails();
     void pullConnectsAndCloses();
     void pullDownloadsImage();         // needs ImagePuller
     void mcuUpdateAndRoleThroughFakeBridge();   // needs McuLink + McuUpdater + CcPackage
+    void destroyedTabCleansUpTheBoard();
     void pullAndFlashEndToEnd();       // needs ImagePuller + SocFlasher + McuLink
+    void pullAndFlashUpdatesMcuInUpdater();
+    void downloadModeQuestionOnlyWhileWaiting();
     void languageChangeRetranslates();
 
     // ---- MainWindow integration -----------------------------------------------------
@@ -361,6 +424,7 @@ private slots:
     void windowMenuAndAltN();
     void closeTabWhenIdle();
     void closeRefusedWhileBusyAndQuitAsks();
+    void quitRefusedWhileUpgradeToolWrites();
     void restoreKeysExcludeFirmwareTab();
     void shortcutListedAndReserved();
     void statusBarShowsTabMessages();
@@ -513,6 +577,13 @@ void Tst_firmwaretab::widgetsExistWithObjectNames()
     FirmwareTab plain(nullptr);
     QCOMPARE(plain.statusRefreshIntervalMs(), 2000);
     QVERIFY(qobject_cast<ProcessToolRunner*>(plain.toolRunner()) != nullptr);
+    // The own runner goes after the collaborators (QObject deletes children in creation order):
+    // McuLink's destructor still sends the board cleanup through it.
+    const QObjectList kids = plain.children();
+    QCOMPARE(plain.toolRunner()->parent(), static_cast<QObject*>(&plain));
+    QVERIFY(kids.indexOf(plain.mcuLink()) >= 0);
+    QVERIFY(kids.indexOf(plain.toolRunner()) > kids.indexOf(plain.mcuLink()));
+    QVERIFY(kids.indexOf(plain.toolRunner()) > kids.indexOf(plain.socFlasher()));
     plain.setStatusRefreshIntervalMs(-5);
     QCOMPARE(plain.statusRefreshIntervalMs(), 0);
 }
@@ -674,8 +745,28 @@ void Tst_firmwaretab::settingsRoundTrip()
     QCOMPARE(tab->remoteFolder(), folderB);
     QCOMPARE(tab->cacheDirectory(), cache);
     QCOMPARE(QDir::fromNativeSeparators(tab->cacheDirEdit()->text()), cache);
+    // Last session's role is shown, never confirmed: the board may be another one now. Update MCU
+    // and Set role wait for a Read or a click in this session.
+    QVERIFY(tab->roleTxRadio()->isChecked());
+    QVERIFY(!tab->roleRxRadio()->isChecked());
+    QCOMPARE(tab->selectedRole(), 0u);
+    QVERIFY(!tab->setRoleButton()->isEnabled());
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Role tx remembered from the last session")));
+    QVERIFY(QFileInfo::exists(dataFile("firmware-0.8.1.pkg")));
+    QVERIFY(tab->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    QVERIFY(!tab->updateMcuButton()->isEnabled());
+    QSignalSpy refused(tab.get(), &FirmwareTab::operationFinished);
+    tab->updateMcu();   // the slot itself refuses too: nothing reaches the board
+    QCOMPARE(refused.count(), qsizetype(1));
+    QCOMPARE(refused.at(0).at(1).toBool(), false);
+    QVERIFY(refused.at(0).at(2).toString().contains(QStringLiteral("role")));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("rfmcu|devices"))), 0);
+    QCOMPARE(QSettings().value(QStringLiteral("firmware/role")).toString(), QStringLiteral("tx"));   // kept as it was
+    tab->roleTxRadio()->click();   // a click on the shown radio confirms it
     QCOMPARE(tab->selectedRole(), static_cast<quint32>(CcProtocol::RoleTx));
     QVERIFY(tab->roleTxRadio()->isChecked());
+    QVERIFY(tab->setRoleButton()->isEnabled());
+    QVERIFY(tab->updateMcuButton()->isEnabled());
     // Each target brings its own folder back; an unknown one gets the last folder used.
     tab->setSourceTarget(targetA);
     QCOMPARE(tab->remoteFolder(), folderA);
@@ -1061,6 +1152,113 @@ void Tst_firmwaretab::readMcuInfoPortBusy()
     QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("pid 190")));   // the tool's output is logged
 }
 
+void Tst_firmwaretab::readMcuInfoStopsStaleRfmcu()
+{
+    // The attached board's state (PLAN.md: an `rfmcu console`, pid 190, holds /dev/ttyS1): as long
+    // as it runs, `rfmcu cmd version` exits 2. The Read stops a stale rfmcu first, exactly as
+    // McuLink::open() does before its bridge, and then reads.
+    const QString stopCommand = QStringLiteral("adb shell \"killall rfmcu 2>/dev/null; true\"");
+    const QString versionCommand = QStringLiteral("adb shell \"rfmcu cmd version\"");
+    FakeToolRunner runner;
+    auto consoleRunning = std::make_shared<bool>(true);
+    runner.addHandler(QRegularExpression(QStringLiteral("killall rfmcu")), [consoleRunning](FakeToolInvocation* i) {
+        *consoleRunning = false;
+        i->finish(1);   // killall's own status (1 = nothing killed) is ignored either way
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("rfmcu cmd version")), [consoleRunning](FakeToolInvocation* i) {
+        if (*consoleRunning) {
+            i->emitOutput("ERR PORT busy: /dev/ttyS1 is held by rfmcu console (pid 190)\r\n");
+            i->finish(2);
+        } else {
+            i->emitOutput("OK version=0.8.1 role=rx\r\n");
+            i->finish(0);
+        }
+    });
+    auto tab = makeTab(&runner);
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    tab->readMcuInfo();
+    QVERIFY(tab->cancelButton()->isEnabled());   // cancellable from the first command on
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QVERIFY2(finished.at(0).at(1).toBool(), qPrintable(finished.at(0).at(2).toString()));
+    QCOMPARE(runner.invocations(), (QStringList{stopCommand, versionCommand}));   // the stop first
+    QCOMPARE(tab->runningMcuVersion(), QStringLiteral("0.8.1"));
+    QCOMPARE(tab->selectedRole(), static_cast<quint32>(CcProtocol::RoleRx));
+    QVERIFY(tab->logView()->toPlainText().contains(stopCommand));   // the command line is logged
+
+    // With a board chosen for the link, both commands go to it (cliCommand()'s serial).
+    runner.reset();
+    runner.addScript(QRegularExpression(QStringLiteral("killall rfmcu")), QByteArray());
+    runner.addScript(QRegularExpression(QStringLiteral("rfmcu cmd version")), "OK version=0.8.1 role=rx\r\n");
+    tab->mcuLink()->setSerial(QStringLiteral("c3d9"));
+    finished.clear();
+    tab->readMcuInfo();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QVERIFY(finished.at(0).at(1).toBool());
+    QCOMPARE(runner.invocations(), (QStringList{QStringLiteral("adb -s c3d9 shell \"killall rfmcu 2>/dev/null; true\""),
+                                                QStringLiteral("adb -s c3d9 shell \"rfmcu cmd version\"")}));
+
+    // adb that cannot run ends the Read with the reason; rfmcu cmd never runs.
+    runner.reset();
+    runner.addHandler(QRegularExpression(QStringLiteral("killall rfmcu")),
+                      [](FakeToolInvocation* i) { i->failToStart(QStringLiteral("no adb here")); });
+    finished.clear();
+    tab->readMcuInfo();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QCOMPARE(finished.at(0).at(1).toBool(), false);
+    QVERIFY2(finished.at(0).at(2).toString().contains(QStringLiteral("no adb here")), qPrintable(finished.at(0).at(2).toString()));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("rfmcu cmd"))), 0);
+
+    // Cancel while the stop runs: "cancelled", nothing else is started.
+    runner.reset();
+    runner.addHandler(QRegularExpression(QStringLiteral("killall rfmcu")), [](FakeToolInvocation* i) { i->hang(); });
+    finished.clear();
+    tab->readMcuInfo();
+    QTRY_COMPARE(runner.liveInvocations().size(), qsizetype(1));
+    QVERIFY(tab->cancelButton()->isEnabled());
+    tab->cancelButton()->click();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QCOMPARE(finished.at(0).at(2).toString(), QStringLiteral("cancelled"));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("rfmcu cmd"))), 0);
+    QVERIFY(!tab->isBusy());
+}
+
+void Tst_firmwaretab::readMcuInfoRoleFromHelpRows()
+{
+    // An application whose "version" has no role (0.8.2 on the board, 2026-10-13: "OK
+    // version=0.8.2 baud=115200"): the role comes from "help", which prints one "OK <command>
+    // <usage>" row per command (fw_update.py probe_application(); FakeMcu prints the same rows).
+    // Every row counts, not just the first.
+    const QByteArray commonRows = "OK commands:\r\nOK help [command]\r\nOK version show firmware version\r\n"
+                                  "OK power show power state\r\nOK bootloader reboot into the UART updater\r\n";
+    const struct
+    {
+        const char* name;
+        QByteArray roleRow;
+        QString role;
+        quint32 selected;
+    } cases[] = {
+        {"tx", "OK tx tx sync_frame <n> | tx status\r\n", QStringLiteral("tx"), CcProtocol::RoleTx},
+        {"rx", "OK rx rx status | rx dump on|off\r\n", QStringLiteral("rx"), CcProtocol::RoleRx},
+        {"neither", QByteArray(), QStringLiteral("unknown"), 0},
+    };
+    for (const auto& c : cases) {
+        FakeToolRunner runner;
+        runner.addScript(QRegularExpression(QStringLiteral("killall rfmcu")), QByteArray());
+        runner.addScript(QRegularExpression(QStringLiteral("rfmcu cmd version")), "OK version=0.8.2 baud=115200\r\n");
+        runner.addScript(QRegularExpression(QStringLiteral("rfmcu cmd help")), commonRows + c.roleRow);
+        auto tab = makeTab(&runner);
+        QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+        tab->readMcuInfo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+        QVERIFY2(finished.at(0).at(1).toBool(), c.name);
+        QCOMPARE(runner.count(QRegularExpression(QStringLiteral("rfmcu cmd help"))), 1);
+        QCOMPARE(tab->runningMcuVersion(), QStringLiteral("0.8.2"));
+        QCOMPARE(tab->runningMcuRole(), c.role);
+        QCOMPARE(tab->selectedRole(), c.selected);   // "unknown" pre-selects nothing
+        QVERIFY2(tab->mcuStatusLabel()->text() == QStringLiteral("0.8.2 %1").arg(c.role), qPrintable(tab->mcuStatusLabel()->text()));
+    }
+}
+
 void Tst_firmwaretab::pullWithoutTargetFails()
 {
     FakeToolRunner runner;
@@ -1139,6 +1337,12 @@ void Tst_firmwaretab::pullDownloadsImage()
     QCOMPARE(QFileInfo(pulled).size(), qint64(machine.image.size()));
     QCOMPARE(tab->imagePath(), pulled);
     QVERIFY(tab->flashSocButton()->isEnabled());
+    // One image, one unit: the tab's "Remote update.img: ..." line and the puller's own lines use
+    // the same decimal (SI) size, never "262.1 kB" next to "256.0 KB".
+    const QString size = QLocale::c().formattedDataSize(machine.image.size(), 1, QLocale::DataSizeSIFormat);
+    const QString pullLog = tab->logView()->toPlainText();
+    QVERIFY2(pullLog.contains(QStringLiteral("Remote update.img: %1, built").arg(size)), qPrintable(pullLog));
+    QVERIFY2(pullLog.contains(QStringLiteral("Downloading update.img (%1)").arg(size)), qPrintable(pullLog));
 
     // Unchanged on the build machine: the second pull skips the transfer.
     finished.clear();
@@ -1194,6 +1398,33 @@ void Tst_firmwaretab::mcuUpdateAndRoleThroughFakeBridge()
     QVERIFY2(finished.at(0).at(1).toBool(), qPrintable(finished.at(0).at(2).toString()));
     QCOMPARE(mcu.role(), static_cast<quint32>(CcProtocol::RoleTx));
     QCOMPARE(tab->runningMcuRole(), QStringLiteral("tx"));
+}
+
+void Tst_firmwaretab::destroyedTabCleansUpTheBoard()
+{
+    // The window goes away while an MCU update runs (the quit question was answered with Quit):
+    // the board's `killall rfmcu` and the forward removal are sent detached, so they survive the
+    // tool runner (a ProcessToolRunner kills its processes when it is destroyed) - otherwise the
+    // board's bridge would keep the UART lock.
+    FakeMcu mcu;
+    mcu.setSilent(true);   // the update waits in its first probe: the link is open when the tab goes
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    FakeToolRunner runner;
+    scriptMcuBridge(runner, bridge.port());
+    auto tab = makeTab(&runner);
+    QVERIFY(tab->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    tab->roleRxRadio()->click();
+    tab->updateMcu();
+    QTRY_VERIFY_WITH_TIMEOUT(tab->mcuLink()->isOpen(), kOpTimeoutMs);
+    const int before = static_cast<int>(runner.invocations().size());
+    tab.reset();
+    const QStringList after = runner.invocations().mid(before);
+    QCOMPARE(after.size(), qsizetype(2));
+    QVERIFY2(after.at(0).endsWith(QStringLiteral("shell \"killall rfmcu 2>/dev/null; true\"")), qPrintable(after.at(0)));
+    QVERIFY2(after.at(1).contains(QStringLiteral("forward --remove tcp:")), qPrintable(after.at(1)));
+    QVERIFY(runner.optionsAt(before).detached);
+    QVERIFY(runner.optionsAt(before + 1).detached);
 }
 
 void Tst_firmwaretab::pullAndFlashEndToEnd()
@@ -1252,6 +1483,187 @@ void Tst_firmwaretab::pullAndFlashEndToEnd()
     QVERIFY(log.contains(QStringLiteral("(100%)")));
     QVERIFY(log.contains(QStringLiteral("Linux version 5.10.209+")));   // the board information
     QVERIFY(!tab->isBusy());
+    // The version read stopped a stale rfmcu first (the attached board runs an `rfmcu console`).
+    const QStringList commands = runner.invocations();
+    const qsizetype stop = commands.indexOf(QRegularExpression(QStringLiteral(".*killall rfmcu.*")));   // exact match
+    QVERIFY(stop >= 0);
+    QVERIFY(stop < commands.indexOf(QRegularExpression(QStringLiteral(".*rfmcu cmd version.*"))));
+}
+
+void Tst_firmwaretab::pullAndFlashUpdatesMcuInUpdater()
+{
+    // Runbook Part J: yesterday's MCU update was cut off, the CC1310 sits in its UART updater and
+    // has no CLI, so `rfmcu cmd version` gets no reply (exit 3). Pull & Flash updates it anyway
+    // (McuUpdater::flash() talks to a board in the updater) with the role the user confirmed;
+    // adb-level failures and an unconfirmed role still stop the chain.
+    SshProfileStore store;
+    BuildMachine machine;
+    QVERIFY(machine.start(&store, tempPath(QStringLiteral("pull-flash-updater"))));
+    FakeMcu mcu;
+    mcu.setInUpdater(true);
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    FakeToolRunner runner;
+    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), kLdLoader);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool UF ")), [](FakeToolInvocation* i) {
+        i->emitOutput("Download Image... (100%)\r\nUpgrade firmware ok.\r\n");
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool SFI ")), "Type:Update Firmware\r\nChip Tag:110E\r\n");
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? get-state$")), "device\n");
+    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/version")), kProcVersion);
+    auto versionExit = std::make_shared<int>(3);
+    runner.addHandler(QRegularExpression(QStringLiteral("rfmcu cmd version")), [versionExit](FakeToolInvocation* i) {
+        if (*versionExit == 1) {
+            i->emitOutput("ERR CMD unknown_command; use help\r\n");
+        }
+        i->finish(*versionExit);   // 3: rfmcu sent the line, nothing answered
+    });
+    scriptMcuBridge(runner, bridge.port());
+    auto tab = makeTab(&runner, &store);
+    tab->socFlasher()->setPollIntervalMs(10);
+    tab->setSourceTarget(QStringLiteral("ssh:profile:") + machine.profile.id);
+    tab->setRemoteFolder(machine.imageFolder);
+    tab->setCacheDirectory(tempPath(QStringLiteral("pull-flash-updater-cache")));
+    QVERIFY(tab->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    tab->roleRxRadio()->click();   // the bench role, confirmed by the user
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    const auto runChain = [&]() {
+        finished.clear();
+        tab->pullAndFlash();
+        return QTest::qWaitFor([&]() { return !finished.isEmpty() && finished.last().at(0).toString() == QLatin1String("pull-flash"); },
+                               60000);
+    };
+
+    QVERIFY(runChain());
+    QStringList steps;
+    for (const QList<QVariant>& args : std::as_const(finished)) {
+        QVERIFY2(args.at(1).toBool(), qPrintable(args.at(0).toString() + QStringLiteral(": ") + args.at(2).toString()));
+        steps << args.at(0).toString();
+    }
+    QCOMPARE(steps, (QStringList{QStringLiteral("pull"), QStringLiteral("flash"), QStringLiteral("mcu"), QStringLiteral("pull-flash")}));
+    QCOMPARE(mcu.image(), tab->package().image);   // every byte arrived through the updater
+    QCOMPARE(mcu.role(), static_cast<quint32>(CcProtocol::RoleRx));
+    QVERIFY(mcu.commands().isEmpty());              // no CLI was involved
+    QVERIFY(!mcu.inUpdater());                      // the application runs again
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("MCU version unknown")));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("forward tcp:0"))), 1);
+    QTRY_VERIFY(!tab->mcuLink()->isOpen());
+
+    // An rfmcu ERR (exit 1) is no "MCU without a CLI": the chain stops, nothing is sent.
+    *versionExit = 1;
+    QVERIFY(runChain());
+    QCOMPARE(finished.last().at(1).toBool(), false);
+    QVERIFY2(finished.last().at(2).toString().contains(QStringLiteral("cannot read the running MCU version")),
+             qPrintable(finished.last().at(2).toString()));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("forward tcp:0"))), 1);
+
+    // No reply again, but no role confirmed in this session: never guessed - the chain stops and says why.
+    *versionExit = 3;
+    tab->setSelectedRole(0);
+    QVERIFY(runChain());
+    QCOMPARE(finished.last().at(1).toBool(), false);
+    QVERIFY2(finished.last().at(2).toString().contains(QStringLiteral("no role is confirmed")),
+             qPrintable(finished.last().at(2).toString()));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("forward tcp:0"))), 1);
+    QVERIFY(!tab->isBusy());
+}
+
+void Tst_firmwaretab::downloadModeQuestionOnlyWhileWaiting()
+{
+    // No board visible: the tab asks whether to send "reboot loader" through a connected session.
+    // The answer only counts while the flasher still waits for Loader mode; the question closes by
+    // itself when the board appears meanwhile (the user held MASKROM), so a late "Send" can never
+    // reboot a freshly flashed board back into Loader mode.
+    QuickCommandStore quickCommands;
+    CommandHistory history;
+    SessionWidget session(&quickCommands, &history);
+    session.setPortName(kLoopback);
+    QVERIFY(session.connectPort());
+    QTRY_VERIFY_WITH_TIMEOUT(session.isConnected(), kOpTimeoutMs);
+    QSignalSpy sent(session.transport(), &Transport::dataSent);
+
+    FakeToolRunner runner;
+    auto present = std::make_shared<bool>(false);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [present](FakeToolInvocation* i) {
+        i->emitOutput(*present ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), "List of devices attached\r\n\r\n");
+    QPointer<FakeToolInvocation> uf;
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool UF ")), [&uf](FakeToolInvocation* i) {
+        uf = i;
+        i->emitOutput("Download Image... (10%)\r");
+        i->hang();
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool SFI ")), "Type:Update Firmware\r\n");
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? get-state$")), "device\n");
+    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/version")), kProcVersion);
+    auto tab = makeTab(&runner);
+    tab->socFlasher()->setPollIntervalMs(20);
+    tab->setSessionProvider([&session]() { return QList<SessionWidget*>{&session}; });
+    const QString cache = tempPath(QStringLiteral("download-mode-cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    tab->setCacheDirectory(cache);
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+
+    // What the user does while the question is open; it runs inside the question's own event loop.
+    enum class Reaction { HoldMaskrom, ClickSend };
+    Reaction reaction = Reaction::HoldMaskrom;
+    int questions = 0;
+    QString questionText;
+    QTimer user;
+    user.setInterval(20);
+    connect(&user, &QTimer::timeout, &user, [&]() {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box || !box->isVisible() || questions > 0) {
+            return;
+        }
+        ++questions;
+        questionText = box->text();
+        if (reaction == Reaction::ClickSend) {
+            box->button(QMessageBox::Yes)->click();   // "Send through <tab>" while still waiting
+        }
+        *present = true;   // the board shows up in Loader mode (after MASKROM, or after the reboot)
+    });
+    user.start();
+    const auto finishFlash = [&]() {
+        if (!QTest::qWaitFor([&]() { return !uf.isNull(); }, kOpTimeoutMs)) {
+            return false;
+        }
+        uf->emitOutput("Upgrade firmware ok.\r\n");
+        uf->finish(0);
+        return QTest::qWaitFor([&]() { return !finished.isEmpty(); }, kOpTimeoutMs);
+    };
+
+    // 1. The board appears with the question open: it closes by itself, nothing is sent.
+    tab->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(questions, 1, kOpTimeoutMs);
+    QVERIFY2(questionText.contains(session.title()), qPrintable(questionText));
+    QTRY_COMPARE_WITH_TIMEOUT(tab->socFlasher()->phase(), SocFlasher::Phase::Flashing, kOpTimeoutMs);
+    QTRY_VERIFY(QApplication::activeModalWidget() == nullptr);
+    QTRY_VERIFY(tab->logView()->toPlainText().contains(QStringLiteral("The board appeared meanwhile; nothing sent")));
+    QVERIFY(finishFlash());
+    QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    QCOMPARE(sent.count(), qsizetype(0));
+    QVERIFY(!tab->logView()->toPlainText().contains(QStringLiteral("Sent \"reboot loader\"")));
+
+    // 2. "Send" while the flasher still waits: the session gets the command, once.
+    *present = false;
+    questions = 0;
+    uf.clear();
+    finished.clear();
+    reaction = Reaction::ClickSend;
+    tab->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(questions, 1, kOpTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(sent.count(), qsizetype(1), kOpTimeoutMs);
+    QCOMPARE(sent.at(0).at(0).toByteArray(), QByteArrayLiteral("reboot loader\r"));
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Sent \"reboot loader\" through %1").arg(session.title())));
+    QVERIFY(finishFlash());
+    QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    QCOMPARE(sent.count(), qsizetype(1));
+    user.stop();
+    session.disconnectPort();
 }
 
 void Tst_firmwaretab::languageChangeRetranslates()
@@ -1485,13 +1897,16 @@ void Tst_firmwaretab::closeRefusedWhileBusyAndQuitAsks()
     QCOMPARE(w.sessionCount(), 2);
     QVERIFY2(w.statusBar()->currentMessage().contains(QStringLiteral("busy")), qPrintable(w.statusBar()->currentMessage()));
 
-    // Quitting asks once; No keeps the window and the operation.
+    // Quitting asks once (a pull is no flash: it may be interrupted); No keeps the window and the
+    // operation. The question names what an interruption leaves behind on the board.
     {
         ModalDismisser no(ModalDismisser::Answer::No);
         w.close();
         no.stop();
         QCOMPARE(no.count(), 1);
         QVERIFY(no.windowTitles().first().startsWith(QStringLiteral("Quit")));
+        QVERIFY2(no.texts().first().contains(QStringLiteral("UART updater")), qPrintable(no.texts().first()));
+        QVERIFY(no.texts().first().contains(QStringLiteral("Quit anyway?")));
     }
     QVERIFY(w.isVisible());
     QVERIFY(tab->isBusy());
@@ -1509,6 +1924,62 @@ void Tst_firmwaretab::closeRefusedWhileBusyAndQuitAsks()
     QVERIFY(w.firmwareTab() == nullptr);
     QCOMPARE(w.sessionCount(), 1);
     qDeleteAll(held);
+}
+
+void Tst_firmwaretab::quitRefusedWhileUpgradeToolWrites()
+{
+    // The review's BLOCKER: "Quit anyway?" during UF destroyed the tab and its ProcessToolRunner,
+    // which kills upgrade_tool half way through the flash. Now quitting is refused outright while
+    // the flasher is in Flashing - no question that could be answered with Quit. MainWindow's tab
+    // runs real processes, so a script stands in for upgrade_tool (writeFakeUpgradeTool()).
+    const QString toolDir = tempPath(QStringLiteral("fake-upgrade-tool"));
+    QVERIFY(QDir().mkpath(toolDir));
+    QFile::remove(toolDir + QStringLiteral("/release"));
+    const QString tool = writeFakeUpgradeTool(toolDir);
+    QVERIFY(!tool.isEmpty());
+
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    FirmwareTab* tab = openFirmwareTab(w);
+    QVERIFY(tab);
+    tab->setToolPaths(tool, QStringLiteral("adb-not-installed"));   // the ADB wait then ends at once
+    const QString cache = tempPath(QStringLiteral("quit-flash-cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    tab->setCacheDirectory(cache);
+    QSignalSpy finished(tab, &FirmwareTab::operationFinished);
+    tab->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(tab->socFlasher()->phase(), SocFlasher::Phase::Flashing, kOpTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(tab->logView()->toPlainText().contains(QStringLiteral("Download Image...")), kOpTimeoutMs);
+
+    // Alt+F4 / the close button, and File > Quit: refused with a status message, no question.
+    ModalDismisser yes(ModalDismisser::Answer::Yes);   // would answer "Quit" if anything asked
+    w.close();
+    QVERIFY2(w.statusBar()->currentMessage().contains(QStringLiteral("upgrade_tool is writing the flash")),
+             qPrintable(w.statusBar()->currentMessage()));
+    action(w, "actionQuit")->trigger();
+    QTest::qWait(100);
+    yes.stop();
+    QCOMPARE(yes.count(), 0);
+    QVERIFY(w.isVisible());
+    QCOMPARE(w.firmwareTab(), tab);
+    QVERIFY(tab->isBusy());
+    QCOMPARE(tab->socFlasher()->phase(), SocFlasher::Phase::Flashing);
+    QVERIFY(finished.isEmpty());
+
+    // upgrade_tool was left alone: it ends on its own and reports success.
+    QVERIFY(writeFile(toolDir + QStringLiteral("/release"), "go"));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QCOMPARE(finished.at(0).at(0).toString(), QStringLiteral("flash"));
+    QVERIFY2(finished.at(0).at(1).toBool(), qPrintable(finished.at(0).at(2).toString()));
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Upgrade firmware ok.")));
+    QVERIFY(!tab->isBusy());
+
+    // Idle again: the window closes without a question.
+    ModalDismisser none(ModalDismisser::Answer::Reject);
+    w.close();
+    none.stop();
+    QCOMPARE(none.count(), 0);
+    QVERIFY(!w.isVisible());
 }
 
 void Tst_firmwaretab::restoreKeysExcludeFirmwareTab()

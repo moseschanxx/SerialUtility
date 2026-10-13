@@ -162,7 +162,7 @@ public slots:
     void requestRemoteHome();
     /// v0.5 (SshConnection::runCommand() / statRemote()): run on the worker, one at a time, with
     /// runExec() (ExecMode::Normal, bounded by timeoutMs) resp. sftp_stat() or the
-    /// `stat -c '%s %Y %F'` fallback; answered through commandFinished() / remoteStatReceived()
+    /// `stat -L -c '%s %Y %F'` fallback; answered through commandFinished() / remoteStatReceived()
     /// tagged with `generation` so the facade drops answers of a closed session.
     void runCommand(quint64 generation, int id, const QString& command, int timeoutMs);
     void statRemote(quint64 generation, int id, const QString& path);

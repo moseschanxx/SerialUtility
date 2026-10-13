@@ -1141,17 +1141,20 @@ int ClientSession::runFileCommand(ChannelContext& c, const QStringList& words)
         return 0;
     }
     if (command == QLatin1String("stat")) {
-        // `stat -c '%s %Y %F' 'p'` (what SshConnection::statRemote() runs when there is no SFTP).
-        if (words.size() != 4 || words.at(1) != QLatin1String("-c") || words.at(2) != QLatin1String("%s %Y %F")) {
+        // `stat -L -c '%s %Y %F' 'p'` (what SshConnection::statRemote() runs when there is no
+        // SFTP). QFileInfo follows symbolic links for size and times, which is what -L asks for;
+        // the form without -L is refused (it would describe the link itself).
+        if (words.size() != 5 || words.at(1) != QLatin1String("-L") || words.at(2) != QLatin1String("-c")
+            || words.at(3) != QLatin1String("%s %Y %F")) {
             return fail(QStringLiteral("stat: unsupported arguments"));
         }
         QString path;
-        if (!resolve(words.at(3), &path)) {
+        if (!resolve(words.at(4), &path)) {
             return 1;
         }
         const QFileInfo info(path);
         if (!info.exists()) {
-            return fail(QStringLiteral("stat: cannot statx '%1': No such file or directory").arg(words.at(3)));
+            return fail(QStringLiteral("stat: cannot statx '%1': No such file or directory").arg(words.at(4)));
         }
         const bool isDir = info.isDir();
         const qint64 size = isDir ? 4096 : info.size();

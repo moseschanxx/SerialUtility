@@ -174,6 +174,15 @@ int runToolHelper(int argc, char** argv)
         say(stdout, value ? value : "<unset>");
     } else if (mode == "cwd") {
         say(stdout, std::filesystem::current_path().string().c_str());
+    } else if (mode == "touchlater") {
+        // <path> <ms>: wait, then create the file (proves the process outlived whoever started it).
+        sleepMs(argc > 4 ? std::atoi(argv[4]) : 300);
+        if (argc > 3) {
+            if (std::FILE* file = std::fopen(argv[3], "wb")) {
+                std::fputs("done", file);
+                std::fclose(file);
+            }
+        }
     } else if (mode == "ignoreterm") {
 #ifndef Q_OS_WIN
         std::signal(SIGTERM, SIG_IGN);   // only kill() ends this one
@@ -245,6 +254,7 @@ private slots:
     void process_autoDelete();
     void process_concurrent();
     void process_runnerDeletedWhileRunning();
+    void process_detachedOutlivesRunner();
 
     // ---- ToolLocator ------------------------------------------------------------------------
     void locator_fileNamesAndBundledPaths();
@@ -314,6 +324,8 @@ private slots:
     void soc_adbBoardRebootsToLoader();
     void soc_noBoardThenBoardAppears();
     void soc_noBoardThenAdbBoardAppears();
+    void soc_secondAdbDeviceDuringAdbWait();
+    void soc_unusableBoardsLogged();
     void soc_loaderNeverComes();
     void soc_flashWithoutSuccessLine();
     void soc_flashToolMissing();
@@ -839,6 +851,40 @@ void tst_firmwaretools::process_runnerDeletedWhileRunning()
     QVERIFY(true);
 }
 
+void tst_firmwaretools::process_detachedOutlivesRunner()
+{
+    // Options::detached (McuLink's board cleanup when the Firmware tab goes away): started and
+    // forgotten - finished() says it started, at once and without output - and deleting the
+    // runner does not kill it: the helper still writes its file afterwards.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString marker = dir.filePath(QStringLiteral("detached.txt"));
+    auto* runner = new ProcessToolRunner;
+    ToolRunner::Options options;
+    options.detached = true;
+    ToolInvocation* invocation = runHelper(*runner, {QStringLiteral("touchlater"), QDir::toNativeSeparators(marker), QStringLiteral("1500")},
+                                           options);
+    QVERIFY(invocation->isRunning());
+    Watch watch(invocation);
+    QVERIFY(!watch.done());   // never from inside run()
+    QTRY_VERIFY_WITH_TIMEOUT(watch.done(), 5000);
+    QVERIFY(watch.result().started);
+    QVERIFY(!watch.result().cancelled);
+    QCOMPARE(watch.result().exitCode, 0);
+    QVERIFY(watch.result().output.isEmpty());
+    QVERIFY(!QFileInfo::exists(marker));   // reported long before the command is done
+    delete runner;
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(marker), 20000);
+
+    // A program that does not exist: started = false with the reason, from the event loop.
+    ProcessToolRunner second;
+    Watch missing(second.run(dir.filePath(QStringLiteral("no-such-program.exe")), {}, options));
+    QVERIFY(!missing.done());
+    QTRY_VERIFY_WITH_TIMEOUT(missing.done(), 5000);
+    QVERIFY(!missing.result().started);
+    QVERIFY(!missing.result().error.isEmpty());
+}
+
 // =============================================================================================
 // ToolLocator
 // =============================================================================================
@@ -1353,13 +1399,24 @@ void tst_firmwaretools::rockchip_commandLines()
     tool.listDevices();
     QCOMPARE(runner.lastInvocation(), QStringLiteral("C:/tools/upgrade_tool.exe LD"));
     QCOMPARE(runner.lastOptions().timeoutMs, 15000);
+    QVERIFY(runner.lastOptions().workingDirectory.isEmpty());   // no image, no folder of its own
     tool.setTimeoutMs(2500);
-    tool.firmwareInfo(QStringLiteral("C:/My Images/update.img"));
-    QCOMPARE(runner.lastInvocation(), QStringLiteral("C:/tools/upgrade_tool.exe SFI \"C:/My Images/update.img\""));
+    // The image commands: the path in native separators (what upgrade_tool.exe has been seen
+    // with), run in the image's folder.
+    const QString spaced = QStringLiteral("C:/My Images/update.img");
+    tool.firmwareInfo(spaced);
+    QCOMPARE(runner.lastInvocation(),
+             QStringLiteral("C:/tools/upgrade_tool.exe SFI \"%1\"").arg(QDir::toNativeSeparators(spaced)));
     QCOMPARE(runner.lastOptions().timeoutMs, 2500);
-    tool.upgradeFirmware(QStringLiteral("D:/update.img"));
-    QCOMPARE(runner.lastInvocation(), QStringLiteral("C:/tools/upgrade_tool.exe UF D:/update.img"));
+    QCOMPARE(runner.lastOptions().workingDirectory, QFileInfo(spaced).absolutePath());
+    const QString plain = QStringLiteral("D:/update.img");
+    tool.upgradeFirmware(plain);
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("C:/tools/upgrade_tool.exe UF ") + QDir::toNativeSeparators(plain));
     QCOMPARE(runner.lastOptions().timeoutMs, 0);   // UF is never timed out
+    QCOMPARE(runner.lastOptions().workingDirectory, QFileInfo(plain).absolutePath());
+#ifdef Q_OS_WIN
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("C:/tools/upgrade_tool.exe UF D:\\update.img"));
+#endif
 }
 
 // =============================================================================================
@@ -2168,6 +2225,15 @@ void tst_firmwaretools::link_destructorCleansUp()
     delete link;   // an open link: the bridge is ended and the board cleaned up, without waiting
     QCOMPARE(rig.runner.count(exact(rig.killall())), 2);
     QCOMPARE(rig.runner.invocations().last(), rig.removeForward());
+    // Both cleanup commands are detached: the owner deletes the runner right after the link, and a
+    // runner kills its processes (the board would keep the bridge's UART lock and the forward).
+    const int count = static_cast<int>(rig.runner.invocations().size());
+    QCOMPARE(rig.runner.invocations().at(count - 2), rig.killall());
+    QVERIFY(rig.runner.optionsAt(count - 2).detached);
+    QVERIFY(rig.runner.optionsAt(count - 1).detached);
+    for (int i = 0; i < count - 2; ++i) {
+        QVERIFY2(!rig.runner.optionsAt(i).detached, qPrintable(rig.runner.invocations().at(i)));   // the open sequence is not
+    }
     QTRY_VERIFY(rig.runner.liveInvocations().isEmpty());
 
     // A runner that is gone first must not be used by the link's destructor (the owner of both
@@ -2206,10 +2272,17 @@ struct FlashRig
     static QRegularExpression ld() { return exact(QStringLiteral("upgrade_tool LD")); }
     static QRegularExpression uf() { return QRegularExpression(QStringLiteral("^upgrade_tool UF ")); }
     static QRegularExpression adbDevices() { return exact(QStringLiteral("adb devices")); }
-    static QRegularExpression getState() { return exact(QStringLiteral("adb get-state")); }
-    static QRegularExpression reboot() { return exact(QStringLiteral("adb reboot loader")); }
-    static QRegularExpression catVersion() { return exact(QStringLiteral("adb shell \"cat /proc/version\"")); }
-    static QRegularExpression boardInfoCommand() { return exact(QStringLiteral("adb shell \"cat /proc/version; uptime\"")); }
+    /// An adb command of the flow: with `-s <serial>` once the flow found its board on ADB.
+    static QRegularExpression flowAdb(const QString& rest)
+    {
+        return QRegularExpression(QStringLiteral("^adb( -s \\S+)? %1$").arg(QRegularExpression::escape(rest)));
+    }
+    static QRegularExpression getState() { return flowAdb(QStringLiteral("get-state")); }
+    static QRegularExpression reboot() { return flowAdb(QStringLiteral("reboot loader")); }
+    static QRegularExpression catVersion() { return flowAdb(QStringLiteral("shell \"cat /proc/version\"")); }
+    static QRegularExpression boardInfoCommand() { return flowAdb(QStringLiteral("shell \"cat /proc/version; uptime\"")); }
+    /// The UF command line as upgrade_tool gets it (the image path in native separators).
+    QString ufCommand() const { return QStringLiteral("upgrade_tool UF ") + QDir::toNativeSeparators(image); }
 
     /// UF with progress chunks split inside "(42%" and across "\r\n", ending with the success line.
     static void successfulUf(FakeToolInvocation* i)
@@ -2545,8 +2618,8 @@ void tst_firmwaretools::soc_alreadyInLoader()
     QCOMPARE(rig.runner.count(FlashRig::reboot()), 0);      // already in download mode: no reboot
     QCOMPARE(rig.runner.count(FlashRig::adbDevices()), 0);  // and adb is not even asked
     QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
-    QVERIFY(rig.runner.invocations().contains(QStringLiteral("upgrade_tool UF ") + rig.image));
-    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Loader mode)").arg(rig.image)));
+    QVERIFY(rig.runner.invocations().contains(rig.ufCommand()));
+    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Loader mode)").arg(QDir::toNativeSeparators(rig.image))));
     QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool UF")));   // command lines go to the log
     QVERIFY(rig.logged(QStringLiteral("exit code 0")));
 
@@ -2583,9 +2656,15 @@ void tst_firmwaretools::soc_alreadyInLoader()
     QTRY_VERIFY(rig.runner.liveInvocations().isEmpty());
     // Order: LD, then the wait's LD, UF, then adb.
     const QStringList commands = rig.runner.invocations();
-    QVERIFY(commands.indexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(QStringLiteral("upgrade_tool UF ") + rig.image));
-    QVERIFY(commands.indexOf(QStringLiteral("upgrade_tool UF ") + rig.image) < commands.indexOf(QStringLiteral("adb get-state")));
+    QVERIFY(commands.indexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(rig.ufCommand()));
+    QVERIFY(commands.indexOf(rig.ufCommand()) < commands.indexOf(QStringLiteral("adb get-state")));
     QVERIFY(commands.indexOf(QStringLiteral("adb get-state")) < commands.indexOf(QStringLiteral("adb shell \"cat /proc/version; uptime\"")));
+    // Found in Loader mode, the board's ADB serial is unknown: the ADB wait runs without -s.
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^adb -s "))), 0);
+    // UF runs in the image's folder (upgrade_tool may write its Log folder into the working directory).
+    const int ufIndex = static_cast<int>(commands.indexOf(rig.ufCommand()));
+    QCOMPARE(QDir::fromNativeSeparators(rig.runner.optionsAt(ufIndex).workingDirectory), QFileInfo(rig.image).absolutePath());
+    QCOMPARE(rig.runner.optionsAt(ufIndex).timeoutMs, 0);
 }
 
 void tst_firmwaretools::soc_adbBoardRebootsToLoader()
@@ -2609,12 +2688,23 @@ void tst_firmwaretools::soc_adbBoardRebootsToLoader()
                                         P::ReadingBoardInfo, P::Done}));
     QCOMPARE(rig.downloadNeeded.count(), 0);
     QCOMPARE(*ldCalls, 4);
-    // The order of usb_update.sh: LD, adb devices, the kernel read, reboot, LD polls, UF.
+    // The order of usb_update.sh: LD, adb devices, the kernel read, reboot, LD polls, UF. From the
+    // moment `adb devices` found the board, every adb command names it (`adb -s <serial> ...`).
     const QStringList commands = rig.runner.invocations();
-    QVERIFY(commands.indexOf(QStringLiteral("adb devices")) < commands.indexOf(QStringLiteral("adb shell \"cat /proc/version\"")));
-    QVERIFY(commands.indexOf(QStringLiteral("adb shell \"cat /proc/version\"")) < commands.indexOf(QStringLiteral("adb reboot loader")));
-    QVERIFY(commands.indexOf(QStringLiteral("adb reboot loader")) < commands.lastIndexOf(QStringLiteral("upgrade_tool LD")));
-    QVERIFY(commands.lastIndexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(QStringLiteral("upgrade_tool UF ") + rig.image));
+    const QString board = QStringLiteral("adb -s 0225ce3c8d8d6e44 ");
+    QVERIFY(commands.indexOf(QStringLiteral("adb devices")) < commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\"")));
+    QVERIFY(commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\"")) < commands.indexOf(board + QStringLiteral("reboot loader")));
+    QVERIFY(commands.indexOf(board + QStringLiteral("reboot loader")) < commands.lastIndexOf(QStringLiteral("upgrade_tool LD")));
+    QVERIFY(commands.lastIndexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(rig.ufCommand()));
+    QVERIFY(commands.indexOf(rig.ufCommand()) < commands.indexOf(board + QStringLiteral("get-state")));
+    QVERIFY(commands.contains(board + QStringLiteral("shell \"cat /proc/version; uptime\"")));
+    for (const QString& command : commands) {
+        QVERIFY2(!command.startsWith(QStringLiteral("adb ")) || command == QLatin1String("adb devices") || command.startsWith(board),
+                 qPrintable(command));
+    }
+    // The owner's choice (none) is back once the flow ended: the next status query lists every board.
+    QVERIFY(rig.flasher.serial().isEmpty());
+    QVERIFY(rig.flasher.adb()->serial().isEmpty());
     QCOMPARE(rig.runner.count(FlashRig::reboot()), 1);
     QVERIFY(rig.logged(QStringLiteral("board running 5.10.209+, rebooting it into loader mode")));
     QVERIFY(rig.logged(QStringLiteral("board is in download mode")));
@@ -2647,7 +2737,7 @@ void tst_firmwaretools::soc_noBoardThenBoardAppears()
     *present = true;   // the user holds MASKROM and replugs
     QTRY_COMPARE(rig.finished.count(), 1);
     QCOMPARE(rig.finished.first().at(0).toBool(), true);
-    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Maskrom mode)").arg(rig.image)));
+    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Maskrom mode)").arg(QDir::toNativeSeparators(rig.image))));
     QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
     QCOMPARE(rig.runner.count(FlashRig::reboot()), 0);
 }
@@ -2681,6 +2771,105 @@ void tst_firmwaretools::soc_noBoardThenAdbBoardAppears()
     QVERIFY(phases.contains(P::RebootingToLoader));
     QCOMPARE(phases.first(), P::Detecting);
     QCOMPARE(phases.last(), P::Done);
+    // The board that appeared on ADB is the flow's from then on.
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^adb -s 0225ce3c8d8d6e44 reboot loader$"))), 1);
+    QVERIFY(rig.flasher.adb()->serial().isEmpty());
+}
+
+void tst_firmwaretools::soc_secondAdbDeviceDuringAdbWait()
+{
+    // A phone plugged in while the flashed board reboots: adb refuses every serial-less command
+    // ("more than one device/emulator"). The flow names its board (found on ADB at the start), so
+    // the wait still ends when the board is back.
+    FlashRig rig;
+    auto ldCalls = std::make_shared<int>(0);
+    rig.runner.addHandler(FlashRig::ld(), [ldCalls](FakeToolInvocation* i) {
+        ++*ldCalls;
+        i->emitOutput(*ldCalls >= 2 ? kLdLoader : kLdEmpty);   // 1: Detecting, 2: after `reboot loader`
+        i->finish(0);
+    });
+    rig.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    auto polls = std::make_shared<int>(0);
+    rig.runner.addHandler(FlashRig::getState(), [polls](FakeToolInvocation* i) {
+        ++*polls;
+        if (!i->arguments().contains(QStringLiteral("0225ce3c8d8d6e44"))) {
+            i->emitOutput("error: more than one device/emulator\r\n");
+            i->finish(1);
+        } else if (*polls >= 3) {
+            i->emitOutput("device\r\n");
+            i->finish(0);
+        } else {
+            i->emitOutput("error: device '0225ce3c8d8d6e44' not found\r\n");
+            i->finish(1);
+        }
+    });
+    rig.installFlashScripts();
+    rig.flasher.setAdbReturnTimeoutSeconds(10);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE_WITH_TIMEOUT(rig.finished.count(), 1, 20000);
+    QCOMPARE(rig.finished.first().at(0).toBool(), true);
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("Upgrade firmware ok; board is back on ADB"));
+    QCOMPARE(rig.boardInfo.count(), 1);
+    QCOMPARE(*polls, 3);
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^adb get-state$"))), 0);
+    QCOMPARE(rig.runner.count(exact(QStringLiteral("adb -s 0225ce3c8d8d6e44 shell \"cat /proc/version; uptime\""))), 1);
+    QVERIFY(rig.flasher.adb()->serial().isEmpty());   // the owner's choice (none) again
+
+    // An owner's serial wins over the board the flow finds.
+    FlashRig chosen;
+    chosen.runner.addHandler(FlashRig::ld(), [calls = std::make_shared<int>(0)](FakeToolInvocation* i) {
+        ++*calls;
+        i->emitOutput(*calls >= 2 ? kLdLoader : kLdEmpty);
+        i->finish(0);
+    });
+    chosen.runner.addScript(QRegularExpression(QStringLiteral("^adb -s B2 devices$")),
+                            "List of devices attached\nA1\tdevice\nB2\tdevice\n");
+    chosen.installFlashScripts();
+    chosen.flasher.setSerial(QStringLiteral("B2"));
+    QVERIFY(chosen.flasher.start());
+    QTRY_COMPARE_WITH_TIMEOUT(chosen.finished.count(), 1, 20000);
+    QVERIFY2(chosen.finished.first().at(0).toBool(), qPrintable(chosen.finished.first().at(1).toString()));
+    QCOMPARE(chosen.runner.count(exact(QStringLiteral("adb -s B2 reboot loader"))), 1);
+    QCOMPARE(chosen.flasher.adb()->serial(), QStringLiteral("B2"));
+}
+
+void tst_firmwaretools::soc_unusableBoardsLogged()
+{
+    // Step 3 says why nothing usable was found before it advises MASKROM: with two boards (or an
+    // unauthorized one) unplugging one is the remedy, not the button.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdEmpty);
+    rig.runner.addScript(FlashRig::adbDevices(), "List of devices attached\nA1\tdevice\nB2\tdevice\n");
+    rig.installFlashScripts();
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.downloadNeeded.count(), 1);
+    qsizetype detailAt = -1;
+    qsizetype adviceAt = -1;
+    for (qsizetype i = 0; i < rig.logs.size(); ++i) {
+        const QString text = rig.logs.at(i).at(0).toString();
+        if (detailAt < 0 && text == QLatin1String("no usable board: several ADB boards attached (A1, B2): choose one")) {
+            detailAt = i;
+        }
+        if (adviceAt < 0 && text.startsWith(QLatin1String("no board found in ADB, MASKROM or Loader mode"))) {
+            adviceAt = i;
+        }
+    }
+    QVERIFY(detailAt >= 0);
+    QVERIFY(adviceAt > detailAt);
+    rig.flasher.cancel();
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.runner.count(FlashRig::reboot()), 0);   // nothing was chosen for the user
+
+    // Nothing attached at all: no such line, only the advice.
+    FlashRig empty;
+    empty.runner.addScript(FlashRig::ld(), kLdEmpty);
+    empty.runner.addScript(FlashRig::adbDevices(), kAdbNone);
+    empty.installFlashScripts();
+    QVERIFY(empty.flasher.start());
+    QTRY_COMPARE(empty.downloadNeeded.count(), 1);
+    QVERIFY(!empty.logged(QStringLiteral("no usable board")));
+    empty.flasher.cancel();
+    QTRY_COMPARE(empty.finished.count(), 1);
 }
 
 void tst_firmwaretools::soc_loaderNeverComes()

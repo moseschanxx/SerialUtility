@@ -3019,9 +3019,10 @@ void Tst_sshconnection::e2eStatRemote()
         QVERIFY2(statCommands.isEmpty(), qPrintable(statCommands.join(QStringLiteral(" | "))));
         QCOMPARE(spy.sftp, 1);
     } else {
-        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' 'out/image/update.img'")));
-        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' 'it'\\''s.bin'")));
-        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' './-dash.bin'")));
+        // -L: a symbolic link reports its target, as sftp_stat() does.
+        QVERIFY(statCommands.contains(QStringLiteral("stat -L -c '%s %Y %F' 'out/image/update.img'")));
+        QVERIFY(statCommands.contains(QStringLiteral("stat -L -c '%s %Y %F' 'it'\\''s.bin'")));
+        QVERIFY(statCommands.contains(QStringLiteral("stat -L -c '%s %Y %F' './-dash.bin'")));
         QCOMPARE(statCommands.size(), 8);   // every statRemote() above, one command each
         QCOMPARE(spy.sftp, 1);              // probed once (refused), never again
         // Anything but "No such file" is an error with the shell's reason (here: ".." is refused).
@@ -3030,6 +3031,18 @@ void Tst_sshconnection::e2eStatRemote()
         QVERIFY(!info.exists);
         QVERIFY2(info.error.contains(QStringLiteral("Permission denied")), qPrintable(info.error));
     }
+
+#ifdef Q_OS_UNIX
+    // A symlinked image (Rockchip SDKs link their output images): both methods report the target's
+    // size, which is what the download then fetches. (QFile::link() makes a .lnk on Windows.)
+    const QString linkPath = QDir(options.rootDir).filePath(QStringLiteral("out/image/linked.img"));
+    QVERIFY(QFile::link(file, linkPath));
+    const int linkId = c.conn.statRemote(QStringLiteral("out/image/linked.img"));
+    QVERIFY(waitForStat(stats, linkId, &info));
+    QVERIFY(info.exists && !info.isDirectory);
+    QCOMPARE(info.size, qint64(payload.size()));
+    QCOMPARE(info.modified.toSecsSinceEpoch(), stamp.toSecsSinceEpoch());
+#endif
 
     // An answer that was still on its way when close() ran is dropped.
     const int cutId = c.conn.statRemote(relative);
