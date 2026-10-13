@@ -605,3 +605,17 @@ void SshConnection::requestRemoteHome()
     }
     QMetaObject::invokeMethod(d->worker, &SshWorker::requestRemoteHome, Qt::QueuedConnection);
 }
+
+// ---- v0.5 scaffolding STUBS (the ssh-pull work package implements runCommand / statRemote) ----
+int SshConnection::runCommand(const QString& command, int timeoutMs)
+{
+    Q_UNUSED(command);
+    Q_UNUSED(timeoutMs);
+    return 0;
+}
+
+int SshConnection::statRemote(const QString& path)
+{
+    Q_UNUSED(path);
+    return 0;
+}

@@ -160,6 +160,12 @@ public slots:
     void startTransfer(const SshConnection::TransferRequest& request);
     void cancelTransfer();
     void requestRemoteHome();
+    /// v0.5 (SshConnection::runCommand() / statRemote()): run on the worker, one at a time, with
+    /// runExec() (ExecMode::Normal, bounded by timeoutMs) resp. sftp_stat() or the
+    /// `stat -c '%s %Y %F'` fallback; answered through commandFinished() / remoteStatReceived()
+    /// tagged with `generation` so the facade drops answers of a closed session.
+    void runCommand(quint64 generation, int id, const QString& command, int timeoutMs);
+    void statRemote(quint64 generation, int id, const QString& path);
 
 signals:
     void stateChanged(quint64 generation, Transport::State state);
@@ -180,6 +186,8 @@ signals:
     void transferProgress(quint64 generation, qint64 done, qint64 total);
     void transferFinished(quint64 generation, bool ok, const QString& message);
     void remoteHomeReceived(quint64 generation, const QString& path);
+    void commandFinished(quint64 generation, int id, int exitStatus, const QByteArray& output, const QString& errorText);
+    void remoteStatReceived(quint64 generation, int id, const QString& path, const SshConnection::RemoteFileInfo& info);
     void forwardListening(quint64 generation, quint16 localPort, const QString& remoteHost, quint16 remotePort);
     void forwardFailed(quint64 generation, quint16 localPort, const QString& message);
     /// A credential entered with "remember" worked; the facade stores it in SecretStore.

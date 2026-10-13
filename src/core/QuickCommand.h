@@ -50,8 +50,9 @@ public:
     static QString defaultFilePath();
 
     /// Load from `path` (default: defaultFilePath()). Missing file -> defaults(), returns true.
-    /// Malformed JSON -> keeps current list, returns false.
-    bool load(const QString& path = QString());
+    /// Malformed JSON -> keeps current list, returns false. A version-1 file without a "Node"
+    /// group gets nodeDefaults() prepended (*migrated = true when given; see fileVersion()).
+    bool load(const QString& path = QString(), bool* migrated = nullptr);
     /// Save to `path` (default: defaultFilePath()); creates the directory. Returns false on I/O error.
     bool save(const QString& path = QString()) const;
 
@@ -69,12 +70,23 @@ public:
     static QString groupDisplayName(const QString& group);
 
     /// Sensible starter set (see docs/DESIGN.md "Default quick commands"):
+    /// Node (v0.5, first in the list; the Node board's SoC console and, through `rfmcu console`,
+    ///   its CC1310): reboot loader, rfmcu console, help, version, sys, stack, uart, power, bat,
+    ///   rx status, rx dump on, rx dump off, tx status, bootloader, ~. (leave rfmcu console)
     /// Linux: uname -a, cat /proc/cpuinfo, cat /proc/meminfo, df -h, ifconfig, dmesg | tail -n 50, ps, top -n 1
     /// U-Boot: help, printenv, bdinfo, version, mmc info, boot
     /// MCU: help, version, AT (CRLF), reset
     /// Control: Ctrl+C (hex "03"), Ctrl+D (hex "04"), Ctrl+Z (hex "1A"), ESC (hex "1B")
     static QList<QuickCommand> defaults();
+    /// The "Node" group alone (nodeGroupName() == "Node"), in order; `reboot loader` is first.
+    static QList<QuickCommand> nodeDefaults();
+    static QString nodeGroupName();
     void resetToDefaults();
+    /// File version 2 (v0.5): a version-1 quick_commands.json written by an earlier release is
+    /// loaded and the "Node" group appended in front when the file has no command of that group
+    /// (migrated = true in the return value of load() through *migrated); save() then writes
+    /// version 2. Nothing else in the file is touched.
+    static int fileVersion();                               ///< 2
 
     /// Import/export in the same JSON format (for sharing between machines).
     bool importFromFile(const QString& path, QString* error = nullptr);

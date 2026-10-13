@@ -1740,3 +1740,37 @@ void MainWindow::restoreState()
     syncPauseWhileSelectingAction();   // AppSettings::pauseWhileSelecting(), default on
     syncRightClickPastesAction();      // AppSettings::rightClickPastes(), default on
 }
+
+// ---- v0.5 scaffolding STUBS (the ui work package implements the Firmware tab integration) ----
+#include "ui/FirmwareTab.h"
+
+FirmwareTab* MainWindow::firmwareTab() const
+{
+    return m_firmwareTab;
+}
+
+QList<SessionWidget*> MainWindow::connectedSessions() const
+{
+    QList<SessionWidget*> list;
+    for (int i = 0; i < sessionCount(); ++i) {
+        if (SessionWidget* session = sessionAt(i); session && session->isConnected()) {
+            list << session;
+        }
+    }
+    return list;
+}
+
+FirmwareTab* MainWindow::showFirmwareTab()
+{
+    return m_firmwareTab;   // STUB
+}
+
+void MainWindow::onFirmwareUpdate()
+{
+    showFirmwareTab();
+}
+
+void MainWindow::onFirmwareBusyChanged(bool busy)
+{
+    Q_UNUSED(busy);
+}

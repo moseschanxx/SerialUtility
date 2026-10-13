@@ -2989,3 +2989,18 @@ QString SshWorker::shellPath(const QString& path)
     // invalid option and `cat '-'` reads stdin. "./-x" names the same relative file.
     return shellQuote(path.startsWith(QLatin1Char('-')) ? QStringLiteral("./") + path : path);
 }
+
+// ---- v0.5 scaffolding STUBS (the ssh-pull work package implements these on the worker) ----
+void SshWorker::runCommand(quint64 generation, int id, const QString& command, int timeoutMs)
+{
+    Q_UNUSED(command);
+    Q_UNUSED(timeoutMs);
+    emit commandFinished(generation, id, -1, QByteArray(), QStringLiteral("not implemented"));
+}
+
+void SshWorker::statRemote(quint64 generation, int id, const QString& path)
+{
+    SshConnection::RemoteFileInfo info;
+    info.error = QStringLiteral("not implemented");
+    emit remoteStatReceived(generation, id, path, info);
+}

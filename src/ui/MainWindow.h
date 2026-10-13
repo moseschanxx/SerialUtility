@@ -24,6 +24,7 @@ class QDockWidget;
 class QuickCommandStore;
 class SshProfileStore;
 class SystemLogViewer;
+class FirmwareTab;
 
 /**
  * Top-level window: a QTabWidget of SessionWidgets (serial or SSH), menus/toolbar, status bar
@@ -32,6 +33,8 @@ class SystemLogViewer;
  * MainWindow.ui defines the menu bar, tool bar, status bar and these actions (objectName; the
  * shortcuts are the .ui defaults, every one of them configurable - see below):
  *   File:    actionNewSession (Ctrl+T), actionNewSshSession (Ctrl+Shift+T, icon :/icons/ssh.svg),
+ *            actionFirmwareUpdate (Ctrl+Shift+U, icon :/icons/firmware.svg; v0.5: shows the one
+ *            FirmwareTab, creating it on first use - see "Firmware tab" below),
  *            actionCloseSession (Ctrl+Shift+W), actionStartLogging, actionStopLogging,
  *            actionOpenLogFolder, actionReplayLog (Ctrl+Shift+R), actionStopReplay,
  *            actionQuit (Ctrl+Shift+Q)
@@ -126,6 +129,18 @@ class SystemLogViewer;
  *    retranslateStatusBar(); child widgets handle their own changeEvent.
  *  - The window title is "BuildAI Serial Utility <version>" plus " - <displayName>" of the
  *    active tab (the port, or the SSH profile name / user@host:port).
+ *  - Firmware tab (v0.5, ui/FirmwareTab.h): the QTabWidget may hold one non-session tab.
+ *    currentSession() / sessionAt() return null for it (qobject_cast), so every session action
+ *    (Connect, Disconnect, Clear, Send File, Upload, Download, Copy, Paste, Find, Hex View,
+ *    logging, replay, Detect Baud Rate, ...) is disabled while it is current, updateActions() and
+ *    the status bar treat "no session" like an empty window, it is never saved as a restore key
+ *    nor counted by sessionCount()'s callers as a port, and the Window menu lists it under its
+ *    title "Firmware" (Alt+N selects it like any tab). Closing it (tab button, middle click,
+ *    Close Session) is refused with a status message while FirmwareTab::isBusy(); quitting with a
+ *    busy Firmware tab asks once like a connected session. The tab's statusMessage() /
+ *    persistentStatusMessage() reach the status bar exactly like a session's. showFirmwareTab()
+ *    creates it on first use (with the window's SshProfileStore and a ProcessToolRunner) and
+ *    selects it; its sessionProvider is connectedSessions() ("send reboot loader through a tab").
  */
 class MainWindow : public QMainWindow
 {
@@ -136,7 +151,9 @@ public:
 
     SessionWidget* currentSession() const;
     SessionWidget* sessionAt(int index) const;
-    int sessionCount() const;
+    int sessionCount() const;          ///< tabs in the QTabWidget (the Firmware tab included; sessionAt() is null for it)
+    FirmwareTab* firmwareTab() const;  ///< null until showFirmwareTab() created it (v0.5)
+    QList<SessionWidget*> connectedSessions() const;   ///< every session tab whose transport is Connected, tab order
 
     /// The configurable actions for PreferencesDialog::setShortcutEntries(): objectName, title
     /// ("File > New Session": the menu and the action text without '&' and a trailing "..."),
@@ -156,7 +173,9 @@ public slots:
     /// A new SSH tab; `target` is a restore key or plain "user@host[:port]" (empty: the last
     /// connected ad-hoc target is pre-filled). Never connects. Focuses the target field.
     SessionWidget* newSshSession(const QString& target = QString());
-    void closeSession(int index);
+    /// v0.5: File > Firmware Update - the one FirmwareTab, created on first use, made current.
+    FirmwareTab* showFirmwareTab();
+    void closeSession(int index);      ///< a session tab, or the Firmware tab (refused while it is busy)
     void closeCurrentSession();
 
 protected:
@@ -211,6 +230,8 @@ private slots:
     void rebuildWindowMenu();              ///< the dynamic per-session actions (tab add / remove / rename / move)
     void syncWindowMenu();                 ///< check the current session's action, enable Tab 1..9
     void onQuickCommands();
+    void onFirmwareUpdate(); ///< File > Firmware Update -> showFirmwareTab() (v0.5)
+    void onFirmwareBusyChanged(bool busy);   ///< the tab icon / close rules follow FirmwareTab::isBusy()
     void onSshProfiles();    ///< Edit > SSH Profiles... / the SSH bar's gear (modal SshProfilesDialog)
     void onUploadFile();     ///< Session > Upload File to Remote... -> currentSession()->uploadFile()
     void onDownloadFile();   ///< Session > Download File from Remote... -> currentSession()->downloadFile()
@@ -284,4 +305,7 @@ private:
     QList<QAction*> m_sessionActions;               ///< the dynamic Window-menu entries, tab order
     QActionGroup* m_sessionGroup = nullptr;         ///< exclusive: the current tab is checked
     int m_middlePressedTab = -1;                    ///< tab index under a middle-button press, -1 otherwise
+
+    // ---- Firmware tab (v0.5) ------------------------------------------------------------------
+    FirmwareTab* m_firmwareTab = nullptr;           ///< owned by the QTabWidget while open; null otherwise
 };

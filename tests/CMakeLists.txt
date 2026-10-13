@@ -16,6 +16,8 @@ endfunction()
 function(su_add_test name)
     qt_add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE su_core Qt6::Test)
+    # Known-answer vectors and sample files (tests/data/...): SU_TEST_DATA_DIR/firmware/vectors.json
+    target_compile_definitions(${name} PRIVATE SU_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
     su_set_compile_options(${name})
     su_copy_runtime_dlls(${name})
     su_configure_test(${name})
@@ -24,6 +26,7 @@ endfunction()
 function(su_add_gui_test name)
     qt_add_executable(${name} ${ARGN} "${CMAKE_SOURCE_DIR}/resources/resources.qrc")
     target_link_libraries(${name} PRIVATE su_app Qt6::Test)
+    target_compile_definitions(${name} PRIVATE SU_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
     su_set_compile_options(${name})
     su_copy_runtime_dlls(${name})
     su_configure_test(${name})
@@ -31,12 +34,16 @@ function(su_add_gui_test name)
     set_tests_properties(${name} PROPERTIES TIMEOUT 600)
 endfunction()
 
-# ---- Test support: in-process SSH server (libssh server API) ---------------------------
+# ---- Test support: in-process SSH server (libssh server API), fake tools and a fake CC1310 ----
 qt_add_library(su_testsupport STATIC
     support/TestSshServer.h
     support/TestSshServer.cpp
     support/TestSftpHandler.h
-    support/TestSftpHandler.cpp)
+    support/TestSftpHandler.cpp
+    support/FakeToolRunner.h
+    support/FakeToolRunner.cpp
+    support/FakeMcu.h
+    support/FakeMcu.cpp)
 target_include_directories(su_testsupport PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(su_testsupport PUBLIC su_core Qt6::Network)
 su_set_compile_options(su_testsupport)
@@ -62,6 +69,15 @@ target_link_libraries(tst_testsshserver PRIVATE su_testsupport)
 su_add_test(tst_sshconnection     tst_sshconnection.cpp)
 target_link_libraries(tst_sshconnection PRIVATE su_testsupport)
 set_tests_properties(tst_testsshserver tst_sshconnection PROPERTIES TIMEOUT 600)
+# Firmware tab core (v0.5)
+su_add_test(tst_ccprotocol        tst_ccprotocol.cpp)
+su_add_test(tst_mcuupdater        tst_mcuupdater.cpp)
+target_link_libraries(tst_mcuupdater PRIVATE su_testsupport)
+su_add_test(tst_firmwaretools     tst_firmwaretools.cpp)
+target_link_libraries(tst_firmwaretools PRIVATE su_testsupport)
+su_add_test(tst_imagepuller       tst_imagepuller.cpp)
+target_link_libraries(tst_imagepuller PRIVATE su_testsupport)
+set_tests_properties(tst_mcuupdater tst_imagepuller PROPERTIES TIMEOUT 600)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)
@@ -75,5 +91,8 @@ su_add_gui_test(tst_dialogs        tst_dialogs.cpp)
 su_add_gui_test(tst_sshdialogs     tst_sshdialogs.cpp)
 su_add_gui_test(tst_sshsession     tst_sshsession.cpp)
 target_link_libraries(tst_sshsession PRIVATE su_testsupport)
+# The Firmware tab with fake tools, a fake CC1310 and the in-process SSH server (v0.5).
+su_add_gui_test(tst_firmwaretab    tst_firmwaretab.cpp)
+target_link_libraries(tst_firmwaretab PRIVATE su_testsupport)
 # RX throughput / responsiveness (prints the measured MB/s; asserts generous floors only).
 su_add_gui_test(tst_terminalperf   tst_terminalperf.cpp)

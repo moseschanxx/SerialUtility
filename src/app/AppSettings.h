@@ -135,6 +135,35 @@ public:
     bool autoBaudWatchdog() const;
     void setAutoBaudWatchdog(bool on);
 
+    // ---- Firmware tab (v0.5; group "firmware/", Preferences > Firmware) -------------------
+    QString firmwareSourceTarget() const;             ///< "firmware/sourceTarget": the Source combo's last target (restore key or text); default ""
+    void setFirmwareSourceTarget(const QString& target);
+    /// "firmware/remoteFolders" (QVariantMap target -> folder): the remote image folder last used
+    /// for `target`; falls back to firmwareLastRemoteFolder() (the last folder used anywhere),
+    /// then to defaultFirmwareRemoteFolder() ("~/rk/rockchip-platforms/output/image").
+    QString firmwareRemoteFolder(const QString& target) const;
+    void setFirmwareRemoteFolder(const QString& target, const QString& folder);   ///< also sets the last folder
+    QString firmwareLastRemoteFolder() const;         ///< "firmware/lastRemoteFolder"
+    static QString defaultFirmwareRemoteFolder();
+    QString firmwareCacheDirectory() const;           ///< "firmware/cacheDirectory"; default dataDirectory() + "/firmware"
+    void setFirmwareCacheDirectory(const QString& dir);
+    QString firmwareLocalImage() const;               ///< "firmware/localImage": the last "Use local image..." pick; default ""
+    void setFirmwareLocalImage(const QString& path);
+    QString firmwarePackagePath() const;              ///< "firmware/packagePath": the last .pkg; default ""
+    void setFirmwarePackagePath(const QString& path);
+    QString firmwareUpgradeToolPath() const;          ///< "firmware/upgradeToolPath": override, "" = ToolLocator
+    void setFirmwareUpgradeToolPath(const QString& path);
+    QString firmwareAdbPath() const;                  ///< "firmware/adbPath": override, "" = ToolLocator
+    void setFirmwareAdbPath(const QString& path);
+    int firmwareLoaderWaitSeconds() const;            ///< "firmware/loaderWaitSeconds": default 30, clamp 5..600
+    void setFirmwareLoaderWaitSeconds(int seconds);
+    int firmwareAdbReturnSeconds() const;             ///< "firmware/adbReturnSeconds": default 60, clamp 5..600
+    void setFirmwareAdbReturnSeconds(int seconds);
+    bool firmwareGitDescribe() const;                 ///< "firmware/gitDescribe": run git describe on the build machine; default true
+    void setFirmwareGitDescribe(bool on);
+    QStringList firmwareExtraFiles() const;           ///< "firmware/extraFiles": extra remote file names pulled next to update.img; default empty
+    void setFirmwareExtraFiles(const QStringList& names);
+
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()
     void setLogDirectory(const QString& dir);

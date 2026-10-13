@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
@@ -172,6 +173,16 @@ public:
         QString method;                 ///< "sftp" or "shell" once the transfer started (see class comment)
     };
 
+    /// statRemote() result (v0.5): what the remote file system says about one path.
+    struct RemoteFileInfo
+    {
+        bool exists = false;
+        bool isDirectory = false;
+        qint64 size = -1;               ///< bytes for a regular file, -1 when unknown
+        QDateTime modified;             ///< UTC mtime, invalid when unknown
+        QString error;                  ///< why the stat failed (transport / command error); empty for a plain "does not exist"
+    };
+
     explicit SshConnection(QObject* parent = nullptr);
     ~SshConnection() override;
 
@@ -215,6 +226,22 @@ public slots:
     void cancelTransfer();
     void requestRemoteHome();
 
+    /// v0.5 (the Firmware tab's image pull): run `command` on a fresh exec channel of this session
+    /// (no PTY; the worker's runExec(), bounded by `timeoutMs`) and report it through
+    /// commandFinished(id, ...). Returns the request id (> 0), or 0 - and emits nothing - while
+    /// not Connected. Requests queue up and run one after the other on the worker; the shell
+    /// is not serviced while one runs (the helper commands of the transfer fallback behave the
+    /// same), so keep them short. stdout is `output`, stderr `errorText`, `exitStatus` the
+    /// command's status, or -1 with `errorText` set when the channel failed or the timeout
+    /// passed (the channel is closed then). Commands are never logged with their output.
+    int runCommand(const QString& command, int timeoutMs = 30000);
+    /// v0.5: stat `path` (absolute, or relative to the remote home like the transfer paths) ->
+    /// remoteStatReceived(id, path, info): SFTP stat when the session has the subsystem,
+    /// otherwise `stat -c '%s %Y %F' 'path'` on an exec channel (busybox and GNU stat; "%F" tells
+    /// a directory apart). A missing path is exists = false with an empty error. 0 while not
+    /// Connected, like runCommand().
+    int statRemote(const QString& path);
+
 signals:
     void hostKeyVerificationRequired(const SshConnection::HostKeyInfo& info);
     void authPromptRequired(const SshConnection::AuthPrompt& prompt);
@@ -228,6 +255,9 @@ signals:
     void remoteHomeReceived(const QString& path);
     void forwardListening(quint16 localPort, const QString& remoteHost, quint16 remotePort);
     void forwardFailed(quint16 localPort, const QString& message);
+    /// v0.5: results of runCommand() / statRemote() (ids as returned by them; dropped after close()).
+    void commandFinished(int id, int exitStatus, const QByteArray& output, const QString& errorText);
+    void remoteStatReceived(int id, const QString& path, const SshConnection::RemoteFileInfo& info);
 
 private:
     friend class SshWorker;
@@ -239,3 +269,4 @@ Q_DECLARE_METATYPE(SshConnection::HostKeyInfo)
 Q_DECLARE_METATYPE(SshConnection::AuthPrompt)
 Q_DECLARE_METATYPE(SshConnection::TransferRequest)
 Q_DECLARE_METATYPE(SshConnection::TransferStatus)
+Q_DECLARE_METATYPE(SshConnection::RemoteFileInfo)

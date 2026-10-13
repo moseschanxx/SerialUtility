@@ -18,3 +18,4 @@ Q_DECLARE_LOGGING_CATEGORY(lcSerial)    // "buildai.serial"   port enumeration, 
 Q_DECLARE_LOGGING_CATEGORY(lcTerminal)  // "buildai.terminal" parser / screen model
 Q_DECLARE_LOGGING_CATEGORY(lcUi)        // "buildai.ui"       widgets, dialogs
 Q_DECLARE_LOGGING_CATEGORY(lcSsh)       // "buildai.ssh"      SSH sessions (libssh), profiles, secrets
+Q_DECLARE_LOGGING_CATEGORY(lcFirmware)  // "buildai.firmware" Firmware tab: tools, flashing, CC1310 updater, image pull (v0.5)
