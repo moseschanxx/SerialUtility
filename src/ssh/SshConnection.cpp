@@ -18,6 +18,7 @@
 namespace {
 
 constexpr int kStartupCommandDelayMs = 300;
+constexpr int kDefaultCommandTimeoutMs = 30000;   ///< runCommand()'s default bound (see SshConnection.h)
 
 /// Append the SecretStore entry `key` to `list` when the store holds one (empty keys are skipped).
 void appendSavedSecret(QList<SshWorker::SavedSecret>* list, const QString& key)
@@ -43,6 +44,7 @@ struct SshConnection::Private
     bool workerBusy = false;    ///< the worker owns a connect / session / reconnect for `generation`
     int cols = 80;
     int rows = 24;
+    int lastRequestId = 0;      ///< the last id handed out by runCommand() / statRemote(); never reused
 
     /// End whatever the worker is doing for the current generation and start a new one, so
     /// nothing it still reports for the old generation reaches the GUI.
@@ -66,6 +68,7 @@ SshConnection::SshConnection(QObject* parent)
     qRegisterMetaType<SshConnection::AuthPrompt>();
     qRegisterMetaType<SshConnection::TransferRequest>();
     qRegisterMetaType<SshConnection::TransferStatus>();
+    qRegisterMetaType<SshConnection::RemoteFileInfo>();
     qRegisterMetaType<SshConnection::HostKeyStatus>();
     qRegisterMetaType<SshConnection::PromptKind>();
     qRegisterMetaType<SshConnection::TransferDirection>();
@@ -196,6 +199,18 @@ SshConnection::SshConnection(QObject* parent)
             emit remoteHomeReceived(path);
         }
     }, Qt::QueuedConnection);
+    connect(w, &SshWorker::commandFinished, this,
+            [this, current](quint64 gen, int id, int exitStatus, const QByteArray& output, const QString& errorText) {
+                if (current(gen)) {
+                    emit commandFinished(id, exitStatus, output, errorText);
+                }
+            }, Qt::QueuedConnection);
+    connect(w, &SshWorker::remoteStatReceived, this,
+            [this, current](quint64 gen, int id, const QString& path, const SshConnection::RemoteFileInfo& info) {
+                if (current(gen)) {
+                    emit remoteStatReceived(id, path, info);
+                }
+            }, Qt::QueuedConnection);
     connect(w, &SshWorker::forwardListening, this,
             [this, current](quint64 gen, quint16 localPort, const QString& remoteHost, quint16 remotePort) {
                 if (current(gen)) {
@@ -606,16 +621,44 @@ void SshConnection::requestRemoteHome()
     QMetaObject::invokeMethod(d->worker, &SshWorker::requestRemoteHome, Qt::QueuedConnection);
 }
 
-// ---- v0.5 scaffolding STUBS (the ssh-pull work package implements runCommand / statRemote) ----
+// ---- v0.5: run a command / stat a path (the Firmware tab's image pull) ----------------------
+// Both queue a call for the worker (which runs them one after the other, in order) and return
+// the id the answer carries. The worker tags its answers with the generation of the open() it
+// ran under, so whatever a closed session still reports is dropped by the relay in the
+// constructor; nothing is kept here that close() would have to reset.
+
 int SshConnection::runCommand(const QString& command, int timeoutMs)
 {
-    Q_UNUSED(command);
-    Q_UNUSED(timeoutMs);
-    return 0;
+    if (state() != State::Connected) {
+        qCWarning(lcSsh) << "runCommand: not connected";
+        return 0;
+    }
+    if (command.trimmed().isEmpty()) {
+        qCWarning(lcSsh) << "runCommand: empty command";
+        return 0;
+    }
+    const int id = ++d->lastRequestId;
+    const quint64 gen = d->generation;
+    const int limitMs = timeoutMs > 0 ? timeoutMs : kDefaultCommandTimeoutMs;
+    SshWorker* worker = d->worker;
+    QMetaObject::invokeMethod(worker, [worker, gen, id, command, limitMs] { worker->runCommand(gen, id, command, limitMs); },
+                              Qt::QueuedConnection);
+    return id;
 }
 
 int SshConnection::statRemote(const QString& path)
 {
-    Q_UNUSED(path);
-    return 0;
+    if (state() != State::Connected) {
+        qCWarning(lcSsh) << "statRemote: not connected";
+        return 0;
+    }
+    if (path.trimmed().isEmpty()) {
+        qCWarning(lcSsh) << "statRemote: empty path";
+        return 0;
+    }
+    const int id = ++d->lastRequestId;
+    const quint64 gen = d->generation;
+    SshWorker* worker = d->worker;
+    QMetaObject::invokeMethod(worker, [worker, gen, id, path] { worker->statRemote(gen, id, path); }, Qt::QueuedConnection);
+    return id;
 }

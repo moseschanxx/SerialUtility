@@ -42,7 +42,14 @@
  *    whether the file can be written at all), `cat 'p'` (file -> stdout, streamed in 64 KiB
  *    pieces as the window allows), `wc -c < 'p'` (size + LF), `test -e 'p'` (exit 0 / 1),
  *    `chmod NNN 'p'`, `rm -f 'p'`, `mkdir -p 'p'`, `mv 'a' 'b'`, `pwd` (the canonical rootDir +
- *    LF, what the fallback's remote-home lookup runs); commands may be joined with " && " (stop
+ *    LF, what the fallback's remote-home lookup runs), `stat -c '%s %Y %F' 'p'` (v0.5, what
+ *    SshConnection::statRemote() runs without SFTP: "<size> <mtime epoch> <type>" + LF with the
+ *    type "regular file" ("regular empty file" for a zero-length one, like GNU and busybox) or
+ *    "directory" - a directory's size is printed as 4096; a missing path exits 1 with
+ *    "stat: cannot statx 'p': No such file or directory" on stderr) and
+ *    `git -C 'p' describe --tags --dirty 2>/dev/null` (v0.5, the Firmware tab's version probe:
+ *    prints Options::gitDescribeOutput + LF and exits 0; an empty option, or a 'p' that is not
+ *    a directory, exits 128 with no output, like git outside a repository); commands may be joined with " && " (stop
  *    at the first failure, whose status is the exit status). Any other first word runs the
  *    scripted shell command once, as before. Options::sendExecExitStatus = false ends the data
  *    commands `cat > 'p'` and `cat 'p'` with EOF and close but no exit-status message (a
@@ -93,6 +100,9 @@ public:
         bool sendExecExitStatus = true;
         /// >= 0: bytes a `cat > 'p'` upload may store before "No space left on device" (see above).
         qint64 execUploadLimit = -1;
+        /// What `git -C 'p' describe --tags --dirty 2>/dev/null` prints (e.g. "v1.3.0-4-ge0e0d41");
+        /// empty = the command fails with exit status 128 and no output (see the class comment).
+        QString gitDescribeOutput;
         quint16 port = 0;                  ///< 0 = ephemeral
         /// >0: seconds of idle after which the server stops answering (keep-alive tests).
         /// libssh gives a server no hook for SSH_MSG_IGNORE, so keep-alives cannot be counted:

@@ -13,6 +13,7 @@
 #include <QSaveFile>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimeZone>
 
 #include <fcntl.h>
 #include <algorithm>
@@ -412,6 +413,9 @@ struct SshWorker::Live
     QList<ForwardListener*> forwards;
     std::unique_ptr<Transfer> transfer;
     bool cancelTransfer = false;
+    /// runCommand()'s timeout for the one runExec() call that follows (0 = kExecTimeoutMs, what
+    /// every other caller gets); reset by runCommand() as soon as that call returned.
+    int execTimeoutMs = 0;
 };
 
 struct SshWorker::Pending
@@ -2479,7 +2483,8 @@ bool SshWorker::runExec(const QString& command, QByteArray* output, QString* err
     }
     ssh_channel_send_eof(run->channel);   // no stdin for the helper commands
     const bool cleanup = mode == ExecMode::Cleanup;
-    const QDeadlineTimer deadline(cleanup ? kCleanupExecTimeoutMs : kExecTimeoutMs);
+    const int limitMs = cleanup ? kCleanupExecTimeoutMs : (m_live->execTimeoutMs > 0 ? m_live->execTimeoutMs : kExecTimeoutMs);
+    const QDeadlineTimer deadline(limitMs);
     bool eof = false;
     bool transportError = false;
     while (!deadline.hasExpired() && (cleanup || !aborted())) {
@@ -2528,8 +2533,7 @@ bool SshWorker::runExec(const QString& command, QByteArray* output, QString* err
         *error = (aborted() && !cleanup)
             ? tr("Connection to %1 cancelled").arg(target())
             : tr("'%1' on %2 did not finish within %3 s")
-                  .arg(command.left(40), target())
-                  .arg((cleanup ? kCleanupExecTimeoutMs : kExecTimeoutMs) / 1000);
+                  .arg(command.left(40), target(), QString::number(limitMs / 1000.0, 'g', 6));
         return false;
     }
     return true;
@@ -2990,17 +2994,143 @@ QString SshWorker::shellPath(const QString& path)
     return shellQuote(path.startsWith(QLatin1Char('-')) ? QStringLiteral("./") + path : path);
 }
 
-// ---- v0.5 scaffolding STUBS (the ssh-pull work package implements these on the worker) ----
+// ---------------------------------------------------------------------------------------
+// v0.5: SshConnection::runCommand() / statRemote() (the Firmware tab's image pull)
+// ---------------------------------------------------------------------------------------
+
+namespace {
+
+/// The reply of `stat -c '%s %Y %F' 'p'`: "<size> <mtime epoch> <file type>" ("regular file",
+/// "regular empty file", "directory", "symbolic link"...). The last non-empty line counts, so a
+/// banner a login shell prints in front of the command's own output does no harm. A directory's
+/// size is not a file size, so it stays -1 like the SFTP answer.
+bool parseStatReply(const QByteArray& output, SshConnection::RemoteFileInfo* info)
+{
+    const QStringList lines = QString::fromUtf8(output).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    if (lines.isEmpty()) {
+        return false;
+    }
+    const QStringList fields = lines.last().simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (fields.size() < 3) {
+        return false;
+    }
+    bool sizeOk = false;
+    bool timeOk = false;
+    const qint64 size = fields.at(0).toLongLong(&sizeOk);
+    const qint64 mtime = fields.at(1).toLongLong(&timeOk);
+    if (!sizeOk || !timeOk || size < 0 || mtime < 0) {
+        return false;
+    }
+    info->exists = true;
+    info->isDirectory = fields.at(2) == QLatin1String("directory");
+    info->size = info->isDirectory ? -1 : size;
+    info->modified = QDateTime::fromSecsSinceEpoch(mtime, QTimeZone::UTC);
+    return true;
+}
+
+} // namespace
+
 void SshWorker::runCommand(quint64 generation, int id, const QString& command, int timeoutMs)
 {
-    Q_UNUSED(command);
-    Q_UNUSED(timeoutMs);
-    emit commandFinished(generation, id, -1, QByteArray(), QStringLiteral("not implemented"));
+    // A request of a session that was closed meanwhile (the facade bumped its generation and
+    // set the abort mark before this queued call ran) is not run at all; nobody listens.
+    if (generation != m_generation || aborted()) {
+        return;
+    }
+    if (!m_live || !m_live->shellOpen) {
+        emit commandFinished(generation, id, -1, QByteArray(), tr("Not connected"));
+        return;
+    }
+    QByteArray output;
+    QString errorText;
+    int status = -1;
+    QString error;
+    m_live->execTimeoutMs = timeoutMs;
+    const bool ran = runExec(command, &output, &errorText, &status, &error);
+    if (m_live) {   // a dropped link inside runExec() already tore the session down
+        m_live->execTimeoutMs = 0;
+    }
+    if (!ran) {
+        // Transport failure, close() or the timeout (the channel was closed): -1 with the reason;
+        // whatever stdout arrived before stays in `output`.
+        qCInfo(lcSsh) << "command" << id << "on" << target() << "failed:" << error;
+        emit commandFinished(generation, id, -1, output, error);
+        return;
+    }
+    if (status < 0 && errorText.trimmed().isEmpty()) {
+        errorText = tr("The remote command ended without an exit status");
+    }
+    qCDebug(lcSsh) << "command" << id << "on" << target() << "finished with exit status" << status;
+    emit commandFinished(generation, id, status, output, errorText);
 }
 
 void SshWorker::statRemote(quint64 generation, int id, const QString& path)
 {
+    if (generation != m_generation || aborted()) {
+        return;
+    }
     SshConnection::RemoteFileInfo info;
-    info.error = QStringLiteral("not implemented");
+    if (!m_live || !m_live->shellOpen) {
+        info.error = tr("Not connected");
+        emit remoteStatReceived(generation, id, path, info);
+        return;
+    }
+
+    if (probeSftp()) {
+        const QByteArray utf8 = path.toUtf8();
+        sftp_attributes attributes = sftp_stat(m_live->sftp, utf8.constData());
+        bool linkLost = false;
+        if (attributes) {
+            info.exists = true;
+            const bool haveType = (attributes->flags & SSH_FILEXFER_ATTR_PERMISSIONS) != 0;
+            info.isDirectory = attributes->type == SSH_FILEXFER_TYPE_DIRECTORY
+                || (haveType && (attributes->permissions & SSH_S_IFMT) == SSH_S_IFDIR);
+            if ((attributes->flags & SSH_FILEXFER_ATTR_SIZE) && !info.isDirectory) {
+                info.size = static_cast<qint64>(attributes->size);
+            }
+            if (attributes->flags & SSH_FILEXFER_ATTR_MODIFYTIME) {
+                info.modified = QDateTime::fromSecsSinceEpoch(static_cast<qint64>(attributes->mtime64), QTimeZone::UTC);
+            } else if (attributes->flags & SSH_FILEXFER_ATTR_ACMODTIME) {
+                info.modified = QDateTime::fromSecsSinceEpoch(static_cast<qint64>(attributes->mtime), QTimeZone::UTC);
+            }
+            sftp_attributes_free(attributes);
+        } else if (!ssh_is_connected(m_live->session)) {
+            info.error = tr("Connection to %1 lost: %2").arg(target(), libsshError());
+            linkLost = true;
+        } else {
+            const int code = sftp_get_error(m_live->sftp);
+            if (code != SSH_FX_NO_SUCH_FILE && code != SSH_FX_NO_SUCH_PATH) {
+                info.error = tr("Cannot stat %1: %2").arg(path, sftpError());
+            }
+        }
+        emit remoteStatReceived(generation, id, path, info);
+        if (linkLost) {
+            handleConnectionLost(info.error);
+        }
+        return;
+    }
+
+    // No SFTP (dropbear): the file tools of the remote shell. Relative paths are relative to
+    // the home directory there too, because an exec channel starts in it.
+    QByteArray output;
+    QString errorText;
+    int status = -1;
+    QString error;
+    if (!runExec(QStringLiteral("stat -c '%s %Y %F' ") + shellPath(path), &output, &errorText, &status, &error)) {
+        info.error = error;   // transport failure, close() or timeout; a lost link was already reported
+        emit remoteStatReceived(generation, id, path, info);
+        return;
+    }
+    if (status == 0) {
+        if (!parseStatReply(output, &info)) {
+            info.error = tr("Unexpected answer of stat on %1: %2").arg(target(), QString::fromUtf8(output).trimmed().left(80));
+        }
+    } else if (!errorText.contains(QLatin1String("No such file"), Qt::CaseInsensitive)) {
+        // GNU and busybox stat both end their "cannot stat" line with strerror(ENOENT); that is
+        // the plain "does not exist" (exists = false, no error); everything else is a failure.
+        const QString reason = errorText.trimmed();
+        info.error = tr("Cannot stat %1: %2")
+                         .arg(path, reason.isEmpty() ? tr("stat exited with status %1").arg(status) : reason);
+    }
     emit remoteStatReceived(generation, id, path, info);
 }

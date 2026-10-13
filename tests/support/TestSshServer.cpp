@@ -129,7 +129,8 @@ bool isFileCommand(const QStringList& words)
 {
     static const QStringList kCommands = {QStringLiteral("cat"),   QStringLiteral("wc"),    QStringLiteral("test"),
                                           QStringLiteral("chmod"), QStringLiteral("rm"),    QStringLiteral("mkdir"),
-                                          QStringLiteral("mv"),    QStringLiteral("pwd"),   QStringLiteral(":")};
+                                          QStringLiteral("mv"),    QStringLiteral("pwd"),   QStringLiteral(":"),
+                                          QStringLiteral("stat"),  QStringLiteral("git")};
     return !words.isEmpty() && kCommands.contains(words.first());
 }
 
@@ -1137,6 +1138,49 @@ int ClientSession::runFileCommand(ChannelContext& c, const QStringList& words)
         if (!QDir().mkpath(path)) {
             return fail(QStringLiteral("mkdir: can't create directory '%1': Permission denied").arg(words.at(2)));
         }
+        return 0;
+    }
+    if (command == QLatin1String("stat")) {
+        // `stat -c '%s %Y %F' 'p'` (what SshConnection::statRemote() runs when there is no SFTP).
+        if (words.size() != 4 || words.at(1) != QLatin1String("-c") || words.at(2) != QLatin1String("%s %Y %F")) {
+            return fail(QStringLiteral("stat: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(3), &path)) {
+            return 1;
+        }
+        const QFileInfo info(path);
+        if (!info.exists()) {
+            return fail(QStringLiteral("stat: cannot statx '%1': No such file or directory").arg(words.at(3)));
+        }
+        const bool isDir = info.isDir();
+        const qint64 size = isDir ? 4096 : info.size();
+        const QString type = isDir ? QStringLiteral("directory")
+                                   : (size == 0 ? QStringLiteral("regular empty file") : QStringLiteral("regular file"));
+        c.output.append(QStringLiteral("%1 %2 %3\n")
+                            .arg(size)
+                            .arg(info.lastModified().toSecsSinceEpoch())
+                            .arg(type)
+                            .toUtf8());
+        return 0;
+    }
+    if (command == QLatin1String("git")) {
+        // `git -C 'p' describe --tags --dirty 2>/dev/null`: the "2>/dev/null" arrives as the
+        // words "2" ">" "/dev/null" (the splitter makes an unquoted ">" a word of its own).
+        static const QStringList kDescribe = {QStringLiteral("describe"), QStringLiteral("--tags"), QStringLiteral("--dirty"),
+                                              QStringLiteral("2"),        QStringLiteral(">"),      QStringLiteral("/dev/null")};
+        if (words.size() != 9 || words.at(1) != QLatin1String("-C") || words.mid(3) != kDescribe) {
+            return fail(QStringLiteral("git: unsupported arguments"));
+        }
+        QString path;
+        if (!resolve(words.at(2), &path)) {
+            c.errorOutput.clear();   // git's stderr went to /dev/null
+            return 128;
+        }
+        if (m_opts.gitDescribeOutput.isEmpty() || !QFileInfo(path).isDir()) {
+            return 128;   // "fatal: not a git repository", discarded by 2>/dev/null
+        }
+        c.output.append((m_opts.gitDescribeOutput + QLatin1Char('\n')).toUtf8());
         return 0;
     }
     if (command == QLatin1String("mv")) {

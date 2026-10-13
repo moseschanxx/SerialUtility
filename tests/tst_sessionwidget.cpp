@@ -4048,7 +4048,7 @@ void Tst_sessionwidget::quickBarButtonsMatchGroup()
     const QList<QuickCommand> all = m_store->commands();
     QList<QToolButton*> buttons = commandButtons(&bar);
     QCOMPARE(buttonTexts(buttons), commandNames(all));
-    QVERIFY(buttons.first()->toolTip().contains(QStringLiteral("uname -a")));
+    QVERIFY(buttons.first()->toolTip().contains(QStringLiteral("reboot loader")));   // v0.5: Node group first
     QVERIFY(buttons.first()->toolTip().contains(QStringLiteral("CR")));
 
     bar.setCurrentGroup(QStringLiteral("U-Boot"));
@@ -4086,7 +4086,7 @@ void Tst_sessionwidget::quickBarClickEmits()
     QTest::mouseClick(buttons.first(), Qt::LeftButton);
     QCOMPARE(triggered.size(), qsizetype(1));
     QVERIFY(triggered.first() == all.first());
-    QCOMPARE(triggered.first().command, QStringLiteral("uname -a"));
+    QCOMPARE(triggered.first().command, QStringLiteral("reboot loader"));   // v0.5: Node group first
 
     QTest::mouseClick(buttons.at(1), Qt::LeftButton);
     QCOMPARE(triggered.size(), qsizetype(2));

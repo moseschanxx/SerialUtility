@@ -14,6 +14,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThread>
+#include <QTimeZone>
 
 #include <memory>
 #include <utility>
@@ -391,6 +392,27 @@ public:
     QList<QPair<QString, quint16>> forwards;
 };
 
+/// Waits (kE2eTimeoutMs) until `spy`, a QSignalSpy on SshConnection::remoteStatReceived, holds the
+/// answer to the statRemote() call `id`; fills *info (and *path, the path as echoed back).
+bool waitForStat(QSignalSpy& spy, int id, SshConnection::RemoteFileInfo* info, QString* path = nullptr)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < kE2eTimeoutMs) {
+        for (const QList<QVariant>& args : std::as_const(spy)) {
+            if (args.at(0).toInt() == id) {
+                *info = qvariant_cast<SshConnection::RemoteFileInfo>(args.at(2));
+                if (path) {
+                    *path = args.at(1).toString();
+                }
+                return true;
+            }
+        }
+        QTest::qWait(10);
+    }
+    return false;
+}
+
 } // namespace
 
 class Tst_sshconnection : public QObject
@@ -452,6 +474,12 @@ private slots:
     void e2eShellFallbackFailedUploadRemoved();
     void e2eShellFallbackUploadWithoutExitStatus();
     void e2eCloseDuringUploadRemovesRemote();
+    // v0.5: runCommand() / statRemote() (the Firmware tab's image pull)
+    void commandAndStatWhileDisconnected();
+    void e2eRunCommand();
+    void e2eRunCommandQueueTimeoutAndClose();
+    void e2eStatRemote_data();
+    void e2eStatRemote();
 
     // ---- (b) live probe against a real sshd -------------------------------------------
     void probeShellResizeAndSftp();
@@ -2734,6 +2762,285 @@ void Tst_sshconnection::e2eCloseDuringUploadRemovesRemote()
         QCOMPARE(finished.count(), 1);   // the worker's report for the closed generation was dropped
         QCOMPARE(c.lost, 0);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// v0.5: runCommand() / statRemote()
+// ---------------------------------------------------------------------------------------
+
+void Tst_sshconnection::commandAndStatWhileDisconnected()
+{
+    // SshConnection.h: 0 and no signal while not Connected (never opened, or closed).
+    SshConnection c;
+    QSignalSpy finished(&c, &SshConnection::commandFinished);
+    QSignalSpy stats(&c, &SshConnection::remoteStatReceived);
+    QCOMPARE(c.runCommand(QStringLiteral("echo hi")), 0);
+    QCOMPARE(c.runCommand(QStringLiteral("echo hi"), 500), 0);
+    QCOMPARE(c.statRemote(QStringLiteral("update.img")), 0);
+    QTest::qWait(50);
+    QCOMPARE(finished.count(), 0);
+    QCOMPARE(stats.count(), 0);
+    QCOMPARE(c.state(), Transport::State::Disconnected);
+}
+
+void Tst_sshconnection::e2eRunCommand()
+{
+    const TestSshServer::Options options = serverOptions(QStringLiteral("runcmd"));
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("runcmd")));
+    E2E_CONNECT(c);
+    QSignalSpy finished(&c.conn, &SshConnection::commandFinished);
+
+    // stdout and exit status 0 (the scripted shell ends its lines with CR LF)
+    const int echoId = c.conn.runCommand(QStringLiteral("echo hello world"));
+    QVERIFY(echoId > 0);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, kE2eTimeoutMs);
+    QCOMPARE(finished.at(0).at(0).toInt(), echoId);
+    QCOMPARE(finished.at(0).at(1).toInt(), 0);
+    QCOMPARE(finished.at(0).at(2).toByteArray().trimmed(), QByteArrayLiteral("hello world"));
+    QVERIFY(finished.at(0).at(3).toString().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("echo hello world")), kE2eTimeoutMs);
+
+    // the command's own exit status
+    const int exitId = c.conn.runCommand(QStringLiteral("exit 3"));
+    QVERIFY(exitId > echoId);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, kE2eTimeoutMs);
+    QCOMPARE(finished.at(1).at(0).toInt(), exitId);
+    QCOMPARE(finished.at(1).at(1).toInt(), 3);
+    QVERIFY(finished.at(1).at(2).toByteArray().isEmpty());
+
+    // stderr text: a command that fails says why on stderr (stdout stays empty)
+    const int catId = c.conn.runCommand(QStringLiteral("cat 'no-such-file.txt'"));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, kE2eTimeoutMs);
+    QCOMPARE(finished.at(2).at(0).toInt(), catId);
+    QCOMPARE(finished.at(2).at(1).toInt(), 1);
+    QVERIFY(finished.at(2).at(2).toByteArray().isEmpty());
+    QVERIFY2(finished.at(2).at(3).toString().contains(QStringLiteral("No such file")),
+             qPrintable(finished.at(2).at(3).toString()));
+
+    // stdout is binary-safe and not limited to one read: 200 KB with NUL, CR and LF bytes
+    QByteArray blob = randomBytes(200 * 1024);
+    blob[0] = '\0';
+    blob[1] = '\r';
+    blob[2] = '\n';
+    QVERIFY(writeFile(QDir(options.rootDir).filePath(QStringLiteral("blob.bin")), blob));
+    const int blobId = c.conn.runCommand(QStringLiteral("cat 'blob.bin'"));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, kE2eTimeoutMs);
+    QCOMPARE(finished.at(3).at(0).toInt(), blobId);
+    QCOMPARE(finished.at(3).at(1).toInt(), 0);
+    QVERIFY(finished.at(3).at(2).toByteArray() == blob);
+
+    // ids are one sequence for both calls, and the shell tab keeps working
+    const int statId = c.conn.statRemote(QStringLiteral("blob.bin"));
+    QVERIFY(statId > blobId);
+    QVERIFY(c.conn.runCommand(QStringLiteral("   ")) == 0);   // nothing to run
+    QVERIFY(c.conn.statRemote(QString()) == 0);               // nothing to stat
+    c.received.clear();
+    c.conn.write(QByteArrayLiteral("echo STILL\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(c.received.contains("STILL\r\n$ "), kE2eTimeoutMs);
+
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
+    c.conn.close();
+    QCOMPARE(c.conn.runCommand(QStringLiteral("echo late")), 0);   // not Connected any more
+}
+
+void Tst_sshconnection::e2eRunCommandQueueTimeoutAndClose()
+{
+    QElapsedTimer clock;
+    QList<qint64> arrival;
+    TestSshServer server(serverOptions(QStringLiteral("runcmdq")));
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, QStringLiteral("runcmdq")));
+    E2E_CONNECT(c);
+    QSignalSpy finished(&c.conn, &SshConnection::commandFinished);
+    connect(&c.conn, &SshConnection::commandFinished, &c.conn,
+            [&](int, int, const QByteArray&, const QString&) { arrival.append(clock.elapsed()); });
+
+    // Queued requests run one after the other, in order: the slow one answers first although the
+    // quick ones were issued right behind it.
+    clock.start();
+    const int slow = c.conn.runCommand(QStringLiteral("sleep 400"));
+    const int quick = c.conn.runCommand(QStringLiteral("echo quick"));
+    const int last = c.conn.runCommand(QStringLiteral("exit 4"));
+    QVERIFY(slow > 0 && quick > slow && last > quick);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, kE2eTimeoutMs);
+    QCOMPARE(finished.at(0).at(0).toInt(), slow);
+    QCOMPARE(finished.at(1).at(0).toInt(), quick);
+    QCOMPARE(finished.at(2).at(0).toInt(), last);
+    QCOMPARE(finished.at(0).at(1).toInt(), 0);
+    QCOMPARE(finished.at(1).at(1).toInt(), 0);
+    QCOMPARE(finished.at(2).at(1).toInt(), 4);
+    QVERIFY2(arrival.at(0) >= 350, qPrintable(QString::number(arrival.at(0))));
+    QVERIFY(arrival.at(0) <= arrival.at(1) && arrival.at(1) <= arrival.at(2));
+
+    // Timeout: the command is cut after timeoutMs, answered with -1 and a reason, and the
+    // connection stays usable.
+    clock.start();
+    const int hung = c.conn.runCommand(QStringLiteral("sleep 3000"), 500);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, kE2eTimeoutMs);
+    QCOMPARE(finished.at(3).at(0).toInt(), hung);
+    QCOMPARE(finished.at(3).at(1).toInt(), -1);
+    QVERIFY2(finished.at(3).at(3).toString().contains(QStringLiteral("did not finish")), qPrintable(finished.at(3).at(3).toString()));
+    QVERIFY2(clock.elapsed() < 2500, qPrintable(QString::number(clock.elapsed())));
+    const int next = c.conn.runCommand(QStringLiteral("echo recovered"));
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 5, kE2eTimeoutMs);
+    QCOMPARE(finished.at(4).at(0).toInt(), next);
+    QCOMPARE(finished.at(4).at(1).toInt(), 0);
+    QCOMPARE(finished.at(4).at(2).toByteArray().trimmed(), QByteArrayLiteral("recovered"));
+    c.received.clear();
+    c.conn.write(QByteArrayLiteral("echo AFTER\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(c.received.contains("AFTER\r\n$ "), kE2eTimeoutMs);
+
+    // close() with a command in flight: the answer of the closed session is dropped, a new
+    // session starts clean and its ids keep counting.
+    const int cut = c.conn.runCommand(QStringLiteral("sleep 2000"), 10000);
+    QVERIFY(cut > next);
+    c.conn.close();
+    QCOMPARE(c.conn.state(), State::Disconnected);
+    QTest::qWait(400);
+    QCOMPARE(finished.count(), 5);
+    c.received.clear();
+    E2E_CONNECT(c);
+    const int fresh = c.conn.runCommand(QStringLiteral("echo fresh"));
+    QVERIFY(fresh > cut);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 6, kE2eTimeoutMs);
+    QCOMPARE(finished.at(5).at(0).toInt(), fresh);
+    QCOMPARE(finished.at(5).at(2).toByteArray().trimmed(), QByteArrayLiteral("fresh"));
+    QTest::qWait(300);
+    QCOMPARE(finished.count(), 6);   // nothing of the cut command ever arrives
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
+    c.conn.close();
+}
+
+void Tst_sshconnection::e2eStatRemote_data()
+{
+    QTest::addColumn<bool>("sftp");
+    QTest::newRow("sftp") << true;
+    QTest::newRow("shell fallback") << false;
+}
+
+void Tst_sshconnection::e2eStatRemote()
+{
+    QFETCH(bool, sftp);
+    const QString name = sftp ? QStringLiteral("statsftp") : QStringLiteral("statshell");
+    TestSshServer::Options options = serverOptions(name);
+    options.allowSftp = sftp;
+    TestSshServer server(options);
+    QVERIFY(server.start());
+    ServerSpy spy(&server);
+    TestClient c(serverProfile(server, name));
+    E2E_CONNECT(c);
+    QSignalSpy stats(&c.conn, &SshConnection::remoteStatReceived);
+
+    const QDateTime stamp(QDate(2026, 10, 13), QTime(13, 45, 50), QTimeZone::UTC);
+    const QByteArray payload = randomBytes(12348);
+    const QString relative = QStringLiteral("out/image/update.img");
+    const QString file = QDir(options.rootDir).filePath(relative);
+    QVERIFY(writeFile(file, payload));
+    {
+        QFile f(file);
+        QVERIFY(f.open(QIODevice::ReadWrite));
+        QVERIFY(f.setFileTime(stamp, QFileDevice::FileModificationTime));
+    }
+    SshConnection::RemoteFileInfo info;
+    QString echoed;
+
+    // A file, relative to the remote home: size, UTC mtime, no error.
+    const int id = c.conn.statRemote(relative);
+    QVERIFY(id > 0);
+    QVERIFY(waitForStat(stats, id, &info, &echoed));
+    QCOMPARE(echoed, relative);
+    QVERIFY(info.exists);
+    QVERIFY(!info.isDirectory);
+    QCOMPARE(info.size, qint64(payload.size()));
+    QVERIFY(info.modified.isValid());
+    QCOMPARE(info.modified.toSecsSinceEpoch(), stamp.toSecsSinceEpoch());
+    QCOMPARE(info.modified.offsetFromUtc(), 0);
+    QVERIFY(qAbs(info.modified.toSecsSinceEpoch() - QFileInfo(file).lastModified().toSecsSinceEpoch()) <= 1);
+    QVERIFY2(info.error.isEmpty(), qPrintable(info.error));
+
+    // The same file by its absolute path.
+    const int absoluteId = c.conn.statRemote(file);
+    QVERIFY(absoluteId > id);
+    QVERIFY(waitForStat(stats, absoluteId, &info, &echoed));
+    QCOMPARE(echoed, file);
+    QVERIFY(info.exists);
+    QCOMPARE(info.size, qint64(payload.size()));
+
+    // A missing file (and a missing folder above it): not an error, just exists = false.
+    for (const QString& missing : {QStringLiteral("out/image/nothing.img"), QStringLiteral("no/such/dir/update.img")}) {
+        const int missingId = c.conn.statRemote(missing);
+        QVERIFY(waitForStat(stats, missingId, &info, &echoed));
+        QCOMPARE(echoed, missing);
+        QVERIFY2(!info.exists, qPrintable(missing));
+        QVERIFY2(info.error.isEmpty(), qPrintable(info.error));
+        QCOMPARE(info.size, qint64(-1));
+        QVERIFY(!info.modified.isValid());
+    }
+
+    // A directory: exists, isDirectory, no file size.
+    const int dirId = c.conn.statRemote(QStringLiteral("out/image"));
+    QVERIFY(waitForStat(stats, dirId, &info));
+    QVERIFY(info.exists);
+    QVERIFY(info.isDirectory);
+    QCOMPARE(info.size, qint64(-1));
+    QVERIFY(info.modified.isValid());
+    QVERIFY(info.error.isEmpty());
+
+    // A zero-length file ("regular empty file" for stat) is still a file of size 0; a name with a
+    // quote and one starting with '-' reach the server as single, intact paths.
+    QVERIFY(writeFile(QDir(options.rootDir).filePath(QStringLiteral("empty.bin")), QByteArray()));
+    QVERIFY(writeFile(QDir(options.rootDir).filePath(QStringLiteral("it's.bin")), QByteArrayLiteral("12345")));
+    QVERIFY(writeFile(QDir(options.rootDir).filePath(QStringLiteral("-dash.bin")), QByteArrayLiteral("123456")));
+    const int emptyId = c.conn.statRemote(QStringLiteral("empty.bin"));
+    QVERIFY(waitForStat(stats, emptyId, &info));
+    QVERIFY(info.exists && !info.isDirectory);
+    QCOMPARE(info.size, qint64(0));
+    const int quoteId = c.conn.statRemote(QStringLiteral("it's.bin"));
+    QVERIFY(waitForStat(stats, quoteId, &info));
+    QVERIFY(info.exists);
+    QCOMPARE(info.size, qint64(5));
+    const int dashId = c.conn.statRemote(QStringLiteral("-dash.bin"));
+    QVERIFY(waitForStat(stats, dashId, &info));
+    QVERIFY(info.exists);
+    QCOMPARE(info.size, qint64(6));
+
+    // The method: SFTP stat leaves no exec command behind; the fallback runs the stat line.
+    const int barrier = c.conn.runCommand(QStringLiteral("echo barrier"));
+    QVERIFY(barrier > dashId);
+    QTRY_VERIFY_WITH_TIMEOUT(spy.execCommands.contains(QStringLiteral("echo barrier")), kE2eTimeoutMs);
+    const QStringList statCommands = spy.execCommands.filter(QRegularExpression(QStringLiteral("^stat ")));
+    if (sftp) {
+        QVERIFY2(statCommands.isEmpty(), qPrintable(statCommands.join(QStringLiteral(" | "))));
+        QCOMPARE(spy.sftp, 1);
+    } else {
+        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' 'out/image/update.img'")));
+        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' 'it'\\''s.bin'")));
+        QVERIFY(statCommands.contains(QStringLiteral("stat -c '%s %Y %F' './-dash.bin'")));
+        QCOMPARE(statCommands.size(), 8);   // every statRemote() above, one command each
+        QCOMPARE(spy.sftp, 1);              // probed once (refused), never again
+        // Anything but "No such file" is an error with the shell's reason (here: ".." is refused).
+        const int refusedId = c.conn.statRemote(QStringLiteral("../outside.bin"));
+        QVERIFY(waitForStat(stats, refusedId, &info));
+        QVERIFY(!info.exists);
+        QVERIFY2(info.error.contains(QStringLiteral("Permission denied")), qPrintable(info.error));
+    }
+
+    // An answer that was still on its way when close() ran is dropped.
+    const int cutId = c.conn.statRemote(relative);
+    QVERIFY(cutId > 0);
+    c.conn.close();
+    const int before = static_cast<int>(stats.count());
+    QTest::qWait(300);
+    QCOMPARE(static_cast<int>(stats.count()), before);
+    QCOMPARE(c.conn.statRemote(relative), 0);
+    QVERIFY2(c.errors.isEmpty(), qPrintable(c.errors.join(QStringLiteral(" | "))));
+    QCOMPARE(c.lost, 0);
 }
 
 void Tst_sshconnection::probeShellResizeAndSftp()
