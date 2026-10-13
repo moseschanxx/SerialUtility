@@ -14,16 +14,18 @@
 
 namespace {
 
-constexpr int kFileVersion = 1;
+// 1: the layout of 0.1 - 0.4. 2 (0.5): the "Node" group exists; load() adds it to an older file once.
+constexpr int kFileVersion = 2;
 
 QuickCommand makeText(const QString& group, const QString& name, const QString& command,
-                      LineEnding::Mode ending = LineEnding::Mode::CR)
+                      LineEnding::Mode ending = LineEnding::Mode::CR, const QString& tooltip = QString())
 {
     QuickCommand qc;
     qc.group = group;
     qc.name = name;
     qc.command = command;
     qc.lineEnding = ending;
+    qc.tooltip = tooltip;
     return qc;
 }
 
@@ -39,9 +41,10 @@ QuickCommand makeHex(const QString& group, const QString& name, const QString& h
     return qc;
 }
 
-/// Parse a { "version": 1, "commands": [...] } document. Returns false with *error on any
-/// structural problem; a "commands" entry that is not an object is skipped.
-bool parseDocument(const QByteArray& json, QList<QuickCommand>& out, QString* error)
+/// Parse a { "version": N, "commands": [...] } document. Returns false with *error on any
+/// structural problem; a "commands" entry that is not an object is skipped. *version gets N
+/// (1 when the key is missing or not a number: the files written before the key mattered).
+bool parseDocument(const QByteArray& json, QList<QuickCommand>& out, QString* error, int* version = nullptr)
 {
     QJsonParseError parseError{};
     const QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
@@ -75,7 +78,21 @@ bool parseDocument(const QByteArray& json, QList<QuickCommand>& out, QString* er
         }
         out.append(QuickCommand::fromJson(value.toObject()));
     }
+    if (version) {
+        *version = root.value(QLatin1String("version")).toInt(1);
+    }
     return true;
+}
+
+/// True when some command's effective group is the "Node" group.
+bool hasNodeGroup(const QList<QuickCommand>& commands)
+{
+    for (const QuickCommand& qc : commands) {
+        if (QuickCommandStore::effectiveGroup(qc) == QuickCommandStore::nodeGroupName()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 QByteArray serialize(const QList<QuickCommand>& commands)
@@ -205,8 +222,11 @@ QString QuickCommandStore::defaultFilePath()
     return AppSettings::dataDirectory() + QStringLiteral("/quick_commands.json");
 }
 
-bool QuickCommandStore::load(const QString& path)
+bool QuickCommandStore::load(const QString& path, bool* migrated)
 {
+    if (migrated) {
+        *migrated = false;
+    }
     const QString filePath = path.isEmpty() ? defaultFilePath() : path;
     QFile file(filePath);
     if (!file.exists()) {
@@ -221,11 +241,22 @@ bool QuickCommandStore::load(const QString& path)
     }
     QList<QuickCommand> loaded;
     QString error;
-    if (!parseDocument(file.readAll(), loaded, &error)) {
+    int version = kFileVersion;
+    if (!parseDocument(file.readAll(), loaded, &error, &version)) {
         qCWarning(lcApp) << "malformed quick commands file" << QDir::toNativeSeparators(filePath) << error;
         return false;
     }
     qCInfo(lcApp) << "loaded" << loaded.size() << "quick commands from" << QDir::toNativeSeparators(filePath);
+    // A file of an earlier release has no Node group: put it in front, once. The caller saves the
+    // result (save() writes the current version), so a user who later deletes the group keeps it deleted.
+    // A file that already has Node commands, whatever its version, is left exactly as it is.
+    if (version < kFileVersion && !hasNodeGroup(loaded)) {
+        loaded = nodeDefaults() + loaded;
+        if (migrated) {
+            *migrated = true;
+        }
+        qCInfo(lcApp) << "quick commands file version" << version << ": added the" << nodeGroupName() << "group";
+    }
     setCommands(loaded);
     return true;
 }
@@ -290,7 +321,8 @@ QList<QuickCommand> QuickCommandStore::defaults()
     const QString mcu = QStringLiteral("MCU");
     const QString control = QStringLiteral("Control");
 
-    QList<QuickCommand> list;
+    // Node first (v0.5): the board this tool exists for
+    QList<QuickCommand> list = nodeDefaults();
     // Linux
     list.append(makeText(linux, QStringLiteral("uname -a"), QStringLiteral("uname -a")));
     list.append(makeText(linux, QStringLiteral("cpuinfo"), QStringLiteral("cat /proc/cpuinfo")));
@@ -365,4 +397,60 @@ bool QuickCommandStore::exportToFile(const QString& path, QString* error) const
     }
     qCInfo(lcApp) << "exported" << m_commands.size() << "quick commands to" << QDir::toNativeSeparators(path);
     return true;
+}
+
+// ---- The "Node" group (v0.5) ----
+// The Node board (RV1106 SoC + CC1310 RF MCU) has two consoles behind one USB-C cable: the SoC's own
+// (Linux shell, or the U-Boot rockusb when it is in download mode) and, through `rfmcu console`, the
+// CC1310's CLI. The CC1310 commands are the ones of its CLI reference
+// (CC1310-Firmware docs/operations/05_cli_operations.md, Part B); they work only while `rfmcu console`
+// runs on the SoC, and `~.` (on its own line) leaves it again. All lines end with CR like every other
+// text command here (rfmcu adds the CRLF the MCU wants).
+QList<QuickCommand> QuickCommandStore::nodeDefaults()
+{
+    const QString node = nodeGroupName();
+    const LineEnding::Mode cr = LineEnding::Mode::CR;
+
+    QList<QuickCommand> list;
+    list.append(makeText(node, QStringLiteral("reboot loader"), QStringLiteral("reboot loader"), cr,
+                         tr("SoC console: reboot into the USB download (Loader) mode for flashing")));
+    list.append(makeText(node, QStringLiteral("rfmcu console"), QStringLiteral("rfmcu console"), cr,
+                         tr("SoC console: open the CC1310 CLI through the SoC; ~. leaves it")));
+    list.append(makeText(node, QStringLiteral("help"), QStringLiteral("help"), cr,
+                         tr("CC1310: list the commands of this role (help <command> shows one usage)")));
+    list.append(makeText(node, QStringLiteral("version"), QStringLiteral("version"), cr,
+                         tr("CC1310: firmware version and CLI baud rate")));
+    list.append(makeText(node, QStringLiteral("sys"), QStringLiteral("sys"), cr,
+                         tr("CC1310: reset cause, watchdog, uptime (sys | sys wdt_test; wdt_test resets the board)")));
+    list.append(makeText(node, QStringLiteral("stack"), QStringLiteral("stack"), cr,
+                         tr("CC1310: stack high-water marks of every task, and the heap")));
+    list.append(makeText(node, QStringLiteral("uart"), QStringLiteral("uart"), cr,
+                         tr("CC1310: CLI rate and UART receive errors (uart | uart baud <rate>)")));
+    list.append(makeText(node, QStringLiteral("power"), QStringLiteral("power"), cr,
+                         tr("CC1310: power state (power | power off [delay_ms] | power soc on|off)")));
+    list.append(makeText(node, QStringLiteral("bat"), QStringLiteral("bat"), cr,
+                         tr("CC1310: battery and charger (bat | bat sim <mV>|off | bat charge on|off)")));
+    list.append(makeText(node, QStringLiteral("rx status"), QStringLiteral("rx status"), cr,
+                         tr("CC1310 receiver: packet, CRC and RSSI counters (rx status | rx dump on|off)")));
+    list.append(makeText(node, QStringLiteral("rx dump on"), QStringLiteral("rx dump on"), cr,
+                         tr("CC1310 receiver: print one line per received frame until rx dump off or a reset")));
+    list.append(makeText(node, QStringLiteral("rx dump off"), QStringLiteral("rx dump off"), cr,
+                         tr("CC1310 receiver: stop the per-frame output")));
+    list.append(makeText(node, QStringLiteral("tx status"), QStringLiteral("tx status"), cr,
+                         tr("CC1310 transmitter: state and counters of the sync frames")));
+    list.append(makeText(node, QStringLiteral("bootloader"), QStringLiteral("bootloader"), cr,
+                         tr("CC1310: writes an update request and reboots into the UART updater")));
+    list.append(makeText(node, QStringLiteral("~."), QStringLiteral("~."), cr,
+                         tr("leave rfmcu console")));
+    return list;
+}
+
+QString QuickCommandStore::nodeGroupName()
+{
+    return QStringLiteral("Node");
+}
+
+int QuickCommandStore::fileVersion()
+{
+    return kFileVersion;
 }

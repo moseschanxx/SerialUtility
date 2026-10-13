@@ -112,6 +112,9 @@ jobs:
           # SSH: libssh (built from source) and the OpenSSL crypto library it needs are bundled too.
           test -f dist/lib/libssh.so.4
           test -f dist/lib/libcrypto.so.3
+          # Firmware tab: the bundled Rockchip upgrade_tool (third_party/ -> bin/tools) with its config.ini.
+          test -x dist/bin/tools/upgrade_tool
+          test -f dist/bin/tools/config.ini
           # libssh's own install rules also drop headers and CMake config files: not part of the package.
           rm -rf dist/include dist/lib/cmake dist/lib/pkgconfig dist/lib/libssh.so
           # libssh.so resolves libcrypto through its own RUNPATH ($ORIGIN), so the bundled copy is
@@ -200,7 +203,11 @@ jobs:
                         'dist\bin\Qt6SerialPort.dll', 'dist\bin\Qt6Widgets.dll', 'dist\bin\Qt6Network.dll',
                         'dist\bin\platforms\qwindows.dll',
                         # SSH: libssh built from source plus the OpenSSL crypto DLL it depends on
-                        'dist\bin\ssh.dll', 'dist\bin\libcrypto-3-x64.dll')
+                        'dist\bin\ssh.dll', 'dist\bin\libcrypto-3-x64.dll',
+                        # Firmware tab: the bundled flashing tools (third_party/ -> bin\tools)
+                        'dist\bin\tools\upgrade_tool.exe', 'dist\bin\tools\license.txt',
+                        'dist\bin\tools\adb.exe', 'dist\bin\tools\AdbWinApi.dll', 'dist\bin\tools\AdbWinUsbApi.dll',
+                        'dist\bin\tools\DriverAssistant\DriverInstall.exe')
           # libssh's own install rules also drop its import library, headers and CMake files: not part of the package.
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist\include, dist\lib
           foreach ($f in $required) { if (-not (Test-Path $f)) { Write-Error "missing after deploy: $f"; exit 1 } }

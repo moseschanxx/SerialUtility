@@ -37,7 +37,7 @@ struct QuickCommand
 
 /**
  * Owns the list of quick commands and persists it as JSON:
- *   { "version": 1, "commands": [ {...}, ... ] }
+ *   { "version": 2, "commands": [ {...}, ... ] }   (v0.5: version 2, see fileVersion())
  * at AppSettings::dataDirectory()/quick_commands.json. If the file does not exist the
  * built-in defaults() are used (and saved on first save()).
  */

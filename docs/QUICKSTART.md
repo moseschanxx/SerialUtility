@@ -55,7 +55,39 @@ port forwards and more. *Session > Upload File to Remote...* copies a file over 
 file on the terminal does the same. A reflashed board shows the "identification has changed"
 warning - tick the box and *Replace key and connect*.
 
-## 5. Everyday features
+## 5. Flash the Node board (Firmware tab)
+
+One USB-C cable from the Node board to the PC, nothing else. The first time on a Windows PC, the
+Rockchip USB drivers must be installed once (the installer's optional driver task, or the tab's
+**Install drivers** button - a GUI installer you click through).
+
+1. **Ctrl+Shift+U** (*File > Firmware Update*) opens the Firmware tab. The SoC line shows what the
+   PC sees: *ADB device ...* for a running board.
+2. **Source**: pick the build machine (an SSH profile, or type `user@host`), keep the remote folder
+   (`~/rk/rockchip-platforms/output/image`) and the cache folder, press **Pull**. The remote image's
+   size, time and `git describe` appear first; an unchanged image is not downloaded again. No
+   network? **Use local image...** takes an `update.img` from disk. **Roll back** goes back to the
+   previous pulled image.
+3. **SoC**: press **Flash SoC**. The tab reboots the board into Loader mode over ADB, runs
+   `upgrade_tool`, shows the progress, waits for the board to come back and prints its kernel
+   version and uptime. A board that does not boot: hold the MASKROM button while plugging it in -
+   the tab flashes it from Maskrom the same way. If it sees no board at all, it offers to send
+   `reboot loader` through a connected serial / SSH tab (asks first). Do not unplug while the
+   progress bar runs; Cancel only works while it is still waiting for the board.
+4. **MCU (CC1310)**: pick the `firmware-x.y.z.pkg` (the tab checks it and shows target, version and
+   size), press **Read** to see the running version and role, confirm **rx** or **tx** (pre-selected
+   from what the MCU reports), then **Update MCU**; the banner of the restarted firmware ends it.
+   Flash the SoC first: the MCU is reached through `rfmcu` on the SoC.
+5. **Everything at once**: pick the package and press **Pull & Flash**: pull, flash the SoC, wait for
+   ADB, update the MCU if its version differs. It stops at the first failure and the log pane says
+   which step and why (*Save...* writes it to a file for a ticket).
+
+Afterwards the quick command bar's **Node** group (first in the list) is the console side of the
+same board: on the SoC's serial / SSH tab `reboot loader` and `rfmcu console`, inside the console
+the CC1310 commands (`help`, `version`, `sys`, `stack`, `uart`, `power`, `bat`, `rx status`,
+`rx dump on|off`, `tx status`, `bootloader`) and `~.` to leave it. Details: README "Firmware tab".
+
+## 6. Everyday features
 
 | Want to... | Do this |
 |---|---|
@@ -76,19 +108,21 @@ warning - tick the box and *Replace key and connect*.
 | Wipe the terminal | The **Clear** toolbar button / **Ctrl+Shift+L** empties the screen, the scrollback and the hex view (colours and modes stay); *Session > Reset Terminal* is the full VT reset |
 | Report a bug | *Help > Version* -> **Copy**, paste into the ticket together with the System Log |
 
-## 6. Where things live
+## 7. Where things live
 
 | Item | Location |
 |---|---|
 | Settings | Registry (Windows) / `~/.config/BuildAI/SerialUtility.conf` (Linux) |
 | Quick commands, history, SSH profiles | `QStandardPaths::AppConfigLocation` -> `quick_commands.json`, `history.txt`, `ssh_profiles.json` (no secrets; saved passwords go to DPAPI-protected settings) |
+| Pulled firmware images | the Firmware tab's *Local cache* folder (default `<data dir>/firmware`: `update.img`, the previous `update.prev.img` and their `.json` notes) |
+| Flashing tools | `tools\` next to the executable (`upgrade_tool.exe`, `adb.exe`, `DriverAssistant\`); other copies via *Preferences > Firmware* |
 | SSH host keys | `~/.ssh/known_hosts`, shared with the `ssh` command |
 | Logs | `<Documents>/BuildAI/SerialLogs/<port>_<date>.log` (change in Preferences > Logging) |
 | Deployed app | `dist\Release\bin` after `build.ps1 -Deploy` |
 
-## 7. Shortcuts
+## 8. Shortcuts
 
-`Ctrl+T` new tab, `Ctrl+Shift+T` new SSH tab, `Ctrl+Shift+W` close (Ctrl+W goes to the shell), `Ctrl+Tab`/`Ctrl+Shift+Tab` or `Ctrl+PgDn`/`Ctrl+PgUp` next/previous tab, `Alt+1`..`Alt+9` select a tab (also the *Window* menu; a middle click on a tab closes it), `Ctrl+Shift+B` detect the baud rate, `F2`/`F3`
+`Ctrl+T` new tab, `Ctrl+Shift+T` new SSH tab, `Ctrl+Shift+U` Firmware tab, `Ctrl+Shift+W` close (Ctrl+W goes to the shell), `Ctrl+Tab`/`Ctrl+Shift+Tab` or `Ctrl+PgDn`/`Ctrl+PgUp` next/previous tab, `Alt+1`..`Alt+9` select a tab (also the *Window* menu; a middle click on a tab closes it), `Ctrl+Shift+B` detect the baud rate, `F2`/`F3`
 connect/disconnect, `F5` rescan ports, `Ctrl+Shift+L` clear (screen + scrollback + hex view), `Ctrl+Shift+O` send file,
 `Ctrl+Shift+H` hex view, `Ctrl+Shift+F` find, `Ctrl+Shift+R` replay log file,
 `Ctrl+Shift+C/V` copy/paste, `Ctrl++`/`Ctrl+-`/`Ctrl+0` zoom, `Ctrl+,` preferences,

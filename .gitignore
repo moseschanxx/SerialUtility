@@ -24,3 +24,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Bundled tool release notes are not build logs
+!third_party/**/*.log

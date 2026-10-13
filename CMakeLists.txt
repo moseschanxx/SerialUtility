@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "BuildAI Serial Utility - a serial-port terminal for Rockchip Linux boards and MCU shells"
     HOMEPAGE_URL "https://build.ai"
     LANGUAGES CXX)
@@ -226,6 +226,28 @@ set(SU_CORE_SOURCES
     src/ssh/SshWorker.h
     src/ssh/SshWorker.cpp
 
+    # Firmware tab core (v0.5): external tools, Rockchip flashing, the CC1310 updater, the image pull
+    src/firmware/ToolRunner.h
+    src/firmware/ToolRunner.cpp
+    src/firmware/AdbTool.h
+    src/firmware/AdbTool.cpp
+    src/firmware/RockchipTool.h
+    src/firmware/RockchipTool.cpp
+    src/firmware/UsbProbe.h
+    src/firmware/UsbProbe.cpp
+    src/firmware/CcProtocol.h
+    src/firmware/CcProtocol.cpp
+    src/firmware/CcPackage.h
+    src/firmware/CcPackage.cpp
+    src/firmware/McuUpdater.h
+    src/firmware/McuUpdater.cpp
+    src/firmware/McuLink.h
+    src/firmware/McuLink.cpp
+    src/firmware/SocFlasher.h
+    src/firmware/SocFlasher.cpp
+    src/firmware/ImagePuller.h
+    src/firmware/ImagePuller.cpp
+
     src/terminal/TerminalTypes.h
     src/terminal/CharWidth.h
     src/terminal/CharWidth.cpp
@@ -243,7 +265,7 @@ target_include_directories(su_core PUBLIC
     "${SU_GENERATED_DIR}")
 target_link_libraries(su_core PUBLIC Qt6::Core Qt6::Gui Qt6::SerialPort Qt6::Network ssh)
 if(WIN32)
-    target_link_libraries(su_core PUBLIC crypt32)   # SecretStore: DPAPI
+    target_link_libraries(su_core PUBLIC crypt32 setupapi)   # SecretStore: DPAPI; UsbProbe: SetupAPI
 endif()
 su_set_compile_options(su_core)
 
@@ -273,6 +295,8 @@ set(SU_APP_LIB_SOURCES
     src/ui/HexDumpView.cpp
     src/ui/SshConnectionBar.h
     src/ui/SshConnectionBar.cpp
+    src/ui/FirmwareTab.h
+    src/ui/FirmwareTab.cpp
 
     src/dialogs/HostKeyDialog.h
     src/dialogs/HostKeyDialog.cpp
@@ -330,6 +354,103 @@ su_set_compile_options(SerialUtility)
 su_copy_runtime_dlls(SerialUtility)
 
 # ---------------------------------------------------------------------------
+# Bundled flashing tools (Firmware tab): third_party/ -> <executable dir>/tools/
+# ---------------------------------------------------------------------------
+# The Firmware tab starts Rockchip's upgrade_tool and adb as separate processes and looks for them in
+# tools/ next to the executable (tools/upgrade_tool[.exe], tools/adb.exe,
+# tools/DriverAssistant/DriverInstall.exe). The folder is assembled after every link of SerialUtility, so
+# a build tree runs the tab as it is, and `cmake --install` ships the very same folder as bin/tools.
+# The sources are plain files under third_party/ (provenance and licences: third_party/README.md).
+set(SU_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+set(SU_TOOLS_DIR "$<TARGET_FILE_DIR:SerialUtility>/tools")
+set(SU_TOOL_FILES "")
+set(SU_TOOL_DRIVER_DIR "")
+if(WIN32)
+    list(APPEND SU_TOOL_FILES
+        "${SU_THIRD_PARTY_DIR}/rockchip/windows/upgrade_tool.exe"
+        "${SU_THIRD_PARTY_DIR}/rockchip/windows/license.txt"
+        "${SU_THIRD_PARTY_DIR}/rockchip/windows/revison.log"
+        "${SU_THIRD_PARTY_DIR}/adb/adb.exe"
+        "${SU_THIRD_PARTY_DIR}/adb/AdbWinApi.dll"
+        "${SU_THIRD_PARTY_DIR}/adb/AdbWinUsbApi.dll")
+
+    # Rockchip DriverAssistant (rockusb + ADB WinUSB drivers): kept as one zip in the source tree, extracted
+    # once at configure time (again when the zip changes) and copied flat to tools/DriverAssistant, so that
+    # tools/DriverAssistant/DriverInstall.exe exists whatever the folder inside the zip is called.
+    set(SU_DRIVER_ZIP "${SU_THIRD_PARTY_DIR}/DriverAssistant/DriverAssitant_v5.14.zip")
+    set(SU_DRIVER_EXTRACT_DIR "${CMAKE_CURRENT_BINARY_DIR}/DriverAssistant-extracted")
+    set(SU_DRIVER_STAMP "${CMAKE_CURRENT_BINARY_DIR}/DriverAssistant-extracted.stamp")
+    if(EXISTS "${SU_DRIVER_ZIP}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SU_DRIVER_ZIP}")
+        if(NOT EXISTS "${SU_DRIVER_STAMP}" OR "${SU_DRIVER_ZIP}" IS_NEWER_THAN "${SU_DRIVER_STAMP}")
+            file(REMOVE_RECURSE "${SU_DRIVER_EXTRACT_DIR}")
+            file(ARCHIVE_EXTRACT INPUT "${SU_DRIVER_ZIP}" DESTINATION "${SU_DRIVER_EXTRACT_DIR}")
+            file(TOUCH "${SU_DRIVER_STAMP}")
+        endif()
+        file(GLOB_RECURSE _su_driver_installer "${SU_DRIVER_EXTRACT_DIR}/DriverInstall.exe")
+        if(_su_driver_installer)
+            list(GET _su_driver_installer 0 _su_driver_installer)
+            get_filename_component(SU_TOOL_DRIVER_DIR "${_su_driver_installer}" DIRECTORY)
+        else()
+            message(WARNING "DriverInstall.exe not found in ${SU_DRIVER_ZIP}: the Rockchip drivers will not be bundled")
+        endif()
+    else()
+        message(WARNING "${SU_DRIVER_ZIP} is missing: the Rockchip drivers will not be bundled")
+    endif()
+elseif(UNIX AND NOT APPLE)
+    list(APPEND SU_TOOL_FILES
+        "${SU_THIRD_PARTY_DIR}/rockchip/linux/upgrade_tool"
+        "${SU_THIRD_PARTY_DIR}/rockchip/linux/config.ini"
+        "${SU_THIRD_PARTY_DIR}/rockchip/linux/88-rockusb.rules"
+        "${SU_THIRD_PARTY_DIR}/rockchip/windows/license.txt")   # the one licence text Rockchip ships with the tool
+endif()
+
+# A missing file must not break the build of a partial checkout; the CI jobs check the installed folder.
+set(_su_tool_files_present "")
+foreach(_su_tool IN LISTS SU_TOOL_FILES)
+    if(EXISTS "${_su_tool}")
+        list(APPEND _su_tool_files_present "${_su_tool}")
+    else()
+        message(WARNING "bundled tool file missing: ${_su_tool}")
+    endif()
+endforeach()
+set(SU_TOOL_FILES ${_su_tool_files_present})
+
+if(SU_TOOL_FILES OR SU_TOOL_DRIVER_DIR)
+    # copy_directory_if_different needs CMake 3.26; the older copy_directory always copies (10+ MB per link).
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.26)
+        set(_su_copy_dir copy_directory_if_different)
+    else()
+        set(_su_copy_dir copy_directory)
+    endif()
+    # Replacing a file in third_party/ relinks the executable, which runs the copy steps below again.
+    set(_su_tool_deps ${SU_TOOL_FILES})
+    if(SU_TOOL_DRIVER_DIR)
+        list(APPEND _su_tool_deps "${SU_DRIVER_ZIP}")
+    endif()
+    set_property(TARGET SerialUtility APPEND PROPERTY LINK_DEPENDS ${_su_tool_deps})
+    add_custom_command(TARGET SerialUtility POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SU_TOOLS_DIR}"
+        VERBATIM)
+    if(SU_TOOL_FILES)
+        add_custom_command(TARGET SerialUtility POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SU_TOOL_FILES} "${SU_TOOLS_DIR}"
+            VERBATIM)
+    endif()
+    if(SU_TOOL_DRIVER_DIR)
+        add_custom_command(TARGET SerialUtility POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E ${_su_copy_dir} "${SU_TOOL_DRIVER_DIR}" "${SU_TOOLS_DIR}/DriverAssistant"
+            VERBATIM)
+    endif()
+    if(UNIX AND NOT APPLE AND EXISTS "${SU_THIRD_PARTY_DIR}/rockchip/linux/upgrade_tool")
+        # Git on Windows may not have recorded the executable bit of the vendor binary.
+        add_custom_command(TARGET SerialUtility POST_BUILD
+            COMMAND chmod 755 "${SU_TOOLS_DIR}/upgrade_tool"
+            VERBATIM)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 set(SU_TRANSLATION_TARGETS SerialUtility)
@@ -380,6 +501,11 @@ install(TARGETS SerialUtility
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin)
 install(FILES README.md VERSION.txt DESTINATION .)
+# The flashing tools assembled next to the executable above (generator expression: the config's own folder
+# for multi-config generators). USE_SOURCE_PERMISSIONS keeps the executable bit of the Linux upgrade_tool.
+if(SU_TOOL_FILES OR SU_TOOL_DRIVER_DIR)
+    install(DIRECTORY "${SU_TOOLS_DIR}/" DESTINATION bin/tools USE_SOURCE_PERMISSIONS)
+endif()
 # libssh installs its own ssh.dll / libssh.so.4 (bin/ resp. lib/) through its install rules;
 # ship the OpenSSL crypto library it depends on the same way.
 if(WIN32 AND SU_OPENSSL_CRYPTO_DLL)

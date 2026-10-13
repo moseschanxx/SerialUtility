@@ -54,6 +54,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+; Firmware tab (v0.5): the USB drivers a Node board needs once per PC (ADB for the running board, rockusb
+; for Loader / Maskrom mode). Off by default: most PCs already have them or do not flash boards.
+Name: "installdrivers"; Description: "Install the Rockchip USB drivers (DriverAssistant)"; GroupDescription: "Firmware tab (Node board):"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -66,6 +69,9 @@ Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
+; {app}\tools\ comes with the files above (the bundled Rockchip tools). DriverInstall.exe is a GUI installer the
+; user clicks through, so Setup waits for it before it goes on to the final page.
+Filename: "{app}\tools\DriverAssistant\DriverInstall.exe"; StatusMsg: "Starting the Rockchip driver installer (click through it)..."; Tasks: installdrivers; Flags: waituntilterminated
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
@@ -77,3 +83,5 @@ Type: filesandordirs; Name: "{app}\iconengines"
 Type: filesandordirs; Name: "{app}\generic"
 Type: filesandordirs; Name: "{app}\networkinformation"
 Type: filesandordirs; Name: "{app}\tls"
+; the bundled Rockchip tools (upgrade_tool, adb, DriverAssistant); drivers it installed stay in Windows
+Type: filesandordirs; Name: "{app}\tools"

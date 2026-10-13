@@ -38,7 +38,7 @@ it is a general terminal that speaks bytes.
 | Build | CMake ≥ 3.22 + Ninja (≥ 3.25 for the presets); `CMakePresets.json` (Qt Creator picks it up), `scripts/build.ps1` for the CLI |
 | SSH | libssh 0.11.1 fetched and built from source by CMake (`FetchContent`, SHA-256 pinned, shared `ssh.dll` / `libssh.so.4`), OpenSSL 3 as its crypto backend (`find_package(OpenSSL)`; the `libcrypto` runtime is copied next to the binaries and shipped) |
 | Compiler (Windows) | MSVC 2022 x64 (`D:\Qt\6.8.3\msvc2022_64`), `/W4 /utf-8 /permissive-` |
-| Layout | `src/app` (settings, logging, version), `src/core` (serial + helpers), `src/terminal` (emulator), `src/ui` (widgets), `src/dialogs`, `tests/` |
+| Layout | `src/app` (settings, logging, version), `src/core` (serial + helpers), `src/ssh` (libssh), `src/firmware` (Firmware tab core, v0.5), `src/terminal` (emulator), `src/ui` (widgets), `src/dialogs`, `third_party/` (bundled flashing tools, v0.5), `tests/` |
 | Naming | PascalCase files and classes (`SerialConnection.cpp`), `m_` member prefix, Qt-style camelCase methods, `lc*` logging categories |
 | Includes | Always relative to `src/`: `#include "core/HexUtils.h"`; `ui_Foo.h` for Designer forms |
 | Strings | UI text wrapped in `tr()`; technical text (hex, port names) not translated |
@@ -74,8 +74,8 @@ application `SerialUtility`. Per-user data (quick commands JSON, history) lives 
         ▲ SshProfileStore (ssh_profiles.json) ▲ SecretStore (DPAPI / obfuscated)
 ```
 
-Three CMake targets: **`su_core`** (static lib: `src/app`, `src/core`, `src/terminal`
-minus `TerminalWidget`; links Core/Gui/SerialPort; used by the unit tests), **`su_app`**
+Three CMake targets: **`su_core`** (static lib: `src/app`, `src/core`, `src/ssh`, `src/firmware`,
+`src/terminal` minus `TerminalWidget`; links Core/Gui/SerialPort/Network and libssh; used by the unit tests), **`su_app`**
 (static lib: `TerminalWidget`, every widget and dialog; linked by the GUI test suites) and
 **`SerialUtility`** (the app: `main.cpp` + `su_app` + resources).
 
@@ -119,7 +119,8 @@ may add private members, private slots and helper functions freely, and may add
 | `SessionWidget` | glue for one port session; single TX path `sendBytes()`; system lines; auto-log | see header for exact wiring |
 | `ConnectionBar` | port/baud/8N1/flow/DTR/RTS/Break/Connect controls | keeps selection across hot-plug |
 | `CommandInput` | line-mode input with history, hex, escapes, line ending | validation feedback |
-| `QuickCommandBar` / `QuickCommandStore` / `QuickCommandsDialog` | macros as buttons; JSON persistence; editor | default set below |
+| `QuickCommandBar` / `QuickCommandStore` / `QuickCommandsDialog` | macros as buttons; JSON persistence (file version 2); editor | default set below |
+| `FirmwareTab` + `src/firmware/*` | the Firmware tab (v0.5): pull `update.img`, flash the Rockchip SoC, update the CC1310 over the Node board's USB-C cable | section 4.11 |
 | `FileSender` / `SendFileDialog` | paced text/binary file send | modeless dialog |
 | `SessionLogger` | raw / timestamped text / hex-dump session capture | flush every write |
 | `AppSettings` | typed QSettings façade + `changed(key)` | defaults documented in header |
@@ -129,8 +130,21 @@ may add private members, private slots and helper functions freely, and may add
 
 ### 4.3 Default quick commands
 
-`QuickCommandStore::defaults()` (group → name → command, CR unless noted):
+`QuickCommandStore::defaults()` (group → name → command, CR unless noted). The groups appear in
+this order, **Node first** since v0.5:
 
+- **Node** (`QuickCommandStore::nodeDefaults()`, group name `nodeGroupName()` = "Node"; the Node
+  board's two consoles behind one USB-C cable; button label = command, all with CR, every button
+  has a tooltip): `reboot loader` (SoC console: reboot into the USB download / Loader mode for
+  flashing); `rfmcu console` (SoC console: open the CC1310 CLI through the SoC; `~.` leaves it);
+  then the CC1310 CLI, usable once `rfmcu console` runs, taken from the CC1310 operations
+  runbook (`docs/operations/05_cli_operations.md`, Part B): `help`; `version`;
+  `sys` (`sys | sys wdt_test`); `stack`; `uart` (`uart | uart baud <rate>`);
+  `power` (`power | power off [delay_ms] | power soc on|off`);
+  `bat` (`bat | bat sim <mV>|off | bat charge on|off`); `rx status` (`rx status | rx dump on|off`);
+  `rx dump on`; `rx dump off`; `tx status`; `bootloader` (writes an update request and reboots
+  the CC1310 into its UART updater); and `~.` (leave `rfmcu console`; the console wants it on its
+  own line, so it ends with CR like the rest)
 - **Linux**: `uname -a`; `cpuinfo` → `cat /proc/cpuinfo`; `meminfo` → `cat /proc/meminfo`;
   `df -h`; `ifconfig`; `dmesg tail` → `dmesg | tail -n 50`; `ps`; `top` → `top -n 1`;
   `ls /dev` → `ls -l /dev/tty* /dev/video* 2>/dev/null`; `date`; `reboot`
@@ -138,6 +152,15 @@ may add private members, private slots and helper functions freely, and may add
 - **MCU**: `help`; `version`; `AT` (CRLF); `AT+GMR` (CRLF); `reset`
 - **Control**: `Ctrl+C` (hex `03`); `Ctrl+D` (hex `04`); `Ctrl+Z` (hex `1A`); `ESC` (hex `1B`);
   `Enter` (hex `0D`); `Ctrl+L` (hex `0C`)
+
+The set is 15 + 11 + 7 + 5 + 6 = 44 commands. **File format, version 2 (v0.5):**
+`{ "version": 2, "commands": [...] }` (`QuickCommandStore::fileVersion()`). `load()` of a version-1
+file - or one without a `"version"` key - that has no command whose effective group is "Node" puts
+`nodeDefaults()` in front of the commands and reports it through `*migrated`, so the caller can
+save the file at once (`save()` always writes version 2); a version-1 file that already has Node
+commands is left as it is, a version-2 (or later) file is loaded exactly as written (a user who
+deleted the Node group keeps it deleted), and `importFromFile()` never migrates (it takes what a
+shared file holds). Nothing else in the file is touched.
 
 ### 4.4 Settings defaults (see `AppSettings.h`)
 
@@ -422,6 +445,149 @@ fixed-rate session too. The simulators have native rates (`DeviceSimulator::nati
 1 500 000, MCU 115200, loopback any) and emit paced garbage while the session rate differs, so the
 whole flow is testable offscreen (`tst_bauddetector`, `tst_devicesimulator`, `tst_sessionwidget`).
 
+### 4.11 Firmware tab (v0.5)
+
+Spec: `docs/firmware-update/REQUIREMENTS.md`; plan, and the facts found on the real tools and the
+real board before any code was written: `docs/firmware-update/PLAN.md`. The headers under
+`src/firmware/` and `src/ui/FirmwareTab.h` are the contract and carry the details; this section is
+the map.
+
+**Purpose.** One tab, *File > Firmware Update* (Ctrl+Shift+U), replaces the whole Windows flashing
+routine for the Node board (Rockchip RV1106BG2 SoC + TI CC1310 RF MCU): pull the newest build
+from the Linux build machine, flash the SoC, update the MCU - over the board's single USB-C cable,
+with no vendor GUI, no USB-serial adapter and no MASKROM button; the common case is one button,
+**Pull & Flash**. Unlike the rest of the application this part is device-specific by design; it is
+a tab of its own and touches no behaviour of the serial and SSH tabs.
+
+**Facts the design rests on.**
+
+- The running firmware exposes ADB only (VID 0x2207, PID 0x0006). `adb reboot loader` sets the
+  reboot-mode register, U-Boot enters `download` and shows up as rockusb in *Loader* mode (VID
+  0x2207, PID 0x110x); a board that does not boot can be put into *Maskrom* with the button.
+  `upgrade_tool LD` lists both and prints `Mode=Loader` / `Mode=Maskrom`; `upgrade_tool UF
+  <update.img>` writes the RKFW image (about 11 MB, every partition including userdata), resets
+  the board and prints `Upgrade firmware ok`. `upgrade_tool.exe` v2.37 runs without a `config.ini`
+  (Linux v2.26 reads an optional one next to it).
+- The CC1310's UART0 is wired to the SoC's UART1 (`/dev/ttyS1`, 115200 8N1). `rfmcu bridge 7000`
+  on the board joins it to 127.0.0.1:7000 (one client at a time, exclusive `flock` on the tty);
+  on the PC `adb forward tcp:0 tcp:7000` prints a free local port to connect a socket to. A stale
+  `rfmcu` must be killed first, and again with `adb forward --remove` when done, because adbd does
+  not reliably end the board process when the host side closes.
+- On USB-C power the SoC stays up through the CC1310's reset into its updater (verified on
+  hardware 2026-10-13 with the Python tool); the tab always runs with the cable in, and logs the
+  CLI `power` reply before sending `bootloader`, as `fw_update.py` does.
+
+**Layers.**
+
+```
+FirmwareTab (su_app, one instance in MainWindow's QTabWidget)
+  ├── ImagePuller  ─────► SshConnection (runCommand, statRemote, startTransfer: the SSH stack of 4.8)
+  ├── SocFlasher   ─────► RockchipTool (upgrade_tool LD / SFI / UF) + AdbTool + UsbProbe ─► ToolRunner
+  ├── McuLink      ─────► AdbTool + QTcpSocket ──► McuUpdater ──► CcProtocol / CcPackage
+  └── SessionProvider ──► SessionWidget::sendBytes()     (`reboot loader`, only after a Yes)
+```
+
+All of `src/firmware/` is part of `su_core` (UI-free, Qt Core + Network); only `FirmwareTab` is in
+`su_app`. Every firmware class takes a `ToolRunner*` that it does not own, so the tests slot in a
+`FakeToolRunner` with scripted outputs.
+
+| Class | Role |
+|---|---|
+| `ToolRunner` / `ProcessToolRunner` / `ToolInvocation` | One external process, asynchronous (`QProcess`, merged stdout + stderr delivered raw with `\r`), cancel (terminate, kill after 2 s), `ToolResult` (started, cancelled, timed out, exit code, output). Never blocks the GUI thread; a program that cannot start reports through `finished()` from the event loop. |
+| `ToolLocator` | Where `upgrade_tool`, `adb` and the DriverAssistant installer are: the Preferences override, then `tools/` next to the executable, then (adb only) the first one on `PATH`. |
+| `RockchipTool` | `upgrade_tool` behind the runner and the parsers of its output: `LD` device list (Loader / Maskrom), `SFI` image info, the incremental `UF` progress parser (`\r`-separated segments, `(nn%)`), the success check (`Upgrade firmware ok`), the RKFW magic check. |
+| `AdbTool` | `adb devices` / `get-state` / `reboot loader` / `shell` / `forward tcp:0` / `forward --remove` and the long-running `shell rfmcu bridge`, with the device selection and error texts of `adb_link.py`. |
+| `UsbProbe` | Windows: SetupAPI enumeration of `USB\VID_2207*` (present, driver class, problem code) so "a Rockchip device is plugged in but no driver claims it" can be said and the bundled DriverAssistant offered; Linux: `/sys/bus/usb/devices`; other platforms: nothing. |
+| `SocFlasher` | The flow of `rockchip-platforms/tools/usb_update.sh` as a cancellable state machine (below), plus the 2 s device status (`queryStatus()`). |
+| `CcProtocol` | The CC1310 UART bootloader protocol exactly as `fw_protocol.py` defines it: COBS, CRC16-CCITT (0xFFFF, 0x1021), frame v2 (`<BBHH>` header + payload + CRC16), message ids HELLO ... SET_ROLE, `FrameSplitter`, the INFO payload. |
+| `CcPackage` | The `.pkg` format of `fw_package.py`: the 32-byte FWPK header, header and image CRC32, address 0x8000, size up to 0x17000, version `0x00MMmmpp`; the same checks in the same order with the same reasons. |
+| `McuUpdater` | The `fw_update.py` state machine over a `QIODevice` (Info, Flash, SetRole), every wait a `QTimer` deadline: HELLO, else the application CLI probe, `bootloader`, BEGIN / READY, 128-byte DATA / ACK / NACK with resume, END / COMPLETE, the restart banner; the Python timeouts and retry counts are the defaults. |
+| `McuLink` | The road to the CC1310 through the SoC (`McuUpdater -- QTcpSocket -- adb forward -- USB-C -- rfmcu bridge -- /dev/ttyS1 -- CC1310`): select the board, check `rfmcu`, `killall rfmcu`, `forward tcp:0 tcp:7000`, start `rfmcu bridge 7000`, wait for "bridging", connect; `close()` undoes it all; `cliCommand()` runs `rfmcu cmd` without a bridge. |
+| `ImagePuller` | Over an `SshConnection` the owner connected: stat the remote `update.img`, optional `git describe`, the skip rule, download, RKFW check, one-level history (`update.prev.img`), optional extra files, `rollBack()`. |
+| `FirmwareTab` | The widget: the Source / SoC / MCU sections, Pull & Flash, the log pane; owns the collaborators above and an `SshConnection` of its own. |
+
+**SoC flow** (`SocFlasher::start()`, as `usb_update.sh`): *Detecting* (`LD`, then `adb devices`;
+Loader / Maskrom wins) -> an ADB device is told `adb reboot loader` (*RebootingToLoader*, after
+logging its `/proc/version`; busybox on the board has no `uname`) -> with no board at all
+`downloadModeNeeded()` lets the tab offer `reboot loader\r` through a connected session tab (asked
+every time) or show the MASKROM instructions -> *WaitingForLoader* (`LD` every second, 30 s) ->
+*Flashing* (`UF`, progress, the success line is required; **not cancellable**) ->
+*WaitingForAdb* (`adb get-state`, 60 s; a late board is a success with a warning) ->
+*ReadingBoardInfo* (`/proc/version`, `uptime`). The image must exist and carry the RKFW magic.
+
+**MCU flow.** `McuLink::open()` brings the bridge up (above); `McuUpdater::flash(role)` runs the
+connect sequence (HELLO twice; otherwise probe the CLI, log `power` when `throughSoc`, `bootloader`,
+wait 500 ms, HELLO up to ten times), checks target and size, sends BEGIN (the package header plus
+the role), the DATA chunks, END, and waits for the restart banner (`version=` ... `cli=ready`, 8 s);
+a NACK resumes from the offset the device reports. The role is chosen by the user, pre-selected
+from what the MCU reports, never guessed silently. `setRole()` sends SET_ROLE only.
+
+**Pull flow** (`ImagePuller::start()`): stat -> `git describe` (never an error) -> skip when the
+cached note matches size and mtime -> download to `update.img.new` (the transfer writes
+`<path>.part` and renames) -> RKFW check -> rotate the old image to `update.prev.img` -> write the
+note `update.img.json`.
+
+**Pull & Flash** chains pull (skipped when unchanged), Flash SoC, the wait for ADB and, when a
+package is selected whose version differs from the running MCU version (read after the SoC is
+back), Update MCU. SoC first because the MCU path needs `rfmcu` on the SoC; it stops at the first
+failure.
+
+**SSH stack additions** (no behaviour change for session tabs): `SshConnection::runCommand()`
+(an exec channel without PTY, `commandFinished(id, exitStatus, output, errorText)`) and
+`statRemote()` (SFTP stat, falling back to `stat -c '%s %Y %F'`; `remoteStatReceived(...)`), both
+asynchronous on the worker; `tests/support/TestSshServer` answers the stat and the scripted
+`git describe` commands.
+
+**Main window integration.** The `QTabWidget` may now hold one non-session tab: `currentSession()`
+and `sessionAt()` are null-safe, session actions (Connect, Send File, Upload, Hex View, ...) are
+disabled while the Firmware tab is current, it is not saved or restored as a port, the Window menu
+lists it, closing it is refused while it is busy and quitting asks once like a connected session.
+`File > Firmware Update` selects the existing tab rather than opening a second one. The tab's
+`statusMessage()` goes to the status bar like a session's.
+
+**Rules it follows.** Nothing blocks the GUI thread (every tool is a `QProcess`, every wait a
+timer); errors go to the status bar and the log pane, not to modal boxes - the only questions
+asked are the ones that have to be (the SSH host-key and password prompts of 4.8, sending
+`reboot loader` through a session tab, quitting while busy); every UI string is `tr()`; every
+external command line and its output go to the log pane and to the System Log (`lcFirmware`),
+never a password or key; Cancel exists only where it is safe (waiting for the Loader, never during
+`UF`). The first real flash of a board is an integration test of its own: what will run on it is
+announced before it runs (`docs/firmware-update/PLAN.md`, "Ask me before").
+
+**Settings** (`firmware/` group of `AppSettings`, edited in *Preferences > Firmware*): the last
+source target, the remote folder per target (default `~/rk/rockchip-platforms/output/image`), the
+cache folder (default `<data>/firmware`), the last local image and package, the `upgrade_tool` and
+`adb` path overrides, the Loader wait (30 s) and ADB-return wait (60 s), `git describe` on or off,
+extra remote file names.
+
+**Packaging.** The tools are plain files in `third_party/` (provenance, versions and licences:
+`third_party/README.md`): `rockchip/windows/` (`upgrade_tool.exe` v2.37, `license.txt` - the LGPL
+v3 text Rockchip ships with it - and `revison.log`), `rockchip/linux/` (`upgrade_tool` v2.26,
+`config.ini`, `88-rockusb.rules`), `adb/` (`adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll` from
+FactoryTool v1.91: its adb 1.0.41 supports `forward tcp:0` and shell_v2) and
+`DriverAssistant/DriverAssitant_v5.14.zip`. CMake assembles `tools/` next to the executable after
+each link of `SerialUtility` (the zip is extracted once at configure time and flattened so that
+`tools/DriverAssistant/DriverInstall.exe` exists; Windows only) and `cmake --install` ships it as
+`bin/tools/`; the portable zip, the tarball and the installer take `bin/` recursively. The Inno
+Setup script has an optional, unchecked task "Install the Rockchip USB drivers (DriverAssistant)"
+that runs `DriverInstall.exe` (a GUI installer) and removes `{app}\tools` on uninstall. Both CI
+jobs check after the install that the tools landed. On Linux the bundled Linux `upgrade_tool` is
+used with the system `adb`, so CI builds and tests run without any hardware. A native
+implementation of the rockusb / ADB protocols (libusb / WinUSB) instead of the bundled tools was
+deliberately not done: the requirements make it a decision to ask for first.
+
+**Tests** (all offscreen / headless, no board, neither the build nor the tests run Python):
+`tst_ccprotocol` (known-answer vectors generated once with the CC1310 repository's Python tools and
+committed under `tests/data/firmware/`: COBS, CRC16 `123456789` = 0x29B1, frames, a small `.pkg`,
+`firmware-0.8.1.pkg`), `tst_mcuupdater` (the C++ `FakeMcu` behind a `QTcpServer`: full update, a
+CC1310 already in its updater, NACK and resume, a lost frame, the banner after COMPLETE, set role,
+`power` logged before `bootloader`), `tst_firmwaretools` (the `LD` / `SFI` / `UF` / adb parsers,
+`SocFlasher` and `McuLink` with fake tools, the driver hint), `tst_imagepuller` (against
+`TestSshServer`: stat, skip, `.part`, magic, history, `git describe`), `tst_firmwaretab` (the GUI:
+the action, single instance, enable states, a pull, a flash and an MCU update with the fakes, the
+main window's actions while the tab is current, close and restore) and `tst_quickcommand` (the
+Node group and the version-1 migration of 4.3).
+
 ## 5. Build, run, test
 
 ```powershell
@@ -482,8 +648,28 @@ its own.
 | **ssh-ui** | prompt checkbox labels, transfer method text, the real-server transfer investigation (env-gated GUI probe + `gui-smoke.ps1 -Scenario sshfiles`), `tst_sshdialogs`, `tst_sshsession` |
 | **autobaud** | `BaudRateDetector`, `SerialSettings::autoBaud`, simulator native rates / garbage, the bar's Auto item, session detection + watchdog, their suites |
 
+### 6.3 v0.5.0 work packages (Firmware tab)
+
+Same rules as 6.1. The headers of every new class (`src/firmware/*.h`, `src/ui/FirmwareTab.h`, the
+two new `SshConnection` calls, the `QuickCommandStore` additions) were written first as the
+contracts, with compile-only stubs behind them; then five packages ran side by side, each in its
+own `build/wf-<pkg>` directory (two at a time on a 4-core machine), followed by integration, a
+review of the integrated tree and the run against the real board
+(`docs/firmware-update/PLAN.md`, "Work packages").
+
+| Package | Files owned |
+|---|---|
+| **protocol** | `CcProtocol`, `CcPackage`, `McuUpdater`, `tests/support/FakeMcu`, `tst_ccprotocol`, `tst_mcuupdater`, the known-answer data under `tests/data/firmware/` |
+| **tools** | `ToolRunner` / `ProcessToolRunner` / `ToolLocator`, `RockchipTool`, `AdbTool`, `UsbProbe`, `McuLink`, `SocFlasher`, `tests/support/FakeToolRunner`, `tst_firmwaretools` |
+| **ssh-pull** | `SshConnection` / `SshWorker` `runCommand()` and `statRemote()`, `ImagePuller`, the `TestSshServer` stat / `git describe` commands, `tst_imagepuller` |
+| **ui** | `FirmwareTab`, the `MainWindow` integration (one non-session tab, actions, close rules), the `AppSettings` firmware keys, *Preferences > Firmware*, the icon, `tst_firmwaretab`, translations |
+| **packaging-docs** | `third_party/` (tools, provenance, licences), the CMake packaging step and version 0.5.0, the CI checks, the Inno Setup driver task, the `QuickCommandStore` Node group and version-2 file + `tst_quickcommand`, `README.md`, this document (4.3, 4.11, 6.3, 7), `docs/QUICKSTART.md`, `VERSION.txt` |
+
 ## 7. Future work
 
-TCP/telnet transport; XMODEM/YMODEM; search in scrollback UI; split view; Linux packaging
+TCP/telnet transport; XMODEM/YMODEM; split view; Linux packaging
 (AppImage/deb); auto-update check; SSH: agent authentication on Windows (libssh has no agent
-support there), remote port forwards, SFTP browser.
+support there), remote port forwards, SFTP browser. Firmware tab: the rockusb and ADB protocols
+natively (libusb / WinUSB) instead of the bundled tools (needs a decision first, see 4.11); a
+macOS build of the tab (no `upgrade_tool` is bundled for it); updating a CC1310 that sits behind
+a USB-serial adapter instead of the SoC (`McuUpdater` already works on any `QIODevice`).

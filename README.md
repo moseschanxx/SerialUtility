@@ -9,8 +9,9 @@ ad-hoc use of PuTTY, minicom and SecureCRT with a tool that logs everything, rem
 commands, survives board reboots and lives in the same Qt / CMake ecosystem as the team's
 other tools.
 
-It intentionally contains **no device-specific protocol logic**: it is a general terminal that
-speaks bytes.
+The terminal itself contains **no device-specific protocol logic**: it is a general terminal that
+speaks bytes. The one device-specific part is the **Firmware tab** (v0.5), a separate tab that
+flashes the BuildAI Node board (Rockchip RV1106 SoC + TI CC1310 RF MCU) over its USB-C cable.
 
 ## Features
 
@@ -24,6 +25,14 @@ speaks bytes.
   aliases are honoured, passwords can be remembered (Windows DPAPI), the shell follows the
   window size, keep-alives detect dead links and a dropped connection reconnects by itself.
   Upload / download files over SFTP (drag a file onto the terminal to upload).
+- **Firmware tab** (*File > Firmware Update*, Ctrl+Shift+U) - one tab that replaces the whole
+  Windows flashing routine for the Node board: **pull** the newest `update.img` from the Linux
+  build machine over the SSH stack (size / time / `git describe` shown first, unchanged images
+  skipped, one-level history with *Roll back*), **flash the SoC** with Rockchip's `upgrade_tool`
+  (the tab puts the board into Loader mode over ADB by itself), **update the CC1310** with a
+  native C++ implementation of its UART updater protocol through the SoC, and **Pull & Flash**
+  to do all three with one button - everything over the board's single USB-C cable, with
+  `upgrade_tool`, `adb` and the Rockchip USB drivers bundled in the package.
 - **Real terminal emulation** - VT100 / xterm subset: cursor movement, erase/insert/delete,
   scroll regions, 16 / 256 / true colours, alternate screen (`top`, `vi`, `menuconfig`),
   bracketed paste, DSR / DA replies, window title. Chinese and other CJK text occupies two
@@ -60,9 +69,10 @@ speaks bytes.
   MCU shell with telemetry. Hide them in *Preferences > Connection* for production use.
 - **Line parameters on the fly** - baud, data bits, parity, stop bits and flow control are
   applied to an open port immediately. DTR / RTS toggles (reset / boot pins) and **Send BREAK**.
-- **Quick commands** - user-defined macros shown as buttons, grouped (Linux, U-Boot, MCU,
+- **Quick commands** - user-defined macros shown as buttons, grouped (Node, Linux, U-Boot, MCU,
   Control), with optional shortcuts, HEX payloads (`03` for Ctrl+C) and C-style escapes. Import
-  / export as JSON.
+  / export as JSON. The *Node* group (v0.5) holds the SoC console's `reboot loader` and
+  `rfmcu console` and the CC1310 CLI commands.
 - **Command input line** - line-mode input with history (persisted), hex mode, escape
   interpretation and a per-line line-ending selector (none / CR / LF / CRLF).
 - **Send file** - paced transfer of shell scripts or U-Boot environments line by line, or raw
@@ -98,6 +108,12 @@ pinned) and builds from source at configure time; it needs OpenSSL. The resultin
 `libssh.so.4` and `libcrypto` are copied next to the executables and shipped with every package,
 so end users install nothing.
 
+The Firmware tab drives three third-party **programs** (not libraries), kept as plain files in
+`third_party/` with their provenance and licences (`third_party/README.md`, about 20 MB): Rockchip's
+`upgrade_tool` (Windows v2.37, Linux v2.26), Rockchip's build of `adb` with its two DLLs, and
+the Rockchip USB driver installer (DriverAssistant 5.14). The build copies them to `tools/` next to
+the executable and `cmake --install` ships that folder as `bin/tools/`; nothing is downloaded.
+
 ## Building
 
 ### Windows - `scripts/build.ps1` (recommended)
@@ -128,9 +144,11 @@ There are two kinds of Qt Test suites under `tests/`:
 
 - **Unit tests** linked against `su_core` (`tst_hexutils`, `tst_lineending`, `tst_commandhistory`,
   `tst_quickcommand`, `tst_charwidth`, `tst_terminalscreen`, `tst_ansiparser`,
-  `tst_serialsettings`, `tst_devicesimulator`, `tst_logreplayer`).
+  `tst_serialsettings`, `tst_devicesimulator`, `tst_logreplayer`, and for the Firmware tab
+  `tst_ccprotocol`, `tst_mcuupdater`, `tst_firmwaretools`, `tst_imagepuller`: scripted fake tools
+  and a C++ fake CC1310, no hardware and no Python).
 - **GUI tests** linked against `su_app`, which drive the real widgets and dialogs
-  (`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`). They talk to the
+  (`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`, `tst_firmwaretab`). They talk to the
   built-in `SIM:` pseudo-ports, never to a real COM port, and they run **offscreen**: ctest sets
   `QT_QPA_PLATFORM=offscreen` for every test, so no window appears and the suites also pass on a
   headless CI runner. Each GUI suite uses its own QSettings scope (`BuildAI-Test` /
@@ -207,6 +225,12 @@ The Linux tarball published by CI is built the same way (`bin/`, `lib/`, `plugin
 and is self-contained except for the system X11/xcb libraries, which users install via apt:
 `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libgl1`.
 
+Both packages carry the flashing tools in `bin/tools/` next to the executable (Windows:
+`upgrade_tool.exe`, `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `license.txt`, `revison.log`,
+`DriverAssistant\DriverInstall.exe` and its drivers; Linux: `upgrade_tool`, `config.ini`,
+`88-rockusb.rules`, `license.txt`; on Linux `adb` comes from the system `PATH`). CI checks that
+they landed after `cmake --install`.
+
 ### Packaging (Windows zip + installer)
 
 ```powershell
@@ -217,7 +241,11 @@ and is self-contained except for the system X11/xcb libraries, which users insta
 Produces `dist\BuildAI-SerialUtility-<version>-windows-x64.zip`,
 `dist\installer\BuildAI-SerialUtility-<version>-windows-x64-setup.exe` (needs
 [Inno Setup 6](https://jrsoftware.org/isdl.php): `winget install JRSoftware.InnoSetup`) and
-`dist\SHA256SUMS.txt`. The installer script lives in `packaging/windows/`.
+`dist\SHA256SUMS.txt`. The installer script lives in `packaging/windows/`. Its optional task
+**Install the Rockchip USB drivers (DriverAssistant)** (unchecked by default) starts the bundled
+`tools\DriverAssistant\DriverInstall.exe` at the end of the installation; it is a GUI installer
+you click through, needed once per PC before the Firmware tab can see a Node board. The
+uninstaller removes `{app}\tools`.
 
 ### Releasing (CI/CD)
 
@@ -362,6 +390,79 @@ luckfox                     a Host alias from ~/.ssh/config (user, port, key and
 - Windows limitation: libssh has no ssh-agent support on Windows, so use key files (or Pageant's
   keys exported to files) there; on Linux the agent from `SSH_AUTH_SOCK` is used.
 
+### Firmware tab (flash the Node board)
+
+*File > Firmware Update* (**Ctrl+Shift+U**) opens the Firmware tab, one instance next to the
+session tabs (a second invocation selects it). It replaces the old routine - a Python SFTP puller,
+Rockchip's GUI flashing tool and a USB-serial adapter plus `fw_update.py` for the RF MCU - with
+one tab, and everything runs over the Node board's single USB-C cable: the running firmware
+shows up as an **ADB** device (USB 2207:0006), `adb reboot loader` puts the SoC into the U-Boot
+**Loader** (rockusb) mode that `upgrade_tool` flashes, and the CC1310 is reached through the SoC
+(`adb forward` to an `rfmcu bridge` on the board). No vendor GUI, no serial adapter, no MASKROM
+button. The tab has three sections and a log pane:
+
+- **Source** - where the image comes from. *Build machine* is an SSH profile, a recent target or
+  a free `user@host[:port]` (the same prompts as an SSH tab: host key, password / passphrase,
+  *Remember*); *Remote folder* defaults to `~/rk/rockchip-platforms/output/image` and is
+  remembered per target; *Local cache* is where the images are kept. **Pull** shows the remote
+  `update.img` (size, time, `git describe` of the SDK) and downloads it unless the cached copy
+  has the same size and time; the download goes to a `.part` file, is checked for the RKFW magic
+  and only then replaces the cached image, which becomes the *previous* one (**Roll back** swaps
+  them, so a bad build is one click away from the last good one). **Use local image...** takes any
+  `*.img` file instead - the offline route.
+- **SoC** - a status line refreshed every 2 s tells what the PC sees: *ADB device <serial>*,
+  *Loader mode*, *Maskrom mode*, *no board*, or - when a Rockchip USB device is plugged in but no
+  driver claims it - the hint to install the drivers. The image line shows what `upgrade_tool`
+  says about the selected image (chip, build time, entries). **Flash SoC** gets the board into
+  download mode in this order: already Loader / Maskrom (also the recovery path for a board that
+  does not boot) -> ADB device (`adb reboot loader`) -> a connected serial or SSH tab (the tab
+  asks, every time, whether to send `reboot loader` through it) -> otherwise it tells you to hold
+  MASKROM and plug the board in. It then waits (30 s by default) for Loader / Maskrom, runs
+  `upgrade_tool UF` with a progress bar, requires the line `Upgrade firmware ok`, waits for the
+  board to come back on ADB (60 s) and shows its kernel version and uptime. **Cancel** works
+  while waiting, never while `upgrade_tool` writes the flash.
+- **MCU (CC1310)** - pick a firmware package (`firmware-x.y.z.pkg`); the header and both CRC32s
+  are checked and target, version and size are shown (a bad file is refused with the reason).
+  **Read** asks the running MCU for its version and role through ADB; the role (**rx** or **tx**)
+  is pre-selected from what the MCU reports and **you confirm it** - the tool never guesses
+  silently. **Update MCU** reboots the CC1310 into its UART updater, sends the package (progress
+  per acknowledged block), waits for the restart banner and shows the new version; **Set role**
+  changes only the role. The updater protocol (COBS framing, CRC16, the `fw_update.py` state
+  machine and its retries) is implemented natively in C++ - nothing runs Python. The MCU path
+  needs `rfmcu` on the SoC, so flash the SoC first.
+- **Pull & Flash** - pull (skipped when unchanged) -> Flash SoC -> wait for ADB -> if a package is
+  selected and its version differs from the running MCU version, Update MCU. It stops at the
+  first failure and says which step it was.
+- **Log** - every command line that runs, the tools' output and the steps' narration, time
+  stamped and without secrets (also in the System Log); *Save...* writes it to a text file.
+
+While a flash runs the tab cannot be closed (the status bar says why) and quitting asks first;
+session actions such as Connect or Send File are disabled while the Firmware tab is the current
+tab. The tab is not restored on the next start like a port is.
+
+**Drivers (Windows).** The PC needs the Rockchip USB drivers once: the ADB driver for the running
+board and the rockusb driver for Loader / Maskrom mode. When a 2207:xxxx device is on the bus and
+neither `adb` nor `upgrade_tool` sees it, the SoC status line says so and **Install drivers**
+starts the bundled DriverAssistant (a GUI installer you click through); the Windows
+installer also offers it as an optional task. By hand: `tools\DriverAssistant\DriverInstall.exe`.
+
+**Where the tools live.** In `tools\` next to the executable (see *Deploying*). The tab uses, in
+this order, the path set in *Preferences > Firmware*, the bundled copy, and - for `adb` only -
+the first `adb` on `PATH`. *Preferences > Firmware* also holds the Loader / ADB wait times, the
+cache folder and whether to run `git describe` on the build machine. On Linux `upgrade_tool` needs
+a udev rule to open the USB device without root (then re-plug the board):
+
+```bash
+sudo cp tools/88-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+```
+
+**Node quick commands.** The first quick-command group, *Node*, belongs to this board:
+`reboot loader` (on the SoC's Linux console: reboot into the download mode, the manual
+alternative to the tab's automatic step), `rfmcu console` (open the CC1310's CLI through the SoC)
+and, once inside it, the CC1310 commands - `help`, `version`, `sys`, `stack`, `uart`, `power`,
+`bat`, `rx status`, `rx dump on|off`, `tx status`, `bootloader` (reboot the CC1310 into its UART
+updater) - and `~.`, which leaves the `rfmcu console` again. Their tooltips carry the usage.
+
 ### Quick commands
 
 *Edit > Quick Commands...* opens the editor. Each row has a name, the command text, a group
@@ -369,8 +470,11 @@ luckfox                     a Host alias from ~/.ssh/config (user, port, key and
 selector; *All* shows every command), the line ending appended, a **HEX** flag (the text is
 parsed as hex bytes, no line ending), an **Escapes** flag (`\n`, `\r`, `\t`, `\xHH`, `\uHHHH`),
 an optional shortcut and a tooltip. *Import...* / *Export...* exchange the JSON file with
-colleagues; *Restore Defaults* brings back the Linux / U-Boot / MCU / Control starter set. The
-list is stored at `AppSettings::dataDirectory()/quick_commands.json`.
+colleagues; *Restore Defaults* brings back the Node / Linux / U-Boot / MCU / Control starter set.
+The list is stored at `AppSettings::dataDirectory()/quick_commands.json` (file version 2).
+When 0.5 starts with a `quick_commands.json` written by an earlier release (version 1) that
+has no *Node* group, the group is added in front of your commands once and the file is saved as
+version 2; nothing else in it changes, and a group you delete later stays deleted.
 
 ### Sending a file
 
@@ -457,6 +561,7 @@ applies first and the queued output then continues on the empty screen.
 |---|---|
 | Ctrl+T / Ctrl+Shift+W | New session tab / close tab (Ctrl+W goes to the device: it deletes a word in a shell) |
 | Ctrl+Shift+T | New SSH session tab |
+| Ctrl+Shift+U | Firmware tab (File > Firmware Update): pull, flash the SoC, update the CC1310 |
 | Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PageDown / Ctrl+PageUp | Next / previous tab |
 | Alt+1 .. Alt+9 | Select tab 1..9 (also in the *Window* menu); a middle click on a tab closes it |
 | Ctrl+Shift+B | Detect the serial baud rate |
@@ -488,23 +593,29 @@ those actions and the keys reach the shell.
 
 ```
 MainWindow (tabs, menus, status bar, System Log dock)
-  └── SessionWidget x N   (serial or SSH)
-        ├── ConnectionBar | SshConnectionBar     port + line parameters | target + profiles
-        ├── TerminalWidget  ──►  AnsiParser  ──►  TerminalScreen   (or HexDumpView)
-        ├── QuickCommandBar      QuickCommandStore (shared)
-        ├── CommandInput         CommandHistory (shared)
-        ├── Transport            SerialConnection (QSerialPort + auto-reconnect)
-        │                        | SshConnection (libssh on a worker thread, SFTP, forwards)
-        └── SessionLogger
+  ├── SessionWidget x N   (serial or SSH)
+  │     ├── ConnectionBar | SshConnectionBar     port + line parameters | target + profiles
+  │     ├── TerminalWidget  ──►  AnsiParser  ──►  TerminalScreen   (or HexDumpView)
+  │     ├── QuickCommandBar      QuickCommandStore (shared)
+  │     ├── CommandInput         CommandHistory (shared)
+  │     ├── Transport            SerialConnection (QSerialPort + auto-reconnect)
+  │     │                        | SshConnection (libssh on a worker thread, SFTP, forwards)
+  │     └── SessionLogger
+  └── FirmwareTab (v0.5, one)
+        ├── ImagePuller          SshConnection: stat, download, history
+        ├── SocFlasher           RockchipTool (upgrade_tool) + AdbTool, UsbProbe
+        └── McuLink + McuUpdater adb forward -> rfmcu bridge -> CC1310 (CcProtocol, CcPackage)
 Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender),
          HostKey, AuthPrompt, SshProfiles, RemoteFile (SFTP)
 ```
 
-Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/ssh`, `src/terminal`
-minus the widget; UI-free, unit-tested), `su_app` (static library: every widget and dialog, linked
-by the GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources), plus libssh built
-from source. Everything runs on the GUI thread except the SSH worker thread behind each
-`SshConnection`; `QSerialPort` is asynchronous and rendering is coalesced to 16 ms.
+Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/ssh`, `src/firmware`,
+`src/terminal` minus the widget; UI-free, unit-tested), `su_app` (static library: every widget and
+dialog, linked by the GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources),
+plus libssh built from source. Everything runs on the GUI thread except the SSH worker thread
+behind each `SshConnection`; `QSerialPort` is asynchronous, rendering is coalesced to 16 ms, and
+the external flashing tools run as asynchronous `QProcess` children (never waited for on the GUI
+thread).
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) - architecture, conventions, module contracts, work packages.
 - [`docs/TERMINAL_EMULATION.md`](docs/TERMINAL_EMULATION.md) - supported escape sequences and key mapping.
@@ -522,17 +633,26 @@ SerialUtility/
 │   │                   CommandHistory, QuickCommand(Store), FileSender, SessionLogger,
 │   │                   DeviceSimulator (SIM: pseudo-ports), Transport (serial | SSH interface)
 │   ├── ssh/            SshConnection (libssh worker), SshProfile(Store), SecretStore
+│   ├── firmware/       Firmware tab core: ToolRunner / ToolLocator, RockchipTool (upgrade_tool),
+│   │                   AdbTool, UsbProbe, SocFlasher, McuLink, McuUpdater, CcProtocol, CcPackage,
+│   │                   ImagePuller (UI-free, unit-tested with fake tools)
 │   ├── terminal/       TerminalScreen, AnsiParser, CharWidth, TerminalTheme, TerminalWidget
 │   ├── ui/             MainWindow, SessionWidget, ConnectionBar, SshConnectionBar, CommandInput,
-│   │                   QuickCommandBar, HexDumpView, SystemLogViewer
+│   │                   QuickCommandBar, HexDumpView, SystemLogViewer, FirmwareTab
 │   ├── dialogs/        About, Version, Preferences, QuickCommands, SendFile,
 │   │                   HostKey, AuthPrompt, SshProfiles, RemoteFile (.ui + .cpp)
 │   └── main.cpp
+├── third_party/        bundled flashing tools with provenance and licences (README.md): Rockchip
+│                       upgrade_tool (Windows, Linux), adb + DLLs, DriverAssistant zip; CMake copies
+│                       them to tools/ next to the executable and installs them as bin/tools/
 ├── tests/              Qt Test suites: unit tests (su_core) and offscreen GUI tests (su_app);
-│                       support/TestSshServer - in-process libssh server for the SSH suites
+│                       support/TestSshServer - in-process libssh server for the SSH suites,
+│                       FakeToolRunner / FakeMcu - scripted tools and a fake CC1310 for the firmware suites;
+│                       data/ - known-answer vectors and sample packages (tests/data/firmware/)
+├── packaging/windows/  Inno Setup script and licence for the installer
 ├── translations/       en_US.ts, zh_CN.ts
 ├── resources/          icons, resources.qrc, resources.rc
-└── docs/               DESIGN.md, TERMINAL_EMULATION.md, QUICKSTART.md
+└── docs/               DESIGN.md, TERMINAL_EMULATION.md, QUICKSTART.md, firmware-update/
 ```
 
 Settings are stored under organisation `BuildAI`, application `SerialUtility` (registry on
@@ -556,6 +676,12 @@ Windows). Per-user data files (quick commands, history) live in
 | SSH: connects but authentication fails with a key | The server does not accept that key (check `authorized_keys` on the board), or the key needs a passphrase you cancelled. Set *Authentication: Public key* with the file in the profile to see libssh's exact error in the System Log. |
 | SSH: prompt appears but typing shows nothing | The startup / remote command is still running, or the server did not grant a PTY (some restricted shells); try *Session > Reset Terminal*, then reconnect with an empty remote command. |
 | SSH: the app does not start, "ssh.dll" or "libcrypto-3-x64.dll" missing | The portable zip was unpacked incompletely - the two DLLs must sit next to the executable (the installer always places them). |
+| Firmware: the SoC line says "no board" | Plug the USB-C cable into the Node board's data port and power it. The running firmware appears as an ADB device; on Windows that needs the Rockchip drivers once (next row). A board that does not boot needs MASKROM: hold the button, plug in. |
+| Firmware: the SoC line says a Rockchip device is present but has no driver | Press **Install drivers** (or run `tools\DriverAssistant\DriverInstall.exe`, or tick the installer's driver task), then re-plug the board. |
+| Firmware: "board did not enter MASKROM/Loader within 30 s" | `adb reboot loader` did not take: send `reboot loader` from a serial / SSH tab (the *Node* quick command), or hold MASKROM and replug; the wait time is in *Preferences > Firmware*. |
+| Firmware: "upgrade_tool did not report success" | The message carries the last lines of its output (also in the log pane). Do not unplug during the write; run Flash SoC again - a board in Loader or Maskrom mode is flashed directly. |
+| Firmware: the MCU step says "no rfmcu" or "no ADB board attached" | The CC1310 is reached through `rfmcu` on the SoC, so the SoC image must be `rockchip-platforms` `rv1106-bg2-main` v1.2.0 or later and the board must be back on ADB: flash the SoC first. |
+| Firmware (Linux): `upgrade_tool` cannot open the USB device | Install the udev rule: `sudo cp tools/88-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules`, then re-plug. |
 
 The **System Log** dock (*View > System Log*) shows every port open / close / error with a
 timestamp; *Help > Version* has a **Copy** button that collects everything needed for a bug
