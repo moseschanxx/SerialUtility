@@ -32,6 +32,7 @@
 
 #include "firmware/AdbTool.h"
 #include "firmware/McuLink.h"
+#include "firmware/McuUpdater.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/SocFlasher.h"
 #include "firmware/ToolRunner.h"
@@ -323,6 +324,9 @@ private slots:
     void soc_waitForAdbOff();
     void soc_boardInfoFailureIsStillSuccess();
     void soc_cancelWhenIdleAndRestart();
+
+    // ---- Real board (env-gated; nothing is flashed) ----
+    void realBoard_statusAndMcuInfo();
 };
 
 // =============================================================================================
@@ -2936,6 +2940,88 @@ int main(int argc, char** argv)
     app.setAttribute(Qt::AA_Use96Dpi, true);
     tst_firmwaretools test;
     return QTest::qExec(&test, argc, argv);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Real board probe. Runs only when SU_FIRMWARE_PROBE_SERIAL names an attached Node board (its
+// adb serial); SU_FIRMWARE_PROBE_ADB / SU_FIRMWARE_PROBE_UPGRADE_TOOL give the tool paths (adb
+// falls back to ToolLocator, i.e. PATH). Read-only on the SoC side: `upgrade_tool LD`,
+// `adb devices`, then the CC1310 is reached through `rfmcu bridge` and asked for its version
+// (McuUpdater::info() never enters the updater). A stale `rfmcu` on the board is ended, as every
+// link open does. Nothing is written to the flash.
+// ---------------------------------------------------------------------------------------------
+void tst_firmwaretools::realBoard_statusAndMcuInfo()
+{
+    const QString serial = qEnvironmentVariable("SU_FIRMWARE_PROBE_SERIAL");
+    if (serial.isEmpty()) {
+        QSKIP("set SU_FIRMWARE_PROBE_SERIAL=<adb serial> (and SU_FIRMWARE_PROBE_UPGRADE_TOOL, SU_FIRMWARE_PROBE_ADB) to probe a real board");
+    }
+    const QString adb = ToolLocator::locate(ToolLocator::Tool::Adb, qEnvironmentVariable("SU_FIRMWARE_PROBE_ADB"));
+    const QString upgradeTool = ToolLocator::locate(ToolLocator::Tool::UpgradeTool,
+                                                    qEnvironmentVariable("SU_FIRMWARE_PROBE_UPGRADE_TOOL"));
+    QVERIFY2(!adb.isEmpty(), "adb not found (SU_FIRMWARE_PROBE_ADB or PATH)");
+    QVERIFY2(!upgradeTool.isEmpty(), "upgrade_tool not found (SU_FIRMWARE_PROBE_UPGRADE_TOOL)");
+    qInfo() << "probe: adb" << adb << "upgrade_tool" << upgradeTool << "serial" << serial;
+
+    ProcessToolRunner runner;
+
+    // 1. The SoC status line the tab shows: an ADB device with that serial (the board runs).
+    SocFlasher flasher(&runner);
+    flasher.upgradeTool()->setToolPath(upgradeTool);
+    flasher.adb()->setAdbPath(adb);
+    flasher.setSerial(serial);
+    QSignalSpy statuses(&flasher, &SocFlasher::statusChanged);
+    QSignalSpy flasherLog(&flasher, &SocFlasher::logLine);
+    flasher.queryStatus();
+    QTRY_VERIFY_WITH_TIMEOUT(statuses.count() >= 1, 30000);
+    const auto status = statuses.last().at(0).value<SocFlasher::DeviceStatus>();
+    qInfo() << "probe: status" << status.text() << status.detail << status.hint;
+    QCOMPARE(status.mode, SocFlasher::DeviceStatus::Mode::Adb);
+    QCOMPARE(status.serial, serial);
+
+    // 2. The MCU through the SoC: McuLink (killall rfmcu, forward, bridge, socket) + info().
+    McuLink link(&runner);
+    link.adb()->setAdbPath(adb);
+    link.setSerial(serial);
+    QSignalSpy opened(&link, &McuLink::opened);
+    QSignalSpy failed(&link, &McuLink::failed);
+    QSignalSpy closed(&link, &McuLink::closed);
+    QSignalSpy linkLog(&link, &McuLink::logLine);
+    QVERIFY(link.open());
+    QTRY_VERIFY_WITH_TIMEOUT(opened.count() + failed.count() >= 1, 30000);
+    for (const auto& row : linkLog) {
+        qInfo() << "probe: link" << row.at(0).toString();
+    }
+    QVERIFY2(failed.isEmpty(), failed.isEmpty() ? "" : qPrintable(failed.first().at(0).toString()));
+    QVERIFY(link.isOpen());
+    QVERIFY(link.socket());
+    qInfo() << "probe: bridge on local port" << link.localPort();
+
+    McuUpdater updater;
+    updater.setDevice(link.socket());
+    updater.setThroughSoc(true);
+    QSignalSpy finished(&updater, &McuUpdater::finished);
+    QSignalSpy appInfo(&updater, &McuUpdater::applicationInfo);
+    QSignalSpy devInfo(&updater, &McuUpdater::deviceInfo);
+    QSignalSpy updaterLog(&updater, &McuUpdater::logLine);
+    QVERIFY(updater.info());
+    QTRY_VERIFY_WITH_TIMEOUT(finished.count() == 1, 30000);
+    for (const auto& row : updaterLog) {
+        qInfo() << "probe: updater" << row.at(0).toString();
+    }
+    qInfo() << "probe: info finished" << finished.first().at(0).toBool() << finished.first().at(1).toString();
+    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+    // A running application answers the CLI probe; a board left in the updater answers INFO.
+    QVERIFY(appInfo.count() == 1 || devInfo.count() >= 1);
+    if (appInfo.count() == 1) {
+        const auto fields = appInfo.first().at(0).value<McuUpdater::CliFields>();
+        qInfo() << "probe: application" << fields;
+        QVERIFY(!fields.value(QStringLiteral("version")).isEmpty());
+    }
+
+    link.close();
+    QTRY_VERIFY_WITH_TIMEOUT(closed.count() == 1, 30000);
+    QVERIFY(!link.isOpen());
 }
 
 #include "tst_firmwaretools.moc"
