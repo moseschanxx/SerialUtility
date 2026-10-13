@@ -769,10 +769,11 @@ void Tst_sessionwidget::loopbackQuickCommand()
     QSignalSpy statusSpy(session.get(), &SessionWidget::statusMessage);
 
     const QList<QuickCommand> defaults = QuickCommandStore::defaults();
-    QCOMPARE(defaults.first().command, QStringLiteral("uname -a"));
+    // v0.5: the "Node" group leads the defaults and its first command is "reboot loader".
+    QCOMPARE(defaults.first().command, QStringLiteral("reboot loader"));
     session->sendQuickCommand(defaults.first());
-    QCOMPARE(sent, QByteArrayLiteral("uname -a\r"));
-    QTRY_VERIFY_WITH_TIMEOUT(visibleText(session->terminal()).contains(QStringLiteral("uname -a")), kSimTimeoutMs);
+    QCOMPARE(sent, QByteArrayLiteral("reboot loader\r"));
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(session->terminal()).contains(QStringLiteral("reboot loader")), kSimTimeoutMs);
 
     // A hex control command sends the raw byte without a line ending.
     QuickCommand ctrlC;
@@ -783,14 +784,14 @@ void Tst_sessionwidget::loopbackQuickCommand()
     }
     QVERIFY(ctrlC.hex);
     session->sendQuickCommand(ctrlC);
-    QCOMPARE(sent, QByteArrayLiteral("uname -a\r\x03"));
+    QCOMPARE(sent, QByteArrayLiteral("reboot loader\r\x03"));
 
     // An invalid payload is reported in the status bar and nothing is sent.
     statusSpy.clear();
     QuickCommand bad = makeCommand(QStringLiteral("bad"), QStringLiteral("4G"), QStringLiteral("Test"));
     bad.hex = true;
     session->sendQuickCommand(bad);
-    QCOMPARE(sent, QByteArrayLiteral("uname -a\r\x03"));
+    QCOMPARE(sent, QByteArrayLiteral("reboot loader\r\x03"));
     QCOMPARE(statusSpy.count(), 1);
     QVERIFY2(statusSpy.at(0).at(0).toString().contains(QStringLiteral("bad")),
              qPrintable(statusSpy.at(0).at(0).toString()));
@@ -816,8 +817,8 @@ void Tst_sessionwidget::loopbackQuickCommandBarClick()
     connect(session->connection(), &SerialConnection::dataSent, this,
             [&sent](const QByteArray& bytes) { sent += bytes; });
     QTest::mouseClick(buttons.first(), Qt::LeftButton);
-    QCOMPARE(sent, QByteArrayLiteral("uname -a\r"));
-    QTRY_VERIFY_WITH_TIMEOUT(visibleText(session->terminal()).contains(QStringLiteral("uname -a")), kSimTimeoutMs);
+    QCOMPARE(sent, QByteArrayLiteral("reboot loader\r"));   // v0.5: the Node group leads the defaults
+    QTRY_VERIFY_WITH_TIMEOUT(visibleText(session->terminal()).contains(QStringLiteral("reboot loader")), kSimTimeoutMs);
 
     // The gear asks MainWindow to open the editor.
     QSignalSpy editSpy(session.get(), &SessionWidget::quickCommandsEditRequested);

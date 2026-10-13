@@ -60,6 +60,13 @@
 #include "ui/FirmwareTab.h"
 #include "ui/MainWindow.h"
 #include "ui/SessionWidget.h"
+#include "dialogs/AuthPromptDialog.h"
+#include "dialogs/HostKeyDialog.h"
+
+#include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QSet>
+#include <QTextStream>
 
 // =======================================================================================
 // Helpers
@@ -357,6 +364,9 @@ private slots:
     void restoreKeysExcludeFirmwareTab();
     void shortcutListedAndReserved();
     void statusBarShowsTabMessages();
+
+    // ---- Real board + real build machine (env-gated; the first real flash of the spec) ----
+    void realBoard_pullFlashUpdate();
 
 private:
     bool showAndActivate(MainWindow& w);
@@ -1588,6 +1598,176 @@ void Tst_firmwaretab::statusBarShowsTabMessages()
     w.statusBar()->clearMessage();
     tab->setPackagePath(bad);
     QVERIFY(!w.statusBar()->currentMessage().contains(QStringLiteral("status.pkg")));
+}
+
+// =======================================================================================
+// Real board + real build machine (docs/firmware-update/REQUIREMENTS.md "Ask me before", item 3:
+// the first real flash is the integration test). Runs only with SU_FIRMWARE_REAL_RUN=1 and:
+//   SU_FIRMWARE_REAL_TARGET        user@host[:port] of the Linux build machine
+//   SU_FIRMWARE_REAL_PASSWORD      its SSH password (answered into the prompt, never logged)
+//   SU_FIRMWARE_REAL_REMOTE_FOLDER remote image folder (default ~/rk/rockchip-platforms/output/image)
+//   SU_FIRMWARE_REAL_PACKAGE       a CC1310 .pkg to install (Update MCU runs once explicitly)
+//   SU_FIRMWARE_REAL_UPGRADE_TOOL, SU_FIRMWARE_REAL_ADB   tool paths (adb may come from PATH)
+//   SU_FIRMWARE_REAL_LOG           file that receives the tab's whole log pane at the end
+// What it does, in this order: Read (MCU version / role), Pull & Flash (pull update.img, flash the
+// SoC with upgrade_tool UF, wait for ADB, update the MCU only when the package version differs),
+// then Update MCU with the package explicitly. The host key is accepted into the test's own
+// known_hosts file; nothing is remembered in the user's settings.
+// =======================================================================================
+namespace {
+
+/// Answers the SSH dialogs of the real run from a timer: host key -> "Connect and remember"
+/// (into the test's known_hosts file), password prompt -> the env password, Ok; any
+/// QMessageBox -> Yes.
+class RealRunAnswerer : public QObject
+{
+public:
+    explicit RealRunAnswerer(QString password, QObject* parent = nullptr)
+        : QObject(parent), m_password(std::move(password))
+    {
+        m_timer.setInterval(50);
+        connect(&m_timer, &QTimer::timeout, this, &RealRunAnswerer::poll);
+        m_timer.start();
+    }
+    void stop() { m_timer.stop(); }
+    QStringList seen() const { return m_seen; }
+
+private:
+    void poll()
+    {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (!modal || !modal->isVisible() || m_busy.contains(modal)) {
+            return;
+        }
+        m_busy.insert(modal);
+        if (auto* hostKey = qobject_cast<HostKeyDialog*>(modal)) {
+            auto* host = child<QLabel>(hostKey, "labelHost");
+            m_seen << QStringLiteral("host key: %1").arg(host ? host->text() : QString());
+            if (auto* button = child<QPushButton>(hostKey, "buttonRemember")) {
+                button->click();
+            } else {
+                hostKey->accept();
+            }
+        } else if (auto* auth = qobject_cast<AuthPromptDialog*>(modal)) {
+            m_seen << QStringLiteral("auth prompt");
+            auto* edit = child<QLineEdit>(auth, "editResponse");
+            auto* buttons = child<QDialogButtonBox>(auth, "buttonBox");
+            if (edit) {
+                edit->setText(m_password);
+            }
+            if (buttons && buttons->button(QDialogButtonBox::Ok)) {
+                buttons->button(QDialogButtonBox::Ok)->click();
+            } else {
+                auth->accept();
+            }
+        } else if (auto* box = qobject_cast<QMessageBox*>(modal)) {
+            m_seen << QStringLiteral("message box: %1").arg(box->text());
+            if (QAbstractButton* yes = box->button(QMessageBox::Yes)) {
+                yes->click();
+            } else if (QAbstractButton* ok = box->button(QMessageBox::Ok)) {
+                ok->click();
+            } else {
+                box->accept();
+            }
+        } else {
+            m_seen << QStringLiteral("other modal: %1").arg(modal->windowTitle());
+            modal->close();
+        }
+    }
+
+    QString m_password;
+    QTimer m_timer;
+    QSet<QWidget*> m_busy;
+    QStringList m_seen;
+};
+
+} // namespace
+
+void Tst_firmwaretab::realBoard_pullFlashUpdate()
+{
+    if (qEnvironmentVariable("SU_FIRMWARE_REAL_RUN") != QLatin1String("1")) {
+        QSKIP("set SU_FIRMWARE_REAL_RUN=1 (+ SU_FIRMWARE_REAL_TARGET/PASSWORD/PACKAGE/UPGRADE_TOOL/ADB/LOG) to flash the attached board");
+    }
+    const QString target = qEnvironmentVariable("SU_FIRMWARE_REAL_TARGET");
+    const QString password = qEnvironmentVariable("SU_FIRMWARE_REAL_PASSWORD");
+    const QString remoteFolder = qEnvironmentVariable("SU_FIRMWARE_REAL_REMOTE_FOLDER", kDefaultRemoteFolder);
+    const QString package = qEnvironmentVariable("SU_FIRMWARE_REAL_PACKAGE");
+    const QString upgradeTool = qEnvironmentVariable("SU_FIRMWARE_REAL_UPGRADE_TOOL");
+    const QString adb = ToolLocator::locate(ToolLocator::Tool::Adb, qEnvironmentVariable("SU_FIRMWARE_REAL_ADB"));
+    const QString logFile = qEnvironmentVariable("SU_FIRMWARE_REAL_LOG");
+    QVERIFY2(!target.isEmpty() && !upgradeTool.isEmpty() && !adb.isEmpty(), "target / tool paths missing");
+    AppSettings::instance().setSshKnownHostsFile(tempPath(QStringLiteral("real-run-known_hosts")));
+    AppSettings::instance().setFirmwareGitDescribe(true);
+
+    auto* runner = new ProcessToolRunner(this);
+    auto tab = std::make_unique<FirmwareTab>(nullptr, runner);
+    tab->setStatusRefreshIntervalMs(0);
+    tab->setToolPaths(upgradeTool, adb);
+    tab->setSourceTarget(target);
+    tab->setRemoteFolder(remoteFolder);
+    tab->setCacheDirectory(tempPath(QStringLiteral("real-run-cache")));
+    tab->show();
+    QVERIFY(QTest::qWaitForWindowExposed(tab.get()));
+
+    const auto dumpLog = [&] {
+        if (logFile.isEmpty()) {
+            return;
+        }
+        QFile file(logFile);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&file);
+            out << tab->logView()->toPlainText() << '\n';
+        }
+    };
+    const auto guard = qScopeGuard(dumpLog);
+    RealRunAnswerer answerer(password);
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+
+    // 1. Device status and the running MCU version / role (fills the role radios).
+    tab->refreshStatus();
+    QTRY_VERIFY_WITH_TIMEOUT(!tab->socStatusLabel()->text().isEmpty()
+                             && tab->socStatusLabel()->text() != QStringLiteral("not checked yet"), 30000);
+    qInfo() << "real run: SoC status" << tab->socStatusLabel()->text();
+    tab->readMcuInfo();
+    QTRY_VERIFY_WITH_TIMEOUT(finished.count() >= 1, 60000);
+    qInfo() << "real run: read MCU ->" << finished.last().at(0).toString() << finished.last().at(1).toBool()
+            << finished.last().at(2).toString() << "running" << tab->runningMcuVersion() << tab->runningMcuRole()
+            << "role chosen" << tab->selectedRole();
+    QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    QVERIFY(tab->selectedRole() != 0);
+    if (!package.isEmpty()) {
+        QVERIFY2(tab->setPackagePath(package), qPrintable(lastLogLine(*tab)));
+        qInfo() << "real run: package" << tab->package().summary();
+    }
+
+    // 2. Pull & Flash: pull update.img from the build machine, flash the SoC, wait for ADB (the MCU
+    //    step runs only when the package version differs from the running one).
+    const qsizetype before = finished.count();
+    tab->pullAndFlash();
+    QVERIFY(tab->isBusy());
+    QTRY_VERIFY_WITH_TIMEOUT(finished.count() > before
+                                 && finished.last().at(0).toString() == QStringLiteral("pull-flash"),
+                             15 * 60 * 1000);
+    for (qsizetype i = before; i < finished.count(); ++i) {
+        qInfo() << "real run: step" << finished.at(i).at(0).toString() << finished.at(i).at(1).toBool()
+                << finished.at(i).at(2).toString();
+    }
+    qInfo() << "real run: dialogs" << answerer.seen();
+    QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    QVERIFY(!tab->isBusy());
+
+    // 3. Update MCU once explicitly with the package (the full CC1310 transfer and restart).
+    if (!package.isEmpty()) {
+        const qsizetype beforeMcu = finished.count();
+        tab->updateMcu();
+        QVERIFY(tab->isBusy());
+        QTRY_VERIFY_WITH_TIMEOUT(finished.count() > beforeMcu, 5 * 60 * 1000);
+        qInfo() << "real run: update MCU ->" << finished.last().at(0).toString() << finished.last().at(1).toBool()
+                << finished.last().at(2).toString();
+        QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    }
+    answerer.stop();
+    dumpLog();
 }
 
 QTEST_MAIN(Tst_firmwaretab)
