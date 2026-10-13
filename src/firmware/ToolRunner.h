@@ -92,11 +92,19 @@ public:
     /// reports through its signals - a program that cannot be started reports finished() with
     /// started = false from the event loop, never from inside run().
     virtual ToolInvocation* run(const QString& program, const QStringList& arguments,
-                                const Options& options = Options()) = 0;
+                                const Options& options) = 0;
+    /// The same with default Options (a separate overload: GCC refuses `= Options()` as a
+    /// default argument inside the class that defines Options; subclasses say `using ToolRunner::run;`).
+    ToolInvocation* run(const QString& program, const QStringList& arguments);
 
     /// "prog arg1 \"arg with space\"" for log lines (QProcess-style quoting).
     static QString formatCommandLine(const QString& program, const QStringList& arguments);
 };
+
+inline ToolInvocation* ToolRunner::run(const QString& program, const QStringList& arguments)
+{
+    return run(program, arguments, Options());
+}
 
 /// The real thing: QProcess with merged channels (QProcess::MergedChannels).
 class ProcessToolRunner : public ToolRunner
@@ -104,8 +112,9 @@ class ProcessToolRunner : public ToolRunner
     Q_OBJECT
 public:
     explicit ProcessToolRunner(QObject* parent = nullptr);
+    using ToolRunner::run;
     ToolInvocation* run(const QString& program, const QStringList& arguments,
-                        const Options& options = Options()) override;
+                        const Options& options) override;
 };
 
 /**

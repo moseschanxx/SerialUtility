@@ -180,6 +180,16 @@ public:
             QTimer::singleShot(0, this, [this] { announceStarted(); });
             if (m_cancelRequested) {
                 m_process->kill();   // cancel() arrived while the process was still starting
+                return;
+            }
+            // Input handed over while the process was still Starting (on Linux the state stays
+            // Starting until the child has exec'ed; Windows is Running right after start()).
+            if (!m_pendingInput.isEmpty()) {
+                m_process->write(m_pendingInput);
+                m_pendingInput.clear();
+            }
+            if (m_closeInputAfterStart) {
+                m_process->closeWriteChannel();
             }
         });
         connect(m_process, &QProcess::finished, this,
@@ -196,14 +206,24 @@ public:
 
     void writeInput(const QByteArray& data) override
     {
-        if (m_process && m_process->state() == QProcess::Running && !m_finished) {
+        if (!m_process || m_finished) {
+            return;
+        }
+        if (m_process->state() == QProcess::Starting) {
+            m_pendingInput.append(data);   // delivered from the started() handler
+        } else if (m_process->state() == QProcess::Running) {
             m_process->write(data);
         }
     }
 
     void closeInput() override
     {
-        if (m_process && m_process->state() == QProcess::Running && !m_finished) {
+        if (!m_process || m_finished) {
+            return;
+        }
+        if (m_process->state() == QProcess::Starting) {
+            m_closeInputAfterStart = true;
+        } else if (m_process->state() == QProcess::Running) {
             m_process->closeWriteChannel();
         }
     }
@@ -309,6 +329,8 @@ private:
     QStringList m_arguments;
     ToolRunner::Options m_options;
     QProcess* m_process = nullptr;
+    QByteArray m_pendingInput;          ///< writeInput() while Starting (see the started() handler)
+    bool m_closeInputAfterStart = false; ///< closeInput() while Starting
     bool m_cancelRequested = false;
     bool m_timedOut = false;
 };

@@ -70,8 +70,9 @@ public:
 
     explicit FakeToolRunner(QObject* parent = nullptr);
 
+    using ToolRunner::run;
     ToolInvocation* run(const QString& program, const QStringList& arguments,
-                        const Options& options = Options()) override;
+                        const Options& options) override;
 
     void addScript(const QRegularExpression& commandLine, const QByteArray& output, int exitCode = 0, int delayMs = 0);
     void addHandler(const QRegularExpression& commandLine, Handler handler);
