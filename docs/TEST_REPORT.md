@@ -1,4 +1,4 @@
-# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27, v0.3.0 addendum 2026-09-27, v0.4.0 addendum 2026-09-27)
+# BuildAI Serial Utility — Test Report (v0.1.0 2026-09-21, v0.2.0 addendum 2026-09-27, v0.3.0 addendum 2026-09-27, v0.4.0 addendum 2026-09-27, v0.5.0 addendum 2026-10-13)
 
 This report records how the first release of BuildAI Serial Utility was verified on
 2026-09-20/21, what was tested at each layer, what was found and fixed, and what could
@@ -245,3 +245,51 @@ Alt tap from a connected terminal); a key file named only in
 `~/.ssh/config` is prompted for its passphrase per session; the shell fallback cannot preserve remote
 permission bits on download; folder upload is not supported.
 
+
+## 13. v0.5.0 — Firmware tab: pull, SoC flash, CC1310 update over USB-C (2026-10-13)
+
+Added in 0.5.0 (docs/firmware-update/REQUIREMENTS.md, plan and facts in docs/firmware-update/PLAN.md): the
+**Firmware tab** (*File > Firmware Update*, Ctrl+Shift+U) pulls `update.img` from the Linux build machine over
+the existing SSH stack, flashes the Rockchip SoC with the bundled `upgrade_tool` (the flow of the SDK's
+`tools/usb_update.sh`: `LD`, `adb reboot loader`, wait for Loader/Maskrom, `UF`, wait for ADB), and updates the
+CC1310 through the board's `rfmcu bridge` with a native C++ port of `fw_update.py` (COBS, CRC16-CCITT, package
+CRC32, HELLO/INFO, CLI probe, `power` logged, `bootloader`, BEGIN/READY, DATA/ACK/NACK, END/COMPLETE, SET_ROLE,
+restart banner). `adb`, `upgrade_tool` and the DriverAssistant ship in `tools/` next to the executable. The quick
+commands gain a **Node** group (`reboot loader` first, `rfmcu console`, the CC1310 CLI commands). Process: five
+packages in parallel on a tree of fixed contract headers and compile-only stubs (protocol, tools, ssh-pull, ui,
+packaging-docs), integration on both compilers, a read-only review, a fix round, two real-board runs.
+
+| Layer | Result |
+|---|---|
+| Known-answer vectors | `tests/data/firmware/vectors.json`, `package_small.pkg`, `firmware-0.8.1.pkg`: generated once with the CC1310 repo's `fw_protocol.py` / `fw_package.py` (scratchpad `gen_vectors.py`); neither the build nor the tests run Python |
+| Protocol | `tst_ccprotocol` 129 cases: every vector (CRC16 `123456789` = 0x29B1, COBS both ways incl. 254-byte blocks and invalid input, frames and the four rejection texts, INFO 20/24 bytes), `FrameSplitter` at every split point and with garbage between frames, package parse in the Python check order (header CRC32, image CRC32, length, address, version byte), build round trip, the 0.8.1 release package (78,040-byte image, CRC 5FE8FB87) |
+| Updater | `tst_mcuupdater` 82 cases against the C++ `FakeMcu` behind a TCP server: info on a running application and on a board in the updater, flash through the SoC (power logged before `bootloader`), serial path without `power`, NACK/resume offsets, lost frames re-sent at the same offset, the retry texts, refused `bootloader`, silent device, target mismatch / oversize, banner seen and `setNoBanner`, set role, cancel mid-transfer then a Part-J re-flash from byte 0, device closed mid-transfer, 16-bit sequence wrap (94,211 requests), the exact `logLine` texts of runbook Part C |
+| Tools | `tst_firmwaretools` 97 cases + 1 env-gated probe: `ToolInvocation` lifetimes, `ProcessToolRunner` on real processes (`cmd /c` / `sh -c`, the test exe as a helper: stdin, environment, cwd, timeout, cancel, terminate→kill on Linux), `ToolLocator`, `LD` / `SFI` / `UF`-progress parsers with the outputs seen on this PC, `adb devices` / `forward tcp:0` / `get-state` parsers and every `select_device` message, `UsbProbe` (SetupAPI sees the attached board), `McuLink` open/close with the exact adb_link.py command order, `SocFlasher` phases (already Loader, ADB → reboot loader, no board → downloadModeNeeded, timeouts, success line required, cancel rules, ADB back late / never) |
+| Pull | `tst_imagepuller` 21 cases against `TestSshServer` (SFTP and the shell fallback): stat, skip on same size + mtime, forced re-pull, one-level history and roll back, wrong RKFW magic never replaces the image, missing remote file, git describe present / absent, extra files, cancel mid-transfer, dropped connection; `tst_sshconnection` + 4 cases for `runCommand` / `statRemote` (exit status, stderr, order, timeout, missing path, directory, both methods); `tst_testsshserver` 24 |
+| Quick commands | `tst_quickcommand` 37 cases: the Node group first, tooltips, file version 2, one-time migration of version-1 files (no double migration, user lists untouched) |
+| GUI | `tst_firmwaretab` 33 cases + 1 env-gated real run: widgets and object names, enable rules, settings round trip (folder per target), package / image validation, log time stamps, device status line and driver hint, MCU read (role from `version` or the `help` rows), port-busy and no-reply replies, pull through the in-process build machine (key auth, no prompt), Update MCU and Set role through a fake adb bridge to `FakeMcu`, Pull & Flash end to end with fake tools, retranslation; MainWindow: one tab, session actions off while current, Window menu / Alt+N, close rules while busy, restore keys exclude it, Ctrl+Shift+U listed and reserved, status bar; `tst_mainwindow` / `tst_dialogs` + 2 each (Firmware preferences page); `tst_sessionwidget` adapted to the Node group leading the defaults |
+| Review (Fable, read-only) | 1 BLOCKER (quitting during `UF` killed upgrade_tool mid-write), 4 MAJOR (no `killall rfmcu` before the tab's `rfmcu cmd`, the chain gave up on an MCU already in the updater, a stale "send reboot loader" answer acted on after the flash, a remembered role counted as confirmed), 10 MINOR — closed in the fix round (see reports in the session scratchpad) |
+| Real board 0225ce3c8d8d6e44, probe (`tst_firmwaretools::realBoard_statusAndMcuInfo`) | `upgrade_tool LD` + `adb devices` → "ADB device 0225ce3c8d8d6e44"; `McuLink` killed the stale `rfmcu console` (pid 190), forwarded a port, started `rfmcu bridge 7000` ("bridging" seen), connected; `McuUpdater::info()`: HELLO unanswered (application running), CLI probe → `version=0.8.2 role=rx` (the role from the `help` rows: 0.8.2's `version` reply carries no `role=`); link cleaned up (`killall rfmcu`, `forward --remove`) |
+| Real board, Firmware tab (`tst_firmwaretab::realBoard_pullFlashUpdate`, real `ProcessToolRunner`, real VM) | Read MCU → 0.8.2 rx; Pull: host-key and password dialogs answered from a timer, `update.img` 11.4 MB (built 2026-10-14 00:51 VM time, `git describe` v1.3.0-5-gbff7fca34-dirty) downloaded in 2 s and RKFW-checked; Flash SoC: `LD`, `cat /proc/version` (5.10.209+), `adb reboot loader`, Loader mode after 1-2 s, `UF`: `Test Device Success` then **`Check Chip Fail`** (exit 255, nothing written); Set role rx→rx: bridge, `INFO power soc=on supply=usb usb=1`, "rebooting it into the UART updater", `COMPLETE`, "application restarted: version=0.8.2 role=rx" |
+| Why `UF` failed, and the fix | the tool's log (`log_dir=` in a `config.ini` next to it) says `CheckChip-->Chip is not match,firmware(0x31313045),device(0x0)` and `upgrade_tool RCI` reads 16 zero bytes from the loader: the board's U-Boot (`arch/arm/mach-rockchip/chip_info.c`) has no rockusb chip-info case for `CONFIG_ROCKCHIP_RV1103B`. The Linux `upgrade_tool` v2.26 carries the same check; the SDK's own tag notes verified Loader-mode flashing with the SocToolKit GUI only. Proposed one-line U-Boot change: `docs/firmware-update/uboot-rockusb-chip-info.patch` (`chip_info[0] = 0x31313045`, "110E"). `upgrade_tool RD` brought the board back to its firmware after each attempt. The Firmware tab's own flow is unchanged by this: with that U-Boot on the board (flashed once by SocToolKit or MASKROM), or with a board in MASKROM mode, `UF` passes Check Chip |
+| GCC 11 `-Werror` (WSL Ubuntu 22.04, Qt 6.8.3) | two GCC-only defects found and fixed before CI (an in-class `= Options()` default argument; stdin written while a `QProcess` is still Starting); full tree 0 warnings; see the final table |
+| Windows MSVC 2022 Release | full tree 0 warnings at `/W4`; see the final table |
+
+Not re-flashed: the CC1310 runs 0.8.2 and the only 0.8.2 package disappeared from the local CC1310 checkout
+while the run was prepared (a branch switch there), so the real MCU test used Set role instead of Update MCU;
+Update MCU with a package is covered by the fake-bridge GUI case and the updater suite, and the DATA path is the
+same code the Python tool's verified run used.
+
+Final numbers on the tagged tree:
+
+| Platform | Suites | Result |
+|---|---|---|
+| Windows MSVC 2022 Release (`build\Release`) | 28 | FINAL_MSVC |
+| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`) | 28 | FINAL_GCC |
+
+Known limitations: `UF` in U-Boot Loader mode needs the U-Boot chip-info change above (until then: MASKROM mode,
+or the Rockchip GUI tool); the SoC flash cannot be cancelled once `UF` writes (the window refuses to close
+during it); a hung `upgrade_tool` is logged after five minutes without output but not killed; the driver installer
+is offered only in an administrator install; the pull keeps one previous image; extra files are plain names in
+the remote folder; `rfmcu` on the board is stopped before every MCU command, so an interactive `rfmcu console`
+someone left open ends when the tab talks to the MCU.

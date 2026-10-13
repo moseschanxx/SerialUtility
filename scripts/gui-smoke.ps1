@@ -40,7 +40,7 @@
     .\scripts\gui-smoke.ps1 -Scenario sshfiles -SshPasswordFile build\wf-core\probe-credentials.txt -WslDistro Ubuntu-22.04
 #>
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode', 'ssh', 'sshfiles')][string]$Scenario,
+    [Parameter(Mandatory = $true)][ValidateSet('linux', 'uboot', 'mcu', 'menus', 'hardware', 'stress', 'markmode', 'ssh', 'sshfiles', 'firmware')][string]$Scenario,
     [string]$Exe = '',      # default: <repo>\dist\Release\bin\BuildAI-SerialUtility.exe
     [string]$OutDir = '',   # default: <repo>\build\gui-run
     [string]$HardwarePort = 'COM6',
@@ -211,6 +211,19 @@ switch ($Scenario) {
     Keys '%l' 500; Keys '{ENTER}' 1200; Shot 'english-ui'
     Keys '^t' 800; Shot 'new-tab'
     Keys '^w' 800; Shot 'closed-tab'
+    CloseApp
+  }
+  'firmware' {
+    # v0.5: the Firmware tab in a real window - opened with Ctrl+Shift+U, the three sections and the
+    # log pane rendered, a second Ctrl+Shift+U selects the same tab, Preferences > Firmware exists,
+    # and the tab closes (Ctrl+Shift+W) when idle. Touches no board: the status refresh runs the
+    # bundled tools read-only (LD / adb devices) and shows what the PC sees.
+    StartApp @()
+    Start-Sleep -Seconds 2; Shot 'main'
+    Keys '^+u' 2500; Shot 'firmware-tab'
+    Keys '^+u' 800; Shot 'firmware-tab-again'
+    Keys '^,' 1500; Keys '{END}' 600; Shot 'preferences-firmware' -Screen; Keys '{ESC}' 500
+    Keys '^+w' 1000; Shot 'firmware-tab-closed'
     CloseApp
   }
   'hardware' {

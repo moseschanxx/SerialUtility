@@ -440,6 +440,16 @@ While a flash runs the tab cannot be closed (the status bar says why) and quitti
 session actions such as Connect or Send File are disabled while the Firmware tab is the current
 tab. The tab is not restored on the next start like a port is.
 
+**One thing the board's U-Boot must have.** `upgrade_tool` (Windows v2.37 and Linux v2.26
+alike) checks the chip id the loader reports against the one in `update.img` ("110E" for the
+RV1106B) before it writes anything. The U-Boot of rockchip-platforms up to `v1.3.0` answers that
+question with zeros in Loader mode, so `UF` stops at `Check Chip Fail` and nothing is written
+(the first real run on 2026-10-13 ended there; the board was reset back to its firmware). The
+one-line U-Boot change is in `docs/firmware-update/uboot-rockusb-chip-info.patch`; a board whose
+U-Boot has it, or a board in MASKROM mode (hold the key while plugging in), flashes through the
+tab as described above. Until then Rockchip's GUI tool (SocToolKit) is the only program that
+flashes this board in Loader mode.
+
 **Drivers (Windows).** The PC needs the Rockchip USB drivers once: the ADB driver for the running
 board and the rockusb driver for Loader / Maskrom mode. When a 2207:xxxx device is on the bus and
 neither `adb` nor `upgrade_tool` sees it, the SoC status line says so and **Install drivers**
