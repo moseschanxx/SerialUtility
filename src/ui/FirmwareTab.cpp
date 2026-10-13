@@ -2212,12 +2212,22 @@ void FirmwareTab::Private::onCliFinished(const QString& command, const ToolResul
         runningVersion = version;
         runningRole = role;
     } else {
-        // fw_update.py probe_application(): "tx" listed -> tx, "rx" -> rx, else unknown.
-        const QStringList tokens = okLine.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        // fw_update.py probe_application(): the command words are the second word of every
+        // "OK <name> <usage>" row of "help" (the real firmware prints one row per command, the
+        // first one "OK commands:"); "tx" among them -> tx, "rx" -> rx, else unknown.
+        // (Seen on the board 2026-10-13: 0.8.2 answers "OK version=0.8.2 baud=115200" without a
+        // role, and its help lists "OK rx rx status | ...".)
+        QStringList commands;
+        for (const QString& line : lines) {
+            const QStringList tokens = line.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (tokens.size() > 1 && tokens.first() == QLatin1String("OK")) {
+                commands << tokens.at(1);
+            }
+        }
         runningVersion = pendingVersion;
-        runningRole = tokens.contains(QLatin1String("tx"))   ? QStringLiteral("tx")
-                      : tokens.contains(QLatin1String("rx")) ? QStringLiteral("rx")
-                                                             : QStringLiteral("unknown");
+        runningRole = commands.contains(QLatin1String("tx"))   ? QStringLiteral("tx")
+                      : commands.contains(QLatin1String("rx")) ? QStringLiteral("rx")
+                                                               : QStringLiteral("unknown");
     }
     renderMcuStatus();
     const quint32 reported = roleFromText(runningRole);

@@ -379,12 +379,17 @@ void tst_mcuupdater::fakeMcuApplicationMode()
     mcu.feed("ver");                                                // a line is complete only at "\n"
     QVERIFY(!mcu.hasOutput());
     mcu.feed("sion\r\nfrobnicate\r\nhelp\r\n");
-    QCOMPARE(mcu.take(1000), QByteArray("OK version=0.8.1 role=tx\r\n"
-                                        "ERR CMD unknown_command; use help\r\n"
-                                        "OK help version power bootloader tx\r\n"));
+    const QByteArray helpHead = "OK commands:\r\n"
+                                "OK help [command]\r\n"
+                                "OK version show firmware version\r\n"
+                                "OK power power | power off [delay_ms] | power soc on|off\r\n"
+                                "OK bootloader reboot into UART firmware updater\r\n";
+    QCOMPARE(mcu.take(2000), QByteArray("OK version=0.8.1 role=tx\r\n"
+                                        "ERR CMD unknown_command; use help\r\n")
+                                 + helpHead + "OK tx tx sync_frame <exposure_hex> | tx sync_time <utc_hex> | tx status\r\n");
     mcu.setRole(1);
     mcu.feed("help\r\n");
-    QCOMPARE(mcu.take(1000), QByteArray("OK help version power bootloader rx\r\n"));
+    QCOMPARE(mcu.take(2000), helpHead + "OK rx rx status | rx dump on|off\r\n");
     QCOMPARE(mcu.commands(), QStringList({"version", "version", "version", "frobnicate", "help", "help"}));
 }
 

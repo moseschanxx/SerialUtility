@@ -1609,6 +1609,11 @@ void Tst_firmwaretab::statusBarShowsTabMessages()
 //   SU_FIRMWARE_REAL_PACKAGE       a CC1310 .pkg to install (Update MCU runs once explicitly)
 //   SU_FIRMWARE_REAL_UPGRADE_TOOL, SU_FIRMWARE_REAL_ADB   tool paths (adb may come from PATH)
 //   SU_FIRMWARE_REAL_LOG           file that receives the tab's whole log pane at the end
+//   SU_FIRMWARE_REAL_SKIP_SOC=1    run Pull alone instead of Pull & Flash (a board whose loader
+//                                  cannot be flashed by upgrade_tool yet; the MCU step still runs)
+//   SU_FIRMWARE_REAL_MCU_ACTION    "update" (default: Update MCU with the package), "set-role" (Set role
+//                                  to the role the MCU reported: the updater round trip without a new
+//                                  image, for a board whose package is not at hand) or "none"
 // What it does, in this order: Read (MCU version / role), Pull & Flash (pull update.img, flash the
 // SoC with upgrade_tool UF, wait for ADB, update the MCU only when the package version differs),
 // then Update MCU with the package explicitly. The host key is accepted into the test's own
@@ -1741,12 +1746,18 @@ void Tst_firmwaretab::realBoard_pullFlashUpdate()
     }
 
     // 2. Pull & Flash: pull update.img from the build machine, flash the SoC, wait for ADB (the MCU
-    //    step runs only when the package version differs from the running one).
+    //    step runs only when the package version differs from the running one). With
+    //    SU_FIRMWARE_REAL_SKIP_SOC=1 only the pull runs.
+    const bool skipSoc = qEnvironmentVariable("SU_FIRMWARE_REAL_SKIP_SOC") == QLatin1String("1");
+    const QString chainName = skipSoc ? QStringLiteral("pull") : QStringLiteral("pull-flash");
     const qsizetype before = finished.count();
-    tab->pullAndFlash();
+    if (skipSoc) {
+        tab->pull();
+    } else {
+        tab->pullAndFlash();
+    }
     QVERIFY(tab->isBusy());
-    QTRY_VERIFY_WITH_TIMEOUT(finished.count() > before
-                                 && finished.last().at(0).toString() == QStringLiteral("pull-flash"),
+    QTRY_VERIFY_WITH_TIMEOUT(finished.count() > before && finished.last().at(0).toString() == chainName,
                              15 * 60 * 1000);
     for (qsizetype i = before; i < finished.count(); ++i) {
         qInfo() << "real run: step" << finished.at(i).at(0).toString() << finished.at(i).at(1).toBool()
@@ -1756,13 +1767,24 @@ void Tst_firmwaretab::realBoard_pullFlashUpdate()
     QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
     QVERIFY(!tab->isBusy());
 
-    // 3. Update MCU once explicitly with the package (the full CC1310 transfer and restart).
-    if (!package.isEmpty()) {
+    // 3. The MCU path once explicitly: Update MCU with the package (the full CC1310 transfer and
+    //    restart), or Set role to the reported role (bootloader entry, SET_ROLE, restart, no new image).
+    const QString mcuAction = qEnvironmentVariable("SU_FIRMWARE_REAL_MCU_ACTION", QStringLiteral("update"));
+    if (mcuAction == QLatin1String("update") && !package.isEmpty()) {
         const qsizetype beforeMcu = finished.count();
         tab->updateMcu();
         QVERIFY(tab->isBusy());
         QTRY_VERIFY_WITH_TIMEOUT(finished.count() > beforeMcu, 5 * 60 * 1000);
         qInfo() << "real run: update MCU ->" << finished.last().at(0).toString() << finished.last().at(1).toBool()
+                << finished.last().at(2).toString();
+        QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
+    } else if (mcuAction == QLatin1String("set-role")) {
+        const qsizetype beforeMcu = finished.count();
+        qInfo() << "real run: set role" << tab->selectedRole() << "(the role the MCU reported)";
+        tab->setMcuRole();
+        QVERIFY(tab->isBusy());
+        QTRY_VERIFY_WITH_TIMEOUT(finished.count() > beforeMcu, 5 * 60 * 1000);
+        qInfo() << "real run: set role ->" << finished.last().at(0).toString() << finished.last().at(1).toBool()
                 << finished.last().at(2).toString();
         QVERIFY2(finished.last().at(1).toBool(), qPrintable(finished.last().at(2).toString()));
     }

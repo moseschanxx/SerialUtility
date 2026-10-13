@@ -102,7 +102,15 @@ struct FakeMcu::Private
                 inUpdater = true;
             }
         } else if (text == QLatin1String("help")) {
-            say("OK help version power bootloader " + QByteArray(role == 2 ? "tx" : "rx") + "\r\n");
+            // One "OK <name> <usage>" row per command, as the real firmware prints it (the role's
+            // command word, rx or tx, is how a host learns the role when "version" carries none).
+            say("OK commands:\r\n"
+                "OK help [command]\r\n"
+                "OK version show firmware version\r\n"
+                "OK power power | power off [delay_ms] | power soc on|off\r\n"
+                "OK bootloader reboot into UART firmware updater\r\n");
+            say(role == 2 ? QByteArray("OK tx tx sync_frame <exposure_hex> | tx sync_time <utc_hex> | tx status\r\n")
+                          : QByteArray("OK rx rx status | rx dump on|off\r\n"));
         } else {
             say("ERR CMD unknown_command; use help\r\n");
         }

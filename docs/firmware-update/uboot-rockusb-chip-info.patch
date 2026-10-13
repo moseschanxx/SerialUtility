@@ -1,0 +1,41 @@
+U-Boot rockusb: report the RV1103B / RV1106B chip id ("110E") so upgrade_tool can flash in Loader mode
+
+Proposal for build-ai-ego/rockchip-platforms (branch rv1106-bg2-main), found on 2026-10-13 by the
+first real run of BuildAI Serial Utility's Firmware tab on the Node board 0225ce3c8d8d6e44:
+
+  `adb reboot loader` brings the board into U-Boot's rockusb (Mode=Loader, PID 0x110E) as designed,
+  but the Windows upgrade_tool.exe v2.37 stops `UF update.img` with
+
+      Test Device Success
+      Check Chip Start
+      Check Chip Fail
+      Note:read chip info by rkdevtool and use new chip to create firmware
+
+  and its log says `CheckChip-->Chip is not match,firmware(0x31313045),device(0x0)`:
+  `upgrade_tool RCI` reads `Chip Info: 0 0 0 0 ...` from the loader. The cause is in
+  sysdrv/source/uboot/u-boot/arch/arm/mach-rockchip/chip_info.c: rockchip_rockusb_get_chip_info()
+  has a rockusb fixup for RV1106 (0x31313036 = "1106") and RV1126 but none for CONFIG_ROCKCHIP_RV1103B
+  (the rv1106b_defconfig family), so the 16 bytes stay zero. The firmware package carries the
+  chip tag "110E" (0x31313045), which the tool compares with the device's word.
+
+  Nothing was written to the board; `upgrade_tool RD` brought it back to its firmware each time.
+
+The change (one case in the rockusb fixup):
+
+--- a/sysdrv/source/uboot/u-boot/arch/arm/mach-rockchip/chip_info.c
++++ b/sysdrv/source/uboot/u-boot/arch/arm/mach-rockchip/chip_info.c
+@@ int rockchip_rockusb_get_chip_info(unsigned int chip_info[])
+ #elif defined(CONFIG_ROCKCHIP_RV1126)
+ 		chip_info[0] = 0x31313236;
+ #elif defined(CONFIG_ROCKCHIP_RV1106)
+ 		chip_info[0] = 0x31313036;
++#elif defined(CONFIG_ROCKCHIP_RV1103B)
++		/* "110E": RV1103B / RV1106B, the chip tag update.img carries (SocToolKit's magic
++		 * table maps both to 110E), so upgrade_tool's Check Chip passes in Loader mode. */
++		chip_info[0] = 0x31313045;
+ #endif
+
+After rebuilding U-Boot (and flashing that build once by the way that works today: the Linux
+usb_update.sh, the MASKROM button, or the Rockchip GUI tool), `upgrade_tool.exe UF` from the Firmware
+tab's Pull & Flash passes Check Chip on this board. The Firmware tab itself needs no change for it:
+its flow is the one of tools/usb_update.sh and stops, as seen, at the tool's own verdict.

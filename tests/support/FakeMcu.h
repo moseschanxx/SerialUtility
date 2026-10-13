@@ -21,7 +21,9 @@
  * "OK version=0.8.1 role=<rx|tx>\r\n" (role 1 rx / 2 tx); "power" answers "OK power state=on
  * supply=<supply> bat=ok usb=<1 when supply is usb, else 0> key=0 latch=1 soc=<soc>
  * charge=on\r\n"; "bootloader" answers "OK rebooting_to_bootloader\r\n" and switches to updater
- * mode; "help" answers "OK help version power bootloader rx\r\n" (rx role: "rx"; tx: "tx"),
+ * mode; "help" answers the real firmware's rows: "OK commands:", "OK help [command]",
+ * "OK version show firmware version", "OK power ...", "OK bootloader ..." and, last, the role's
+ * command row "OK rx rx status | rx dump on|off" (rx) or "OK tx tx sync_frame ... | tx status" (tx),
  * anything else "ERR CMD unknown_command; use help\r\n".
  *
  * Updater mode: feed() splits frames at 0x00 and decodes each with CcProtocol::decodeFrame
