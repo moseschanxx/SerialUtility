@@ -35,6 +35,7 @@
 #include "core/SerialConnection.h"
 #include "core/SerialPortEnumerator.h"
 #include "core/SessionLogger.h"
+#include "firmware/ToolRunner.h"
 #include "ssh/SecretStore.h"
 #include "ssh/SshConnection.h"
 #include "terminal/AnsiParser.h"
@@ -43,7 +44,7 @@
 namespace {
 
 // Tab indices as laid out in PreferencesDialog.ui.
-enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageKeyboard, PageLogging, PageGeneral };
+enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageKeyboard, PageLogging, PageGeneral, PageFirmware };
 
 // Columns of the Keyboard page's table.
 enum ShortcutColumn { ColumnAction = 0, ColumnShortcut, ColumnDefault, ShortcutColumnCount };
@@ -51,6 +52,8 @@ enum ShortcutColumn { ColumnAction = 0, ColumnShortcut, ColumnDefault, ShortcutC
 const QLatin1String kDefaultSshTerminalType("xterm-256color");
 constexpr int kDefaultSshKeepAlive = 30;
 constexpr int kDefaultAutoBaudSampleMs = 1500;
+constexpr int kDefaultFirmwareLoaderWaitSeconds = 30;
+constexpr int kDefaultFirmwareAdbReturnSeconds = 60;
 
 /// "115200, 1500000, ..." for the candidates edit and its tooltip.
 QString joinBaudRates(const QList<qint32>& rates)
@@ -107,6 +110,25 @@ QString sshBrowseStart(const QString& currentPath)
     }
     const QString sshDir = QDir::homePath() + QStringLiteral("/.ssh");
     return QDir(sshDir).exists() ? sshDir : QDir::homePath();
+}
+
+/// The image cache AppSettings::firmwareCacheDirectory() falls back to when none is stored.
+QString defaultFirmwareCacheDirectory()
+{
+    return AppSettings::dataDirectory() + QStringLiteral("/firmware");
+}
+
+/// "a.txt, b.txt" -> {"a.txt", "b.txt"} for the extra-files field.
+QStringList splitFileNames(const QString& text)
+{
+    QStringList names;
+    const QStringList parts = text.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        if (!part.trimmed().isEmpty()) {
+            names.append(part.trimmed());
+        }
+    }
+    return names;
 }
 
 /// Select the item whose user data equals `value`; falls back to the first item.
@@ -209,6 +231,9 @@ PreferencesDialog::PreferencesDialog(QWidget* parent)
     connect(ui->logDirBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseLogDir);
     connect(ui->sshKnownHostsBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseKnownHosts);
     connect(ui->sshIdentityBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseIdentityFile);
+    connect(ui->firmwareUpgradeToolBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseUpgradeTool);
+    connect(ui->firmwareAdbBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseAdb);
+    connect(ui->firmwareCacheDirBrowseButton, &QPushButton::clicked, this, &PreferencesDialog::onBrowseFirmwareCache);
     connect(ui->buttonBox, &QDialogButtonBox::clicked, this, &PreferencesDialog::onButtonClicked);
     connect(ui->autoReconnectCheck, &QCheckBox::toggled, ui->reconnectIntervalSpin, &QWidget::setEnabled);
     connect(ui->defaultFlowCombo, &QComboBox::currentIndexChanged, this, [this](int) {
@@ -359,6 +384,19 @@ void PreferencesDialog::setupPages()
     ui->logFormatCombo->addItem(tr("Hex dump"), SessionLogger::formatToString(SessionLogger::Format::HexDump));
     ui->logDirEdit->setPlaceholderText(QDir::toNativeSeparators(AppSettings::defaultLogDirectory()));
 
+    // ---- Firmware -------------------------------------------------------------------
+    // The placeholders say what an empty field means on this machine ("bundled C:/.../tools/adb.exe").
+    ui->firmwareUpgradeToolEdit->setPlaceholderText(
+        tr("Automatic: %1").arg(QDir::toNativeSeparators(ToolLocator::describe(ToolLocator::Tool::UpgradeTool))));
+    ui->firmwareAdbEdit->setPlaceholderText(
+        tr("Automatic: %1").arg(QDir::toNativeSeparators(ToolLocator::describe(ToolLocator::Tool::Adb))));
+    ui->firmwareLoaderWaitSpin->setRange(5, 600);
+    ui->firmwareLoaderWaitSpin->setSuffix(tr(" s"));
+    ui->firmwareAdbReturnSpin->setRange(5, 600);
+    ui->firmwareAdbReturnSpin->setSuffix(tr(" s"));
+    ui->firmwareCacheDirEdit->setPlaceholderText(QDir::toNativeSeparators(defaultFirmwareCacheDirectory()));
+    ui->firmwareExtraFilesEdit->setPlaceholderText(tr("e.g. sd_update.txt"));
+
     ui->tabWidget->setCurrentIndex(PageTerminal);
     updateFontPreview();
 }
@@ -420,6 +458,15 @@ void PreferencesDialog::loadFromSettings()
     // General
     ui->confirmCloseCheck->setChecked(settings.confirmCloseWhenConnected());
     ui->restoreSessionsCheck->setChecked(settings.restoreLastPorts());
+
+    // Firmware (empty tool paths stay empty: the placeholder shows what "automatic" finds)
+    ui->firmwareUpgradeToolEdit->setText(QDir::toNativeSeparators(settings.firmwareUpgradeToolPath()));
+    ui->firmwareAdbEdit->setText(QDir::toNativeSeparators(settings.firmwareAdbPath()));
+    ui->firmwareLoaderWaitSpin->setValue(settings.firmwareLoaderWaitSeconds());
+    ui->firmwareAdbReturnSpin->setValue(settings.firmwareAdbReturnSeconds());
+    ui->firmwareCacheDirEdit->setText(QDir::toNativeSeparators(settings.firmwareCacheDirectory()));
+    ui->firmwareGitDescribeCheck->setChecked(settings.firmwareGitDescribe());
+    ui->firmwareExtraFilesEdit->setText(settings.firmwareExtraFiles().join(QStringLiteral(", ")));
 }
 
 void PreferencesDialog::saveToSettings()
@@ -505,6 +552,21 @@ void PreferencesDialog::saveToSettings()
     settings.setConfirmCloseWhenConnected(ui->confirmCloseCheck->isChecked());
     settings.setRestoreLastPorts(ui->restoreSessionsCheck->isChecked());
 
+    // Firmware
+    settings.setFirmwareUpgradeToolPath(QDir::fromNativeSeparators(ui->firmwareUpgradeToolEdit->text().trimmed()));
+    settings.setFirmwareAdbPath(QDir::fromNativeSeparators(ui->firmwareAdbEdit->text().trimmed()));
+    settings.setFirmwareLoaderWaitSeconds(ui->firmwareLoaderWaitSpin->value());
+    settings.setFirmwareAdbReturnSeconds(ui->firmwareAdbReturnSpin->value());
+    QString cacheDir = QDir::fromNativeSeparators(ui->firmwareCacheDirEdit->text().trimmed());
+    if (cacheDir.isEmpty() || cacheDir == defaultFirmwareCacheDirectory()) {
+        cacheDir.clear();   // "" = the default, which follows the data directory
+        ui->firmwareCacheDirEdit->setText(QDir::toNativeSeparators(defaultFirmwareCacheDirectory()));
+    }
+    settings.setFirmwareCacheDirectory(cacheDir);
+    settings.setFirmwareGitDescribe(ui->firmwareGitDescribeCheck->isChecked());
+    settings.setFirmwareExtraFiles(splitFileNames(ui->firmwareExtraFilesEdit->text()));
+    ui->firmwareExtraFilesEdit->setText(settings.firmwareExtraFiles().join(QStringLiteral(", ")));   // as stored
+
     settings.sync();
     qCInfo(lcApp) << "Preferences saved";
 }
@@ -552,6 +614,51 @@ void PreferencesDialog::onBrowseIdentityFile()
         QFileDialog::getOpenFileName(this, tr("Select Private Key File"), start, tr("All files (*)"));
     if (!file.isEmpty()) {
         ui->sshIdentityEdit->setText(QDir::toNativeSeparators(file));
+    }
+}
+
+void PreferencesDialog::onBrowseUpgradeTool()
+{
+    const QFileInfo current(QDir::fromNativeSeparators(ui->firmwareUpgradeToolEdit->text().trimmed()));
+    const QString start = !current.filePath().isEmpty() && current.dir().exists() ? current.absolutePath()
+                                                                                  : ToolLocator::bundledToolsDirectory();
+#ifdef Q_OS_WIN
+    const QString filter = tr("Programs (*.exe);;All files (*)");
+#else
+    const QString filter = tr("All files (*)");
+#endif
+    const QString file = QFileDialog::getOpenFileName(this, tr("Select upgrade_tool"), start, filter);
+    if (!file.isEmpty()) {
+        ui->firmwareUpgradeToolEdit->setText(QDir::toNativeSeparators(file));
+    }
+}
+
+void PreferencesDialog::onBrowseAdb()
+{
+    const QFileInfo current(QDir::fromNativeSeparators(ui->firmwareAdbEdit->text().trimmed()));
+    const QString start = !current.filePath().isEmpty() && current.dir().exists() ? current.absolutePath()
+                                                                                  : ToolLocator::bundledToolsDirectory();
+#ifdef Q_OS_WIN
+    const QString filter = tr("Programs (*.exe);;All files (*)");
+#else
+    const QString filter = tr("All files (*)");
+#endif
+    const QString file = QFileDialog::getOpenFileName(this, tr("Select adb"), start, filter);
+    if (!file.isEmpty()) {
+        ui->firmwareAdbEdit->setText(QDir::toNativeSeparators(file));
+    }
+}
+
+void PreferencesDialog::onBrowseFirmwareCache()
+{
+    QString start = QDir::fromNativeSeparators(ui->firmwareCacheDirEdit->text().trimmed());
+    if (start.isEmpty() || !QDir(start).exists()) {
+        start = AppSettings::dataDirectory();
+    }
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Select Image Cache Folder"), start,
+                                                          QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (!dir.isEmpty()) {
+        ui->firmwareCacheDirEdit->setText(QDir::toNativeSeparators(dir));
     }
 }
 
@@ -612,6 +719,15 @@ void PreferencesDialog::onRestoreDefaults()
     case PageGeneral:
         ui->confirmCloseCheck->setChecked(true);
         ui->restoreSessionsCheck->setChecked(true);
+        break;
+    case PageFirmware:
+        ui->firmwareUpgradeToolEdit->clear();
+        ui->firmwareAdbEdit->clear();
+        ui->firmwareLoaderWaitSpin->setValue(kDefaultFirmwareLoaderWaitSeconds);
+        ui->firmwareAdbReturnSpin->setValue(kDefaultFirmwareAdbReturnSeconds);
+        ui->firmwareCacheDirEdit->setText(QDir::toNativeSeparators(defaultFirmwareCacheDirectory()));
+        ui->firmwareGitDescribeCheck->setChecked(true);
+        ui->firmwareExtraFilesEdit->clear();
         break;
     default:
         break;

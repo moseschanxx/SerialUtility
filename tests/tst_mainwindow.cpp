@@ -56,6 +56,7 @@
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
+#include "ui/FirmwareTab.h"
 #include "ui/HexDumpView.h"
 #include "ui/MainWindow.h"
 #include "ui/QuickCommandBar.h"
@@ -411,6 +412,10 @@ private slots:
     void sshProfilesDialogOpens();
     void sshProfileStoreSavedAndReloaded();
     void statusBarForSshTab();
+
+    // ---- Firmware tab (v0.5; the tab's own suite is tst_firmwaretab) -------------------
+    void firmwareActionInMenusAndToolbar();
+    void firmwareTabChineseUi();
 
     // ---- Replay / folders / help ----------------------------------------------------
     void replayEnablesStopReplay();
@@ -2965,6 +2970,76 @@ void Tst_mainwindow::menuMnemonicsUnique()
     for (const QAction* entry : entries) {
         QVERIFY2(mnemonicOf(entry->text()).isNull(), qPrintable(entry->text()));
     }
+}
+
+// =======================================================================================
+// Firmware tab (v0.5)
+// =======================================================================================
+
+void Tst_mainwindow::firmwareActionInMenusAndToolbar()
+{
+    MainWindow w;
+    QAction* firmware = action(w, "actionFirmwareUpdate");
+    QVERIFY(firmware);
+    QCOMPARE(QString(firmware->text()).remove(QLatin1Char('&')), QStringLiteral("Firmware Update..."));
+    QCOMPARE(firmware->shortcut(), seq("Ctrl+Shift+U"));
+    QVERIFY(!firmware->isCheckable());
+    QVERIFY(firmware->isEnabled());
+    QVERIFY(!firmware->toolTip().isEmpty());
+    // The chip glyph (or the style fallback when Qt has no SVG engine) is rendered.
+    QVERIFY(!firmware->icon().isNull());
+    QVERIFY(!firmware->icon().pixmap(16).isNull());
+
+    // File: right after New SSH Session; toolbar: right after the SSH button.
+    const QList<QAction*> file = child<QMenu>(&w, "menuFile")->actions();
+    const qsizetype newSsh = file.indexOf(action(w, "actionNewSshSession"));
+    QVERIFY(newSsh >= 0);
+    QCOMPARE(file.at(newSsh + 1), firmware);
+    const QList<QAction*> tools = child<QToolBar>(&w, "mainToolBar")->actions();
+    const qsizetype toolSsh = tools.indexOf(action(w, "actionNewSshSession"));
+    QVERIFY(toolSsh >= 0);
+    QCOMPARE(tools.at(toolSsh + 1), firmware);
+
+    // Triggering it opens the one Firmware tab (no session: currentSession() is null there).
+    QVERIFY(showAndActivate(w));
+    firmware->trigger();
+    FirmwareTab* tab = w.firmwareTab();
+    QVERIFY(tab);
+    tab->setStatusRefreshIntervalMs(0);   // no status query: this suite never runs adb / upgrade_tool
+    tab->setToolPaths(QStringLiteral("upgrade_tool-not-installed"), QStringLiteral("adb-not-installed"));
+    QCOMPARE(tabs(w)->currentWidget(), static_cast<QWidget*>(tab));
+    QVERIFY(w.currentSession() == nullptr);
+    QCOMPARE(w.sessionCount(), 2);
+    firmware->trigger();
+    QCOMPARE(w.sessionCount(), 2);
+}
+
+void Tst_mainwindow::firmwareTabChineseUi()
+{
+    MainWindow w;
+    QVERIFY(showAndActivate(w));
+    FirmwareTab* tab = w.showFirmwareTab();
+    QVERIFY(tab);
+    tab->setStatusRefreshIntervalMs(0);
+    tab->setToolPaths(QStringLiteral("upgrade_tool-not-installed"), QStringLiteral("adb-not-installed"));
+    const int index = tabs(w)->indexOf(tab);
+    QCOMPARE(tabs(w)->tabText(index), QStringLiteral("Firmware"));
+
+    action(w, "actionLanguageChinese")->trigger();
+    QTRY_COMPARE(tabs(w)->tabText(index), QStringLiteral(u"固件"));
+    QCOMPARE(tab->title(), QStringLiteral(u"固件"));
+    QCOMPARE(tab->pullButton()->text(), QStringLiteral(u"拉取"));
+    QCOMPARE(tab->flashSocButton()->text(), QStringLiteral(u"刷写 SoC"));
+    QCOMPARE(QString(action(w, "actionFirmwareUpdate")->text()).remove(QLatin1Char('&')),
+             QStringLiteral(u"固件更新(U)..."));
+    const QList<QAction*> entries = sessionEntries(child<QMenu>(&w, "menuWindow"));
+    QCOMPARE(entries.last()->text(), QStringLiteral(u"固件"));
+    QVERIFY(w.windowTitle().endsWith(QStringLiteral(u" - 固件")));
+
+    action(w, "actionLanguageEnglish")->trigger();
+    QTRY_COMPARE(tabs(w)->tabText(index), QStringLiteral("Firmware"));
+    QCOMPARE(tab->pullButton()->text(), QStringLiteral("Pull"));
+    QCOMPARE(sessionEntries(child<QMenu>(&w, "menuWindow")).last()->text(), QStringLiteral("Firmware"));
 }
 
 // =======================================================================================

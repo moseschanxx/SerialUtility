@@ -47,6 +47,7 @@
 #include "ssh/SshProfile.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/CommandInput.h"
+#include "ui/FirmwareTab.h"
 #include "ui/HexDumpView.h"
 #include "ui/QuickCommandBar.h"
 #include "ui/SessionWidget.h"
@@ -169,6 +170,9 @@ MainWindow::MainWindow(QWidget* parent)
         // :/icons/ssh.svg needs Qt's SVG icon engine; without it fall back like the other actions.
         setActionIcon(ui->actionNewSshSession, "utilities-terminal", QStyle::SP_ComputerIcon, s);
     }
+    if (ui->actionFirmwareUpdate->icon().pixmap(16).isNull()) {
+        setActionIcon(ui->actionFirmwareUpdate, "system-software-update", QStyle::SP_DriveHDIcon, s);
+    }
     setActionIcon(ui->actionCloseSession, "tab-close", QStyle::SP_DialogCloseButton, s);
     setActionIcon(ui->actionConnect, "network-connect", QStyle::SP_DialogApplyButton, s);
     setActionIcon(ui->actionDisconnect, "network-disconnect", QStyle::SP_DialogCancelButton, s);
@@ -208,6 +212,7 @@ MainWindow::MainWindow(QWidget* parent)
     // ---- File ----
     connect(ui->actionNewSession, &QAction::triggered, this, [this]() { newSession(); });
     connect(ui->actionNewSshSession, &QAction::triggered, this, [this]() { newSshSession(); });
+    connect(ui->actionFirmwareUpdate, &QAction::triggered, this, &MainWindow::onFirmwareUpdate);
     connect(ui->actionCloseSession, &QAction::triggered, this, &MainWindow::closeCurrentSession);
     connect(ui->actionStartLogging, &QAction::triggered, this, &MainWindow::onStartLogging);
     connect(ui->actionStopLogging, &QAction::triggered, this, &MainWindow::onStopLogging);
@@ -320,6 +325,9 @@ MainWindow::~MainWindow()
             disconnect(session, nullptr, this, nullptr);
         }
     }
+    if (m_firmwareTab) {
+        disconnect(m_firmwareTab, nullptr, this, nullptr);
+    }
     if (m_tabs) {
         disconnect(m_tabs, nullptr, this, nullptr);
     }
@@ -423,6 +431,35 @@ void MainWindow::addSessionTab(SessionWidget* session, const QString& logName)
 
 void MainWindow::closeSession(int index)
 {
+    if (m_firmwareTab && m_tabs && index >= 0 && index < m_tabs->count() && m_tabs->widget(index) == m_firmwareTab) {
+        // The Firmware tab is no session: no confirmation, but never while a step runs (an
+        // interrupted flash or MCU transfer can leave the board in Loader mode / the updater).
+        if (m_firmwareTab->isBusy()) {
+            statusBar()->showMessage(tr("The Firmware tab is busy (%1): wait until it finishes or cancel it first")
+                                         .arg(m_firmwareTab->persistentStatusMessage()),
+                                     5000);
+            qCInfo(lcUi) << "Firmware tab close refused while" << m_firmwareTab->currentOperation() << "runs";
+            return;
+        }
+        qCInfo(lcUi) << "closing the Firmware tab";
+        FirmwareTab* tab = std::exchange(m_firmwareTab, nullptr);
+        disconnect(tab, nullptr, this, nullptr);
+        tab->disconnectSource();
+        m_tabs->removeTab(index);
+        tab->setParent(nullptr);
+        tab->deleteLater();
+        if (m_tabs->count() == 0) {
+            newSession();   // the window always has at least one tab (rebuilds the Window menu)
+        } else {
+            rebuildWindowMenu();
+        }
+        updateActions();
+        updateStatusBar();
+        updateWindowTitle();
+        updateSessionHint();
+        return;
+    }
+
     SessionWidget* session = sessionAt(index);
     if (!session) {
         return;
@@ -536,8 +573,32 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
 
-    if (!connected.isEmpty() && AppSettings::instance().confirmCloseWhenConnected() &&
-        !confirmCloseSessions(connected, /*quitting=*/true)) {
+    if (m_firmwareTab && m_firmwareTab->isBusy()) {
+        // One question for everything, always asked: quitting interrupts a flash or an MCU
+        // transfer, whatever the "ask before closing" preference says about sessions.
+        QString text = tr("The Firmware tab is still working (%1).\nQuitting now interrupts it; an interrupted flash "
+                          "can leave the board in Loader mode.")
+                           .arg(m_firmwareTab->persistentStatusMessage());
+        if (!connected.isEmpty()) {
+            QStringList names;
+            for (SessionWidget* session : std::as_const(connected)) {
+                names.append(session->title());
+            }
+            text += QLatin1Char('\n') +
+                    tr("%n session(s) are still connected (%1).", nullptr, static_cast<int>(connected.size()))
+                        .arg(names.join(QStringLiteral(", ")));
+        }
+        text += QLatin1Char('\n') + tr("Quit anyway?");
+        QMessageBox box(QMessageBox::Question, tr("Quit %1").arg(QStringLiteral(APP_DISPLAY_NAME)), text,
+                        QMessageBox::Yes | QMessageBox::No, this);
+        box.setDefaultButton(QMessageBox::No);
+        box.button(QMessageBox::Yes)->setText(tr("Quit"));
+        if (box.exec() != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+    } else if (!connected.isEmpty() && AppSettings::instance().confirmCloseWhenConnected() &&
+               !confirmCloseSessions(connected, /*quitting=*/true)) {
         event->ignore();
         return;
     }
@@ -551,6 +612,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
             }
             session->disconnectPort();
         }
+    }
+    if (m_firmwareTab) {
+        m_firmwareTab->cancel();             // whatever can still be stopped
+        m_firmwareTab->disconnectSource();   // the build-machine connection
     }
     // The disconnects above may have touched the store (recent targets); flush synchronously.
     m_sshProfilesSaveTimer.stop();
@@ -574,6 +639,9 @@ void MainWindow::changeEvent(QEvent* event)
         updateWindowTitle();
         for (int i = 0; i < sessionCount(); ++i) {
             updateTabAppearance(sessionAt(i));
+        }
+        if (m_firmwareTab) {
+            onFirmwareBusyChanged(m_firmwareTab->isBusy());   // tab text and tooltip
         }
         rebuildWindowMenu();   // the status tips of the per-session entries
         updateSessionHint();   // the "Output paused" hint, if shown, in the new language
@@ -632,7 +700,13 @@ void MainWindow::updateSessionHint()
     // switch or a close, and the new current tab shows its own hint (if it is paused as well).
     const QString previous = m_sessionHint;
     SessionWidget* session = currentSession();
-    m_sessionHint = session ? session->persistentStatusMessage() : QString();
+    if (session) {
+        m_sessionHint = session->persistentStatusMessage();
+    } else if (m_firmwareTab && m_tabs && m_tabs->currentWidget() == m_firmwareTab) {
+        m_sessionHint = m_firmwareTab->persistentStatusMessage();   // "Flashing SoC: ... 42 %" while busy
+    } else {
+        m_sessionHint.clear();
+    }
     if (m_sessionHint == previous) {
         return;
     }
@@ -1039,7 +1113,10 @@ void MainWindow::rebuildWindowMenu()
 
     for (int i = 0; i < sessionCount(); ++i) {
         SessionWidget* session = sessionAt(i);
-        const QString title = session ? session->title() : QString();
+        QString title = session ? session->title() : QString();
+        if (!session && m_firmwareTab && m_tabs->widget(i) == m_firmwareTab) {
+            title = m_firmwareTab->title();
+        }
         QString text = title;
         text.replace(QLatin1Char('&'), QLatin1String("&&"));   // a literal '&' in a title is no mnemonic
         auto* action = new QAction(text, this);
@@ -1306,6 +1383,9 @@ void MainWindow::onPreferencesApplied()
             session->applyPreferences();
         }
     }
+    if (m_firmwareTab) {
+        m_firmwareTab->applyPreferences();   // tool paths, timeouts, cache folder
+    }
     updateActions();
     updateStatusBar();
     qCInfo(lcApp) << "preferences applied";
@@ -1444,8 +1524,11 @@ void MainWindow::updateActions()
     const bool targetSelected = hasSession && (ssh || !session->portName().isEmpty());
     const bool logging = hasSession && session->isLogging();
     const bool hexMode = hasSession && session->viewMode() == SessionWidget::ViewMode::HexDump;
+    // The Firmware tab is no session: every session action is off while it is current, but the
+    // tab itself can be closed (closeSession() refuses while it is busy, with a message).
+    const bool firmwareCurrent = m_firmwareTab && m_tabs && m_tabs->currentWidget() == m_firmwareTab;
 
-    ui->actionCloseSession->setEnabled(hasSession);
+    ui->actionCloseSession->setEnabled(hasSession || firmwareCurrent);
     ui->actionConnect->setEnabled(hasSession && !connected && !busy && targetSelected);
     ui->actionDisconnect->setEnabled(connected || busy);
     ui->actionSendFile->setEnabled(connected);
@@ -1453,7 +1536,7 @@ void MainWindow::updateActions()
     ui->actionDownloadFile->setEnabled(connected && ssh);
     ui->actionSendBreak->setEnabled(connected && !ssh);
     ui->actionDetectBaudRate->setEnabled(connected && !ssh);
-    ui->actionRefreshPorts->setEnabled(!ssh);
+    ui->actionRefreshPorts->setEnabled(!ssh && !firmwareCurrent);
     ui->actionSyncTerminalSize->setEnabled(connected);
     ui->actionClear->setEnabled(hasSession);
     ui->actionResetTerminal->setEnabled(hasSession);
@@ -1511,6 +1594,8 @@ void MainWindow::updateWindowTitle()
     QString title = QStringLiteral("%1 %2").arg(QStringLiteral(APP_DISPLAY_NAME), QStringLiteral(APP_VERSION));
     if (SessionWidget* session = currentSession(); session && session->transport() && !session->portName().isEmpty()) {
         title += QStringLiteral(" - ") + session->transport()->displayName();
+    } else if (m_firmwareTab && m_tabs && m_tabs->currentWidget() == m_firmwareTab) {
+        title += QStringLiteral(" - ") + m_firmwareTab->title();
     }
     setWindowTitle(title);
 }
@@ -1741,8 +1826,9 @@ void MainWindow::restoreState()
     syncRightClickPastesAction();      // AppSettings::rightClickPastes(), default on
 }
 
-// ---- v0.5 scaffolding STUBS (the ui work package implements the Firmware tab integration) ----
-#include "ui/FirmwareTab.h"
+// ---------------------------------------------------------------------------------------
+// Firmware tab (v0.5)
+// ---------------------------------------------------------------------------------------
 
 FirmwareTab* MainWindow::firmwareTab() const
 {
@@ -1762,7 +1848,46 @@ QList<SessionWidget*> MainWindow::connectedSessions() const
 
 FirmwareTab* MainWindow::showFirmwareTab()
 {
-    return m_firmwareTab;   // STUB
+    if (!m_firmwareTab) {
+        auto* tab = new FirmwareTab(m_sshProfiles, nullptr, this);
+        tab->setObjectName(QStringLiteral("firmwareTab"));
+        // "Send reboot loader through a tab": only connected session tabs qualify.
+        tab->setSessionProvider([this]() { return connectedSessions(); });
+        connect(tab, &FirmwareTab::busyChanged, this, &MainWindow::onFirmwareBusyChanged);
+        connect(tab, &FirmwareTab::titleChanged, this, [this, tab](const QString&) {
+            onFirmwareBusyChanged(tab->isBusy());
+            rebuildWindowMenu();
+            updateWindowTitle();
+        });
+        connect(tab, &FirmwareTab::statusMessage, this, [this, tab](const QString& message, int timeoutMs) {
+            // The rules of onSessionStatusMessage(): only the current tab talks to the status bar,
+            // and its lasting message comes back after a transient one.
+            if (const int index = m_tabs->indexOf(tab); index >= 0 && tab->isBusy()) {
+                m_tabs->setTabToolTip(index, tab->persistentStatusMessage());
+            }
+            if (tab != m_firmwareTab || m_tabs->currentWidget() != tab) {
+                return;
+            }
+            m_sessionHint = tab->persistentStatusMessage();
+            if (message.isEmpty()) {
+                statusBar()->clearMessage();
+            } else {
+                statusBar()->showMessage(message, timeoutMs);
+            }
+        });
+        connect(tab, &FirmwareTab::sshProfilesEditRequested, this, &MainWindow::onSshProfiles);
+        m_firmwareTab = tab;   // before addTab(): its currentChanged may already ask for it
+        m_tabs->addTab(tab, ui->actionFirmwareUpdate->icon(), tab->title());
+        onFirmwareBusyChanged(false);
+        rebuildWindowMenu();
+        qCInfo(lcUi) << "Firmware tab opened";
+    }
+    m_tabs->setCurrentWidget(m_firmwareTab);
+    updateActions();
+    updateStatusBar();
+    updateWindowTitle();
+    updateSessionHint();
+    return m_firmwareTab;
 }
 
 void MainWindow::onFirmwareUpdate()
@@ -1772,5 +1897,17 @@ void MainWindow::onFirmwareUpdate()
 
 void MainWindow::onFirmwareBusyChanged(bool busy)
 {
-    Q_UNUSED(busy);
+    if (!m_firmwareTab || !m_tabs) {
+        return;
+    }
+    const int index = m_tabs->indexOf(m_firmwareTab);
+    if (index >= 0) {
+        m_tabs->setTabText(index, m_firmwareTab->title());
+        // The chip glyph while idle; the amber dot of a connecting session while a step runs.
+        m_tabs->setTabIcon(index, busy ? stateIcon(Transport::State::Connecting) : ui->actionFirmwareUpdate->icon());
+        m_tabs->setTabToolTip(index, busy ? m_firmwareTab->persistentStatusMessage()
+                                          : tr("Firmware update: pull the build, flash the SoC, update the CC1310"));
+    }
+    qCDebug(lcUi) << "Firmware tab" << (busy ? "busy" : "idle");
+    updateActions();
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Firmware Update: a chip with a download arrow going into it. Monochrome like ssh.svg (Qt's SVG
+     icon engine has no CSS context, so no currentColor), drawn on a 24 px grid and scaled down to
+     the toolbar's 16 px. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g fill="none" stroke="#404040" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <!-- chip body and its pins -->
+    <rect x="6" y="9.5" width="12" height="11.5" rx="1.5"/>
+    <line x1="2.75" y1="13" x2="6" y2="13"/>
+    <line x1="2.75" y1="17.5" x2="6" y2="17.5"/>
+    <line x1="18" y1="13" x2="21.25" y2="13"/>
+    <line x1="18" y1="17.5" x2="21.25" y2="17.5"/>
+    <line x1="9.5" y1="21" x2="9.5" y2="23"/>
+    <line x1="14.5" y1="21" x2="14.5" y2="23"/>
+    <!-- download arrow into the chip -->
+    <line x1="12" y1="1.5" x2="12" y2="16"/>
+    <polyline points="8.75,12.75 12,16 15.25,12.75"/>
+  </g>
+</svg>

@@ -111,7 +111,7 @@ private:
 namespace {
 
 // Tab indices of PreferencesDialog.ui.
-enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageKeyboard, PageLogging, PageGeneral };
+enum Page { PageTerminal = 0, PageInput, PageConnection, PageSsh, PageKeyboard, PageLogging, PageGeneral, PageFirmware };
 
 // Columns of the Keyboard page's table.
 enum ShortcutColumn { ColumnAction = 0, ColumnShortcut, ColumnDefault };
@@ -383,6 +383,8 @@ private slots:
     void preferencesKeyboardConflictDisablesOk();
     void preferencesKeyboardRejectsBareKeys();
     void preferencesKeyboardFixedConflicts();
+    void preferencesFirmwareRoundTrip();
+    void preferencesRestoreDefaultsFirmware();
 
     // ---- QuickCommandModel ----------------------------------------------------------
     void modelRowsAndColumns();
@@ -527,12 +529,13 @@ void Tst_dialogs::preferencesLoadsFromSettings()
     QCOMPARE(dialog.windowTitle(), QStringLiteral("Preferences"));
     const PrefControls c = controlsOf(dialog);
     QVERIFY(c.complete());
-    QCOMPARE(c.tabs->count(), 7);
+    QCOMPARE(c.tabs->count(), 8);   // v0.5: Firmware appended after General
     QCOMPARE(c.tabs->currentIndex(), PageTerminal);
     QCOMPARE(c.tabs->tabText(PageSsh), QStringLiteral("SSH"));
     QCOMPARE(c.tabs->tabText(PageKeyboard), QStringLiteral("Keyboard"));
     QCOMPARE(c.tabs->tabText(PageLogging), QStringLiteral("Logging"));
     QCOMPARE(c.tabs->tabText(PageGeneral), QStringLiteral("General"));
+    QCOMPARE(c.tabs->tabText(PageFirmware), QStringLiteral("Firmware"));
     QVERIFY(c.tabs->widget(PageKeyboard)->isAncestorOf(c.shortcutTable));
     QVERIFY(c.tabs->widget(PageConnection)->isAncestorOf(c.autoBaudCandidates));
 
@@ -1775,6 +1778,172 @@ void Tst_dialogs::preferencesKeyboardFixedConflicts()
 }
 
 // =======================================================================================
+// PreferencesDialog: Firmware page (v0.5)
+// =======================================================================================
+
+namespace {
+
+/// The Firmware page's controls (PreferencesDialog.h), looked up by objectName.
+struct FirmwareControls
+{
+    QLineEdit* upgradeTool = nullptr;
+    QPushButton* upgradeToolBrowse = nullptr;
+    QLineEdit* adb = nullptr;
+    QPushButton* adbBrowse = nullptr;
+    QSpinBox* loaderWait = nullptr;
+    QSpinBox* adbReturn = nullptr;
+    QLineEdit* cacheDir = nullptr;
+    QPushButton* cacheDirBrowse = nullptr;
+    QCheckBox* gitDescribe = nullptr;
+    QLineEdit* extraFiles = nullptr;
+
+    bool complete() const
+    {
+        return upgradeTool && upgradeToolBrowse && adb && adbBrowse && loaderWait && adbReturn && cacheDir &&
+               cacheDirBrowse && gitDescribe && extraFiles;
+    }
+};
+
+FirmwareControls firmwareControlsOf(const PreferencesDialog& dialog)
+{
+    FirmwareControls f;
+    f.upgradeTool = child<QLineEdit>(&dialog, "firmwareUpgradeToolEdit");
+    f.upgradeToolBrowse = child<QPushButton>(&dialog, "firmwareUpgradeToolBrowseButton");
+    f.adb = child<QLineEdit>(&dialog, "firmwareAdbEdit");
+    f.adbBrowse = child<QPushButton>(&dialog, "firmwareAdbBrowseButton");
+    f.loaderWait = child<QSpinBox>(&dialog, "firmwareLoaderWaitSpin");
+    f.adbReturn = child<QSpinBox>(&dialog, "firmwareAdbReturnSpin");
+    f.cacheDir = child<QLineEdit>(&dialog, "firmwareCacheDirEdit");
+    f.cacheDirBrowse = child<QPushButton>(&dialog, "firmwareCacheDirBrowseButton");
+    f.gitDescribe = child<QCheckBox>(&dialog, "firmwareGitDescribeCheck");
+    f.extraFiles = child<QLineEdit>(&dialog, "firmwareExtraFilesEdit");
+    return f;
+}
+
+} // namespace
+
+void Tst_dialogs::preferencesFirmwareRoundTrip()
+{
+    AppSettings& s = AppSettings::instance();
+    const QString upgradeTool = tempPath(QStringLiteral("tools/upgrade_tool.exe"));
+    const QString adb = tempPath(QStringLiteral("tools/adb.exe"));
+    const QString cache = tempPath(QStringLiteral("fw-cache"));
+    s.setFirmwareUpgradeToolPath(upgradeTool);
+    s.setFirmwareAdbPath(adb);
+    s.setFirmwareLoaderWaitSeconds(45);
+    s.setFirmwareAdbReturnSeconds(90);
+    s.setFirmwareCacheDirectory(cache);
+    s.setFirmwareGitDescribe(false);
+    s.setFirmwareExtraFiles({QStringLiteral("sd_update.txt"), QStringLiteral("parameter.txt")});
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    QVERIFY(c.complete());
+    const FirmwareControls f = firmwareControlsOf(dialog);
+    QVERIFY(f.complete());
+    for (QWidget* widget : {static_cast<QWidget*>(f.upgradeTool), static_cast<QWidget*>(f.adb),
+                            static_cast<QWidget*>(f.loaderWait), static_cast<QWidget*>(f.adbReturn),
+                            static_cast<QWidget*>(f.cacheDir), static_cast<QWidget*>(f.gitDescribe),
+                            static_cast<QWidget*>(f.extraFiles)}) {
+        QVERIFY2(c.tabs->widget(PageFirmware)->isAncestorOf(widget), qPrintable(widget->objectName()));
+        QVERIFY2(!widget->toolTip().isEmpty(), qPrintable(widget->objectName()));
+    }
+
+    // Loaded from AppSettings.
+    QCOMPARE(f.upgradeTool->text(), QDir::toNativeSeparators(upgradeTool));
+    QCOMPARE(f.adb->text(), QDir::toNativeSeparators(adb));
+    QCOMPARE(f.loaderWait->value(), 45);
+    QCOMPARE(f.adbReturn->value(), 90);
+    QCOMPARE(f.cacheDir->text(), QDir::toNativeSeparators(cache));
+    QVERIFY(!f.gitDescribe->isChecked());
+    QCOMPARE(f.extraFiles->text(), QStringLiteral("sd_update.txt, parameter.txt"));
+    // An empty tool field means "automatic": the placeholder says what that finds.
+    QVERIFY(f.upgradeTool->placeholderText().startsWith(QStringLiteral("Automatic")));
+    QVERIFY(f.adb->placeholderText().startsWith(QStringLiteral("Automatic")));
+    QCOMPARE(f.loaderWait->minimum(), 5);
+    QCOMPARE(f.loaderWait->maximum(), 600);
+    QCOMPARE(f.adbReturn->minimum(), 5);
+    QCOMPARE(f.adbReturn->maximum(), 600);
+
+    // Edit + Apply writes every one of them.
+    const QString otherAdb = tempPath(QStringLiteral("platform-tools/adb.exe"));
+    const QString otherCache = tempPath(QStringLiteral("other-cache"));
+    f.upgradeTool->clear();
+    f.adb->setText(QDir::toNativeSeparators(otherAdb));
+    f.loaderWait->setValue(120);
+    f.adbReturn->setValue(30);
+    f.cacheDir->setText(QDir::toNativeSeparators(otherCache));
+    f.gitDescribe->setChecked(true);
+    f.extraFiles->setText(QStringLiteral(" a.txt, , b.txt,a.txt "));
+    QSignalSpy applied(&dialog, &PreferencesDialog::applied);
+    c.buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(applied.count(), qsizetype(1));
+    QVERIFY(s.firmwareUpgradeToolPath().isEmpty());
+    QCOMPARE(s.firmwareAdbPath(), otherAdb);
+    QCOMPARE(s.firmwareLoaderWaitSeconds(), 120);
+    QCOMPARE(s.firmwareAdbReturnSeconds(), 30);
+    QCOMPARE(s.firmwareCacheDirectory(), otherCache);
+    QVERIFY(s.firmwareGitDescribe());
+    QCOMPARE(s.firmwareExtraFiles(), (QStringList{QStringLiteral("a.txt"), QStringLiteral("b.txt")}));
+    QCOMPARE(f.extraFiles->text(), QStringLiteral("a.txt, b.txt"));   // shown as stored
+
+    // Cancel discards.
+    PreferencesDialog second;
+    const FirmwareControls f2 = firmwareControlsOf(second);
+    QCOMPARE(f2.loaderWait->value(), 120);
+    f2.loaderWait->setValue(300);
+    controlsOf(second).buttons->button(QDialogButtonBox::Cancel)->click();
+    QCOMPARE(s.firmwareLoaderWaitSeconds(), 120);
+}
+
+void Tst_dialogs::preferencesRestoreDefaultsFirmware()
+{
+    AppSettings& s = AppSettings::instance();
+    s.setFirmwareAdbPath(tempPath(QStringLiteral("x/adb.exe")));
+    s.setFirmwareLoaderWaitSeconds(200);
+    s.setFirmwareAdbReturnSeconds(200);
+    s.setFirmwareCacheDirectory(tempPath(QStringLiteral("x-cache")));
+    s.setFirmwareGitDescribe(false);
+    s.setFirmwareExtraFiles({QStringLiteral("x.txt")});
+    const QString defaultCache = AppSettings::dataDirectory() + QStringLiteral("/firmware");
+
+    PreferencesDialog dialog;
+    QVERIFY(expose(&dialog));
+    const PrefControls c = controlsOf(dialog);
+    const FirmwareControls f = firmwareControlsOf(dialog);
+    QVERIFY(f.complete());
+    c.tabs->setCurrentIndex(PageFirmware);
+    c.buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+    QVERIFY(f.upgradeTool->text().isEmpty());
+    QVERIFY(f.adb->text().isEmpty());
+    QCOMPARE(f.loaderWait->value(), 30);
+    QCOMPARE(f.adbReturn->value(), 60);
+    QCOMPARE(f.cacheDir->text(), QDir::toNativeSeparators(defaultCache));
+    QVERIFY(f.gitDescribe->isChecked());
+    QVERIFY(f.extraFiles->text().isEmpty());
+    QCOMPARE(s.firmwareLoaderWaitSeconds(), 200);   // nothing written before OK / Apply
+
+    c.buttons->button(QDialogButtonBox::Ok)->click();
+    QVERIFY(s.firmwareAdbPath().isEmpty());
+    QCOMPARE(s.firmwareLoaderWaitSeconds(), 30);
+    QCOMPARE(s.firmwareAdbReturnSeconds(), 60);
+    QCOMPARE(s.firmwareCacheDirectory(), defaultCache);
+    // The default cache is stored as "" so it follows the data directory.
+    QVERIFY(QSettings().value(QStringLiteral("firmware/cacheDirectory")).toString().isEmpty());
+    QVERIFY(s.firmwareGitDescribe());
+    QVERIFY(s.firmwareExtraFiles().isEmpty());
+    // An emptied cache field is the default too.
+    PreferencesDialog again;
+    const FirmwareControls f2 = firmwareControlsOf(again);
+    QCOMPARE(f2.cacheDir->text(), QDir::toNativeSeparators(defaultCache));
+    f2.cacheDir->clear();
+    controlsOf(again).buttons->button(QDialogButtonBox::Apply)->click();
+    QCOMPARE(s.firmwareCacheDirectory(), defaultCache);
+    QCOMPARE(f2.cacheDir->text(), QDir::toNativeSeparators(defaultCache));
+}
+
+// =======================================================================================
 // QuickCommandModel
 // =======================================================================================
 
@@ -2348,7 +2517,7 @@ void Tst_dialogs::storeExportImportRoundTrip()
     QVERIFY(file.open(QIODevice::ReadOnly));
     const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
     QVERIFY(doc.isObject());
-    QCOMPARE(doc.object().value(QStringLiteral("version")).toInt(), 1);
+    QCOMPARE(doc.object().value(QStringLiteral("version")).toInt(), QuickCommandStore::fileVersion());   // 2 since v0.5
     QCOMPARE(doc.object().value(QStringLiteral("commands")).toArray().size(), 3);
 
     QuickCommandStore target;

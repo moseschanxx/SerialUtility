@@ -677,6 +677,164 @@
        </item>
       </layout>
      </widget>
+     <widget class="QWidget" name="tabFirmware">
+      <attribute name="title">
+       <string>Firmware</string>
+      </attribute>
+      <layout class="QFormLayout" name="firmwareForm">
+       <item row="0" column="0">
+        <widget class="QLabel" name="firmwareUpgradeToolLabel">
+         <property name="text">
+          <string>upgrade_tool:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <layout class="QHBoxLayout" name="firmwareUpgradeToolLayout">
+         <item>
+          <widget class="QLineEdit" name="firmwareUpgradeToolEdit">
+           <property name="toolTip">
+            <string>Rockchip upgrade_tool that flashes the SoC. Empty = the copy bundled in tools/ next to the program.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="firmwareUpgradeToolBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="firmwareAdbLabel">
+         <property name="text">
+          <string>adb:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <layout class="QHBoxLayout" name="firmwareAdbLayout">
+         <item>
+          <widget class="QLineEdit" name="firmwareAdbEdit">
+           <property name="toolTip">
+            <string>adb used to reach the board and the CC1310. Empty = the bundled copy, or the first adb on PATH when there is none.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="firmwareAdbBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="firmwareLoaderWaitLabel">
+         <property name="text">
+          <string>Loader wait:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QSpinBox" name="firmwareLoaderWaitSpin">
+         <property name="toolTip">
+          <string>How long Flash SoC waits for the board to show up in Loader or Maskrom mode.</string>
+         </property>
+         <property name="suffix">
+          <string> s</string>
+         </property>
+         <property name="minimum">
+          <number>5</number>
+         </property>
+         <property name="maximum">
+          <number>600</number>
+         </property>
+         <property name="value">
+          <number>30</number>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="firmwareAdbReturnLabel">
+         <property name="text">
+          <string>ADB return wait:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QSpinBox" name="firmwareAdbReturnSpin">
+         <property name="toolTip">
+          <string>How long Flash SoC waits for the board to come back on ADB after the flash.</string>
+         </property>
+         <property name="suffix">
+          <string> s</string>
+         </property>
+         <property name="minimum">
+          <number>5</number>
+         </property>
+         <property name="maximum">
+          <number>600</number>
+         </property>
+         <property name="value">
+          <number>60</number>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="firmwareCacheDirLabel">
+         <property name="text">
+          <string>Image cache:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <layout class="QHBoxLayout" name="firmwareCacheDirLayout">
+         <item>
+          <widget class="QLineEdit" name="firmwareCacheDirEdit">
+           <property name="toolTip">
+            <string>Folder on this PC that keeps the pulled update.img and the previous one (for Roll back).</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="firmwareCacheDirBrowseButton">
+           <property name="text">
+            <string>Browse...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="5" column="1">
+        <widget class="QCheckBox" name="firmwareGitDescribeCheck">
+         <property name="toolTip">
+          <string>Run &quot;git describe --tags --dirty&quot; in the SDK on the build machine and show the result next to the image.</string>
+         </property>
+         <property name="text">
+          <string>Run git describe on the build machine</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="0">
+        <widget class="QLabel" name="firmwareExtraFilesLabel">
+         <property name="text">
+          <string>Extra files:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="1">
+        <widget class="QLineEdit" name="firmwareExtraFilesEdit">
+         <property name="toolTip">
+          <string>Further files pulled from the remote image folder next to update.img, comma-separated (for example sd_update.txt).</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>

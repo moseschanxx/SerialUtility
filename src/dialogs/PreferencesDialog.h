@@ -97,8 +97,18 @@ struct ShortcutEntry
  *  Logging:    logDirEdit + logDirBrowseButton, autoLogCheck,
  *              logFormatCombo (raw/text/hex via SessionLogger::formatToString), logIncludeTxCheck
  *  General:    confirmCloseCheck, restoreSessionsCheck
+ *  Firmware:   (v0.5, the Firmware tab; AppSettings::firmware*) firmwareUpgradeToolEdit +
+ *              firmwareUpgradeToolBrowseButton (firmwareUpgradeToolPath(); empty = ToolLocator: the
+ *              bundled copy, shown as the placeholder), firmwareAdbEdit + firmwareAdbBrowseButton
+ *              (firmwareAdbPath(); empty = bundled, else adb on PATH), firmwareLoaderWaitSpin
+ *              (firmwareLoaderWaitSeconds(), 5..600 s), firmwareAdbReturnSpin
+ *              (firmwareAdbReturnSeconds(), 5..600 s), firmwareCacheDirEdit +
+ *              firmwareCacheDirBrowseButton (firmwareCacheDirectory(); shows the effective folder, an
+ *              emptied field stores "" = <data>/firmware), firmwareGitDescribeCheck ("Run git describe
+ *              on the build machine"), firmwareExtraFilesEdit (firmwareExtraFiles(), comma-separated).
+ *              MainWindow::onPreferencesApplied() hands them to FirmwareTab::applyPreferences().
  *  buttonBox with Ok | Cancel | Apply | RestoreDefaults
- * Page order (tab indices): Terminal, Input, Connection, SSH, Keyboard, Logging, General.
+ * Page order (tab indices): Terminal, Input, Connection, SSH, Keyboard, Logging, General, Firmware.
  */
 class PreferencesDialog : public QDialog
 {
@@ -128,6 +138,9 @@ private slots:
     void onBrowseLogDir();
     void onBrowseKnownHosts();
     void onBrowseIdentityFile();
+    void onBrowseUpgradeTool();     ///< Firmware page: upgrade_tool executable
+    void onBrowseAdb();             ///< Firmware page: adb executable
+    void onBrowseFirmwareCache();   ///< Firmware page: the image cache folder
     void onRestoreDefaults();
     void onButtonClicked(QAbstractButton* button);
     void onShortcutRowChanged();                        ///< table selection -> shortcutEdit

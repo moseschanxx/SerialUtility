@@ -79,6 +79,7 @@
     </property>
     <addaction name="actionNewSession"/>
     <addaction name="actionNewSshSession"/>
+    <addaction name="actionFirmwareUpdate"/>
     <addaction name="actionCloseSession"/>
     <addaction name="separator"/>
     <addaction name="actionStartLogging"/>
@@ -205,6 +206,7 @@
    </attribute>
    <addaction name="actionNewSession"/>
    <addaction name="actionNewSshSession"/>
+   <addaction name="actionFirmwareUpdate"/>
    <addaction name="actionConnect"/>
    <addaction name="actionDisconnect"/>
    <addaction name="separator"/>
@@ -255,6 +257,27 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+T</string>
+   </property>
+   <property name="menuRole">
+    <enum>QAction::MenuRole::NoRole</enum>
+   </property>
+  </action>
+  <action name="actionFirmwareUpdate">
+   <property name="icon">
+    <iconset resource="../../resources/resources.qrc">
+     <normaloff>:/icons/firmware.svg</normaloff>:/icons/firmware.svg</iconset>
+   </property>
+   <property name="text">
+    <string>Firmware &amp;Update...</string>
+   </property>
+   <property name="iconText">
+    <string>Firmware</string>
+   </property>
+   <property name="toolTip">
+    <string>Pull the latest build, flash the SoC and update the CC1310 over the board's USB-C cable</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+U</string>
    </property>
    <property name="menuRole">
     <enum>QAction::MenuRole::NoRole</enum>

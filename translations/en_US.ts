@@ -56,6 +56,44 @@
     </message>
 </context>
 <context>
+    <name>AdbTool</name>
+    <message>
+        <location filename="../src/firmware/AdbTool.cpp" line="+123"/>
+        <source>board %1 is &apos;%2&apos;, not ready (unauthorized/offline: replug the cable)</source>
+        <translation>board %1 is &apos;%2&apos;, not ready (unauthorized/offline: replug the cable)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>board %1 is not attached; attached: %2</source>
+        <translation>board %1 is not attached; attached: %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>none</source>
+        <translation>none</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source> in a ready state, found %1</source>
+        <translation> in a ready state, found %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no ADB board attached%1: connect the Node board&apos;s USB-C port to this PC (Windows needs the ADB driver from DriverAssistant once); %2</source>
+        <translation>no ADB board attached%1: connect the Node board&apos;s USB-C port to this PC (Windows needs the ADB driver from DriverAssistant once); %2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>several ADB boards attached (%1): choose one</source>
+        <translation>several ADB boards attached (%1): choose one</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>the SoC firmware needs ADB and rfmcu: rockchip-platforms rv1106-bg2-main v1.2.0 or later</source>
+        <translation>the SoC firmware needs ADB and rfmcu: rockchip-platforms rv1106-bg2-main v1.2.0 or later</translation>
+    </message>
+</context>
+<context>
     <name>AuthPromptDialog</name>
     <message>
         <location filename="../src/dialogs/AuthPromptDialog.ui" line="+14"/>
@@ -465,6 +503,856 @@
     </message>
 </context>
 <context>
+    <name>FirmwareTab</name>
+    <message>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+667"/>
+        <source>Choose the Local Image Cache</source>
+        <translation>Choose the Local Image Cache</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <source>SSH: %1</source>
+        <translation>SSH: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Authenticated to %1 (%2)</source>
+        <translation>Authenticated to %1 (%2)</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Remote %1: %2, built %3</source>
+        <translation>Remote %1: %2, built %3</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Pulling update.img: %1 / %2 (%3 %)</source>
+        <translation>Pulling update.img: %1 / %2 (%3 %)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pulling update.img: %1</source>
+        <translation>Pulling update.img: %1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Flashing SoC: %1 %2 %</source>
+        <translation>Flashing SoC: %1 %2 %</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flashing SoC: %1</source>
+        <translation>Flashing SoC: %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Board information:</source>
+        <translation>Board information:</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>SoC flasher: %1</source>
+        <translation>SoC flasher: %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>MCU link: board %1</source>
+        <translation>MCU link: board %1</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>MCU: probing the bootloader and the application</source>
+        <translation>MCU: probing the bootloader and the application</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>MCU: rebooting into the UART updater</source>
+        <translation>MCU: rebooting into the UART updater</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>MCU: waiting for the application to restart</source>
+        <translation>MCU: waiting for the application to restart</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Updating MCU: %1 / %2 bytes (%3 %)</source>
+        <translation>Updating MCU: %1 / %2 bytes (%3 %)</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Source</source>
+        <translation>Source</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Build machine:</source>
+        <translation>Build machine:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>SSH profile or user@host[:port] of the Linux build machine</source>
+        <translation>SSH profile or user@host[:port] of the Linux build machine</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>user@host[:port]</source>
+        <translation>user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Manage SSH profiles...</source>
+        <translation>Manage SSH profiles...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remote folder:</source>
+        <translation>Remote folder:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder on the build machine that holds update.img (&quot;~&quot; is the remote home)</source>
+        <translation>Folder on the build machine that holds update.img (&quot;~&quot; is the remote home)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Local cache:</source>
+        <translation>Local cache:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder on this PC that keeps the pulled image and the previous one</source>
+        <translation>Folder on this PC that keeps the pulled image and the previous one</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose the cache folder</source>
+        <translation>Choose the cache folder</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+691"/>
+        <source>Pull</source>
+        <translation>Pull</translation>
+    </message>
+    <message>
+        <location line="-690"/>
+        <source>Copy update.img from the build machine (skipped when it did not change)</source>
+        <translation>Copy update.img from the build machine (skipped when it did not change)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use local image...</source>
+        <translation>Use local image...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flash an update.img from this PC instead of the build machine</source>
+        <translation>Flash an update.img from this PC instead of the build machine</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+8"/>
+        <source>Image:</source>
+        <translation>Image:</translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>Roll back</source>
+        <translation>Roll back</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Swap the cached image with the previous one</source>
+        <translation>Swap the cached image with the previous one</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SoC</source>
+        <translation>SoC</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Device:</source>
+        <translation>Device:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Install drivers</source>
+        <translation>Install drivers</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)</source>
+        <translation>Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+681"/>
+        <source>Flash SoC</source>
+        <translation>Flash SoC</translation>
+    </message>
+    <message>
+        <location line="-680"/>
+        <source>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</source>
+        <translation>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Stop the running step (not while upgrade_tool writes the flash)</source>
+        <translation>Stop the running step (not while upgrade_tool writes the flash)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>MCU (CC1310)</source>
+        <translation>MCU (CC1310)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Package:</source>
+        <translation>Package:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CC1310 firmware package (.pkg)</source>
+        <translation>CC1310 firmware package (.pkg)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose the package</source>
+        <translation>Choose the package</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Running:</source>
+        <translation>Running:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Read</source>
+        <translation>Read</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ask the MCU for its version and role (adb shell rfmcu cmd version)</source>
+        <translation>Ask the MCU for its version and role (adb shell rfmcu cmd version)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Role:</source>
+        <translation>Role:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Receiver firmware role</source>
+        <translation>Receiver firmware role</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Transmitter firmware role</source>
+        <translation>Transmitter firmware role</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+669"/>
+        <source>Update MCU</source>
+        <translation>Update MCU</translation>
+    </message>
+    <message>
+        <location line="-668"/>
+        <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
+        <translation>Send the package to the CC1310 through the board (needs a confirmed role)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+670"/>
+        <source>Set role</source>
+        <translation>Set role</translation>
+    </message>
+    <message>
+        <location line="-669"/>
+        <source>Store the selected role in the CC1310</source>
+        <translation>Store the selected role in the CC1310</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Pull &amp;&amp; Flash</source>
+        <translation>Pull &amp;&amp; Flash</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Pull the image, flash the SoC, wait for the board, then update the MCU when its version differs</source>
+        <translation>Pull the image, flash the SoC, wait for the board, then update the MCU when its version differs</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Log</source>
+        <translation>Log</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear</source>
+        <translation>Clear</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Empty the log pane</source>
+        <translation>Empty the log pane</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Save...</source>
+        <translation>Save...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Save the log pane to a text file</source>
+        <translation>Save the log pane to a text file</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ready</source>
+        <translation>Ready</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <source>Firmware</source>
+        <translation>Firmware</translation>
+    </message>
+    <message>
+        <location line="+135"/>
+        <source>file not found</source>
+        <translation>file not found</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>not a Rockchip RKFW image</source>
+        <translation>not a Rockchip RKFW image</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Image %1 refused: %2</source>
+        <translation>Image %1 refused: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Using the local image %1</source>
+        <translation>Using the local image %1</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>unreadable file</source>
+        <translation>unreadable file</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Package %1 refused: %2</source>
+        <translation>Package %1 refused: %2</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Package %1: %2</source>
+        <translation>Package %1: %2</translation>
+    </message>
+    <message>
+        <location line="+147"/>
+        <source>the SSH profile of the build machine no longer exists</source>
+        <translation>the SSH profile of the build machine no longer exists</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>enter the build machine (an SSH profile or user@host)</source>
+        <translation>enter the build machine (an SSH profile or user@host)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>&quot;%1&quot; is not an SSH target such as user@host[:port]</source>
+        <translation>&quot;%1&quot; is not an SSH target such as user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>no image yet: pull one from the build machine or use a local image</source>
+        <translation>no image yet: pull one from the build machine or use a local image</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1, %2, modified %3 (local file)</source>
+        <translation>%1, %2, modified %3 (local file)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+12"/>
+        <source>%1, %2, modified %3</source>
+        <translation>%1, %2, modified %3</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>previous: %1</source>
+        <translation>previous: %1</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>upgrade_tool not found: no image details</source>
+        <translation>upgrade_tool not found: no image details</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>reading the image details...</source>
+        <translation>reading the image details...</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>upgrade_tool could not be started: %1</source>
+        <translation>upgrade_tool could not be started: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no image details (upgrade_tool SFI exit code %1)</source>
+        <translation>no image details (upgrade_tool SFI exit code %1)</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>no image selected</source>
+        <translation>no image selected</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>not checked yet</source>
+        <translation>not checked yet</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>no board</source>
+        <translation>no board</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>a Rockchip device is attached but no driver claims it</source>
+        <translation>a Rockchip device is attached but no driver claims it</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>ADB device %1</source>
+        <translation>ADB device %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Loader mode %1</source>
+        <translation>Loader mode %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Maskrom mode %1</source>
+        <translation>Maskrom mode %1</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>%1 %2, %3 bytes, CRC OK</source>
+        <translation>%1 %2, %3 bytes, CRC OK</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>no package chosen</source>
+        <translation>no package chosen</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>unknown</source>
+        <translation>unknown</translation>
+    </message>
+    <message>
+        <location line="+61"/>
+        <source>upgrade_tool: %1</source>
+        <translation>upgrade_tool: %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>adb: %1</source>
+        <translation>adb: %1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Read MCU</source>
+        <translation>Read MCU</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pull &amp; Flash</source>
+        <translation>Pull &amp; Flash</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Busy: %1 is still running</source>
+        <translation>Busy: %1 is still running</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>--- %1 ---</source>
+        <translation>--- %1 ---</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>%1: %2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+34"/>
+        <source>%1 failed: %2</source>
+        <translation>%1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="-29"/>
+        <source>stopped at %1: %2</source>
+        <translation>stopped at %1: %2</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>%1 done: %2</source>
+        <translation>%1 done: %2</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>enter the remote folder that holds update.img</source>
+        <translation>enter the remote folder that holds update.img</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot create the cache folder %1</source>
+        <translation>cannot create the cache folder %1</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Pull: connecting to %1...</source>
+        <translation>Pull: connecting to %1...</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Connecting to %1</source>
+        <translation>Connecting to %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot connect to %1</source>
+        <translation>cannot connect to %1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Connected to %1 (%2)</source>
+        <translation>Connected to %1 (%2)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+339"/>
+        <location line="+178"/>
+        <location line="+10"/>
+        <location line="+13"/>
+        <source>cancelled</source>
+        <translation>cancelled</translation>
+    </message>
+    <message>
+        <location line="-539"/>
+        <location line="+11"/>
+        <source>the connection to %1 closed</source>
+        <translation>the connection to %1 closed</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Pull: checking update.img on %1...</source>
+        <translation>Pull: checking update.img on %1...</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image pull did not start</source>
+        <translation>the image pull did not start</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>no image: pull one or choose a local image first</source>
+        <translation>no image: pull one or choose a local image first</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Flashing %1</source>
+        <translation>Flashing %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flashing SoC: starting...</source>
+        <translation>Flashing SoC: starting...</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>the SoC flasher did not start</source>
+        <translation>the SoC flasher did not start</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Flashing SoC: looking for the board</source>
+        <translation>Flashing SoC: looking for the board</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: rebooting the board into Loader mode</source>
+        <translation>Flashing SoC: rebooting the board into Loader mode</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: waiting for the board in Loader / Maskrom mode</source>
+        <translation>Flashing SoC: waiting for the board in Loader / Maskrom mode</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: writing the flash - do not unplug the board</source>
+        <translation>Flashing SoC: writing the flash - do not unplug the board</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flashing SoC: waiting for the board to come back on ADB</source>
+        <translation>Flashing SoC: waiting for the board to come back on ADB</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: reading the board information</source>
+        <translation>Flashing SoC: reading the board information</translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>Firmware Update</source>
+        <translation>Firmware Update</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No board is visible on USB (no ADB, Loader or Maskrom device).
+
+Send &quot;reboot loader&quot; through the connected session %1 so the board restarts in Loader mode?</source>
+        <translation>No board is visible on USB (no ADB, Loader or Maskrom device).
+
+Send &quot;reboot loader&quot; through the connected session %1 so the board restarts in Loader mode?</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+5"/>
+        <source>Send through %1</source>
+        <translation>Send through %1</translation>
+    </message>
+    <message>
+        <location line="-4"/>
+        <source>No, use the MASKROM button</source>
+        <translation>No, use the MASKROM button</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Sent &quot;reboot loader&quot; through %1</source>
+        <translation>Sent &quot;reboot loader&quot; through %1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
+        <translation>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>choose a valid .pkg package first</source>
+        <translation>choose a valid .pkg package first</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>choose the MCU role (rx or tx) first: it is never guessed</source>
+        <translation>choose the MCU role (rx or tx) first: it is never guessed</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Updating the MCU with %1 (role %2)</source>
+        <translation>Updating the MCU with %1 (role %2)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Setting the MCU role to %1</source>
+        <translation>Setting the MCU role to %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1: opening the link through the board...</source>
+        <translation>%1: opening the link through the board...</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>the MCU link could not be opened</source>
+        <translation>the MCU link could not be opened</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>the MCU updater did not start</source>
+        <translation>the MCU updater did not start</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Reading the MCU version through ADB...</source>
+        <translation>Reading the MCU version through ADB...</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>rfmcu cmd %1</source>
+        <translation>rfmcu cmd %1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>adb could not be started: %1</source>
+        <translation>adb could not be started: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>adb did not answer in time</source>
+        <translation>adb did not answer in time</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</source>
+        <translation>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the MCU did not answer &quot;%1&quot;</source>
+        <translation>the MCU did not answer &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>rfmcu cmd %1 failed (exit code %2): %3</source>
+        <translation>rfmcu cmd %1 failed (exit code %2): %3</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>unexpected reply to &quot;version&quot;: %1</source>
+        <translation>unexpected reply to &quot;version&quot;: %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>nothing</source>
+        <translation>nothing</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>MCU application version=%1 role=%2</source>
+        <translation>MCU application version=%1 role=%2</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>No MCU package chosen: the MCU update is skipped</source>
+        <translation>No MCU package chosen: the MCU update is skipped</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>SoC flashed; no MCU package chosen</source>
+        <translation>SoC flashed; no MCU package chosen</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>cannot read the running MCU version: %1</source>
+        <translation>cannot read the running MCU version: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the MCU already runs %1; update skipped</source>
+        <translation>the MCU already runs %1; update skipped</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
+        <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Cannot cancel while upgrade_tool writes the flash</source>
+        <translation>Cannot cancel while upgrade_tool writes the flash</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancelling %1</source>
+        <translation>Cancelling %1</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Roll back failed: %1</source>
+        <translation>Roll back failed: %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>there is no previous image</source>
+        <translation>there is no previous image</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Rolled back: the previous image is the current one again</source>
+        <translation>Rolled back: the previous image is the current one again</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Choose a Rockchip Update Image</source>
+        <translation>Choose a Rockchip Update Image</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rockchip update images (*.img);;All files (*)</source>
+        <translation>Rockchip update images (*.img);;All files (*)</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Choose a CC1310 Firmware Package</source>
+        <translation>Choose a CC1310 Firmware Package</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CC1310 firmware packages (*.pkg);;All files (*)</source>
+        <translation>CC1310 firmware packages (*.pkg);;All files (*)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</source>
+        <translation>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Starting the Rockchip driver installer %1</source>
+        <translation>Starting the Rockchip driver installer %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Could not start %1: %2. Run it as administrator from that folder.</source>
+        <translation>Could not start %1: %2. Run it as administrator from that folder.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The driver installer ended (exit code %1); replug the board</source>
+        <translation>The driver installer ended (exit code %1); replug the board</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Save Firmware Log</source>
+        <translation>Save Firmware Log</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Text files (*.txt *.log);;All files (*)</source>
+        <translation>Text files (*.txt *.log);;All files (*)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Cannot write %1: %2</source>
+        <translation>Cannot write %1: %2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Log saved to %1</source>
+        <translation>Log saved to %1</translation>
+    </message>
+</context>
+<context>
     <name>HexDumpView</name>
     <message numerus="yes">
         <location filename="../src/ui/HexDumpView.cpp" line="+162"/>
@@ -604,6 +1492,200 @@ Only replace the stored key if you are sure the change is expected.</translation
     </message>
 </context>
 <context>
+    <name>ImagePuller</name>
+    <message>
+        <location filename="../src/firmware/ImagePuller.cpp" line="+141"/>
+        <source>Cannot rename %1 to %2: %3</source>
+        <translation>Cannot rename %1 to %2: %3</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+34"/>
+        <source>Cannot remove %1</source>
+        <translation>Cannot remove %1</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Cannot remove the old %1</source>
+        <translation>Cannot remove the old %1</translation>
+    </message>
+    <message>
+        <location line="+109"/>
+        <location line="+30"/>
+        <location line="+307"/>
+        <source>Not connected</source>
+        <translation>Not connected</translation>
+    </message>
+    <message>
+        <location line="-333"/>
+        <source>No remote folder given</source>
+        <translation>No remote folder given</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>No cache folder given</source>
+        <translation>No cache folder given</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Cannot create the cache folder %1</source>
+        <translation>Cannot create the cache folder %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Looking for %1 in %2 on %3</source>
+        <translation>Looking for %1 in %2 on %3</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>The connection was closed</source>
+        <translation>The connection was closed</translation>
+    </message>
+    <message>
+        <location line="+69"/>
+        <source>Cannot read %1 in %2 on %3: %4</source>
+        <translation>Cannot read %1 in %2 on %3: %4</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>no %1 in %2 on %3</source>
+        <translation>no %1 in %2 on %3</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 in %2 on %3 is a folder, not a file</source>
+        <translation>%1 in %2 on %3 is a folder, not a file</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1 on %2: %3, %4</source>
+        <translation>%1 on %2: %3, %4</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+109"/>
+        <source>Skipping %1: %2</source>
+        <translation>Skipping %1: %2</translation>
+    </message>
+    <message>
+        <location line="-107"/>
+        <source>it is a folder</source>
+        <translation>it is a folder</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>not found on the build machine</source>
+        <translation>not found on the build machine</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>git describe printed nothing</source>
+        <translation>git describe printed nothing</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>git describe: %1</source>
+        <translation>git describe: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>No git version (git describe ended with status %1)</source>
+        <translation>No git version (git describe ended with status %1)</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>%1 unchanged (%2, %3)</source>
+        <translation>%1 unchanged (%2, %3)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Downloading %1 (%2)</source>
+        <translation>Downloading %1 (%2)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cannot start the download: the connection is busy or closed</source>
+        <translation>Cannot start the download: the connection is busy or closed</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+8"/>
+        <location line="+389"/>
+        <source>cancelled</source>
+        <translation>cancelled</translation>
+    </message>
+    <message>
+        <location line="-384"/>
+        <source>Pulled %1</source>
+        <translation>Pulled %1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>The download finished but %1 is missing</source>
+        <translation>The download finished but %1 is missing</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>downloaded file is not a Rockchip RKFW image</source>
+        <translation>downloaded file is not a Rockchip RKFW image</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Downloaded %1 bytes but %2 is %3 bytes on %4 (it changed during the download; pull again)</source>
+        <translation>Downloaded %1 bytes but %2 is %3 bytes on %4 (it changed during the download; pull again)</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Cannot write the note of %1: %2</source>
+        <translation>Cannot write the note of %1: %2</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Skipping %1: not a plain file name</source>
+        <translation>Skipping %1: not a plain file name</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>pulled %1 (%2) from %3:%4</source>
+        <translation>pulled %1 (%2) from %3:%4</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Skipping %1: cannot start the download</source>
+        <translation>Skipping %1: cannot start the download</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The connection was lost</source>
+        <translation>The connection was lost</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>, built %1</source>
+        <translation>, built %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>, pulled %1</source>
+        <translation>, pulled %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source> from %1</source>
+        <translation> from %1</translation>
+    </message>
+    <message>
+        <location line="+165"/>
+        <source>No image path</source>
+        <translation>No image path</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>There is no previous image to go back to</source>
+        <translation>There is no previous image to go back to</translation>
+    </message>
+</context>
+<context>
     <name>LogReplayer</name>
     <message>
         <location filename="../src/core/LogReplayer.cpp" line="+57"/>
@@ -654,7 +1736,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>&amp;File</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+18"/>
         <source>&amp;Session</source>
         <translation>&amp;Session</translation>
     </message>
@@ -684,7 +1766,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Main Toolbar</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+45"/>
         <source>&amp;New Session</source>
         <translation>&amp;New Session</translation>
     </message>
@@ -699,7 +1781,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>Ctrl+T</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+50"/>
         <source>&amp;Close Session</source>
         <translation>&amp;Close Session</translation>
     </message>
@@ -824,12 +1906,12 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>&amp;Connect</translation>
     </message>
     <message>
-        <location line="-213"/>
+        <location line="-235"/>
         <source>&amp;Window</source>
         <translation>&amp;Window</translation>
     </message>
     <message>
-        <location line="+104"/>
+        <location line="+105"/>
         <source>New &amp;SSH Session...</source>
         <translation>New &amp;SSH Session...</translation>
     </message>
@@ -847,6 +1929,26 @@ Only replace the stored key if you are sure the change is expected.</translation
         <location line="+3"/>
         <source>Ctrl+Shift+T</source>
         <translation>Ctrl+Shift+T</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Firmware &amp;Update...</source>
+        <translation>Firmware &amp;Update...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Firmware</source>
+        <translation>Firmware</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pull the latest build, flash the SoC and update the CC1310 over the board&apos;s USB-C cable</source>
+        <translation>Pull the latest build, flash the SoC and update the CC1310 over the board&apos;s USB-C cable</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+U</source>
+        <translation>Ctrl+Shift+U</translation>
     </message>
     <message>
         <location line="+14"/>
@@ -1329,7 +2431,7 @@ Only replace the stored key if you are sure the change is expected.</translation
         <translation>BuildAI &amp;Homepage</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+515"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+552"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>Session %1 is still connected.
@@ -1352,12 +2454,18 @@ Close them anyway?</numerusform>
         <translation>Close Session</translation>
     </message>
     <message>
-        <location line="-6"/>
+        <location line="-113"/>
+        <source>The Firmware tab is busy (%1): wait until it finishes or cancel it first</source>
+        <translation>The Firmware tab is busy (%1): wait until it finishes or cancel it first</translation>
+    </message>
+    <message>
+        <location line="+107"/>
+        <location line="+47"/>
         <source>Quit %1</source>
         <translation>Quit %1</translation>
     </message>
     <message numerus="yes">
-        <location line="+1"/>
+        <location line="-46"/>
         <source>%n session(s) are still connected (%1).
 Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>
@@ -1369,29 +2477,50 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+3"/>
+        <location line="+46"/>
         <source>Quit</source>
         <translation>Quit</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-41"/>
         <source>Close</source>
         <translation>Close</translation>
     </message>
     <message>
-        <location line="+54"/>
-        <location line="+1097"/>
+        <location line="+25"/>
+        <source>The Firmware tab is still working (%1).
+Quitting now interrupts it; an interrupted flash can leave the board in Loader mode.</source>
+        <translation>The Firmware tab is still working (%1).
+Quitting now interrupts it; an interrupted flash can leave the board in Loader mode.</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+9"/>
+        <source>%n session(s) are still connected (%1).</source>
+        <translation>
+            <numerusform>%n session is still connected (%1).</numerusform>
+            <numerusform>%n sessions are still connected (%1).</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Quit anyway?</source>
+        <translation>Quit anyway?</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <location line="+1117"/>
         <source>System Log</source>
         <translation>System Log</translation>
     </message>
     <message>
-        <location line="-963"/>
-        <location line="+919"/>
+        <location line="-974"/>
+        <location line="+930"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-833"/>
+        <location line="-844"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>%n serial port found</numerusform>
@@ -1405,12 +2534,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+585"/>
+        <location line="+591"/>
         <source>Cannot open %1</source>
         <translation>Cannot open %1</translation>
     </message>
     <message>
-        <location line="-542"/>
+        <location line="-548"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
@@ -1430,7 +2559,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Not found</translation>
     </message>
     <message>
-        <location line="+129"/>
+        <location line="+132"/>
         <source>Switch to %1</source>
         <translation>Switch to %1</translation>
     </message>
@@ -1450,12 +2579,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>%1 menu</translation>
     </message>
     <message>
-        <location line="+284"/>
+        <location line="+290"/>
         <source>Logging to %1</source>
         <translation>Logging to %1</translation>
     </message>
     <message>
-        <location line="+97"/>
+        <location line="+99"/>
         <source>Connection state and line settings</source>
         <translation>Connection state and line settings</translation>
     </message>
@@ -1484,12 +2613,158 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <source>LOG</source>
         <translation>LOG</translation>
     </message>
+    <message>
+        <location line="+170"/>
+        <source>Firmware update: pull the build, flash the SoC, update the CC1310</source>
+        <translation>Firmware update: pull the build, flash the SoC, update the CC1310</translation>
+    </message>
+</context>
+<context>
+    <name>McuLink</name>
+    <message>
+        <location filename="../src/firmware/McuLink.cpp" line="+142"/>
+        <source>cannot run %1: %2</source>
+        <translation>cannot run %1: %2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb %1 timed out after %2 s</source>
+        <translation>adb %1 timed out after %2 s</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>adb %1 failed (exit %2): %3</source>
+        <translation>adb %1 failed (exit %2): %3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+146"/>
+        <source>no output</source>
+        <translation>no output</translation>
+    </message>
+    <message>
+        <location line="-130"/>
+        <source>cannot run adb: the tool runner is gone</source>
+        <translation>cannot run adb: the tool runner is gone</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>board %1 has no rfmcu: %2</source>
+        <translation>board %1 has no rfmcu: %2</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>adb forward did not report a local port (got &apos;%1&apos;); update adb</source>
+        <translation>adb forward did not report a local port (got &apos;%1&apos;); update adb</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <location line="+22"/>
+        <source>rfmcu bridge did not start on board %1: %2</source>
+        <translation>rfmcu bridge did not start on board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the rfmcu bridge on board %1 ended (exit %2): %3</source>
+        <translation>the rfmcu bridge on board %1 ended (exit %2): %3</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <location line="+18"/>
+        <source>cannot connect to the rfmcu bridge on 127.0.0.1:%1: %2</source>
+        <translation>cannot connect to the rfmcu bridge on 127.0.0.1:%1: %2</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>the connection to the rfmcu bridge on board %1 was closed</source>
+        <translation>the connection to the rfmcu bridge on board %1 was closed</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>timed out</source>
+        <translation>timed out</translation>
+    </message>
+</context>
+<context>
+    <name>McuUpdater</name>
+    <message>
+        <location filename="../src/firmware/McuUpdater.cpp" line="+246"/>
+        <location line="+130"/>
+        <source>connection closed</source>
+        <translation>connection closed</translation>
+    </message>
+    <message>
+        <location line="-34"/>
+        <source>no bootloader response; put the device in UART update mode (CLI command &apos;bootloader&apos;) or drop --no-auto-bootloader</source>
+        <translation>no bootloader response; put the device in UART update mode (CLI command &apos;bootloader&apos;) or drop --no-auto-bootloader</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+278"/>
+        <source>no acceptable response after %1 retries</source>
+        <translation>no acceptable response after %1 retries</translation>
+    </message>
+    <message>
+        <location line="-158"/>
+        <source>invalid INFO response</source>
+        <translation>invalid INFO response</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>package target does not match device</source>
+        <translation>package target does not match device</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>package exceeds device App slot</source>
+        <translation>package exceeds device App slot</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>invalid READY response</source>
+        <translation>invalid READY response</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>bootloader requested unsupported resume offset</source>
+        <translation>bootloader requested unsupported resume offset</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>invalid ACK/NACK response</source>
+        <translation>invalid ACK/NACK response</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>invalid NACK offset</source>
+        <translation>invalid NACK offset</translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>neither the bootloader nor the application CLI answered on this port</source>
+        <translation>neither the bootloader nor the application CLI answered on this port</translation>
+    </message>
+    <message>
+        <location line="+149"/>
+        <source>application did not enter the bootloader: %1</source>
+        <translation>application did not enter the bootloader: %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no reply</source>
+        <translation>no reply</translation>
+    </message>
+    <message>
+        <location line="+99"/>
+        <source>cancelled</source>
+        <translation>cancelled</translation>
+    </message>
 </context>
 <context>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+204"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+226"/>
         <source>Preferences</source>
         <translation>Preferences</translation>
     </message>
@@ -1651,7 +2926,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     <message>
         <location line="+7"/>
         <location line="+59"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+122"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+125"/>
         <source> ms</source>
         <translation> ms</translation>
     </message>
@@ -1753,12 +3028,16 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+3"/>
+        <location line="+284"/>
+        <location line="+26"/>
         <location filename="../src/dialogs/PreferencesDialog.cpp" line="-1"/>
+        <location line="+19"/>
+        <location line="+2"/>
         <source> s</source>
         <translation> s</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-291"/>
         <source>Saved passwords:</source>
         <translation>Saved passwords:</translation>
     </message>
@@ -1774,7 +3053,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+22"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-20"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-41"/>
         <source>Action</source>
         <translation>Action</translation>
     </message>
@@ -1836,14 +3115,92 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Log directory:</translation>
     </message>
     <message>
-        <location line="-215"/>
+        <location line="+67"/>
+        <source>Firmware</source>
+        <translation>Firmware</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool:</source>
+        <translation>upgrade_tool:</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Rockchip upgrade_tool that flashes the SoC. Empty = the copy bundled in tools/ next to the program.</source>
+        <translation>Rockchip upgrade_tool that flashes the SoC. Empty = the copy bundled in tools/ next to the program.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>adb:</source>
+        <translation>adb:</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>adb used to reach the board and the CC1310. Empty = the bundled copy, or the first adb on PATH when there is none.</source>
+        <translation>adb used to reach the board and the CC1310. Empty = the bundled copy, or the first adb on PATH when there is none.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Loader wait:</source>
+        <translation>Loader wait:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long Flash SoC waits for the board to show up in Loader or Maskrom mode.</source>
+        <translation>How long Flash SoC waits for the board to show up in Loader or Maskrom mode.</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>ADB return wait:</source>
+        <translation>ADB return wait:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long Flash SoC waits for the board to come back on ADB after the flash.</source>
+        <translation>How long Flash SoC waits for the board to come back on ADB after the flash.</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Image cache:</source>
+        <translation>Image cache:</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Folder on this PC that keeps the pulled update.img and the previous one (for Roll back).</source>
+        <translation>Folder on this PC that keeps the pulled update.img and the previous one (for Roll back).</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Run &quot;git describe --tags --dirty&quot; in the SDK on the build machine and show the result next to the image.</source>
+        <translation>Run &quot;git describe --tags --dirty&quot; in the SDK on the build machine and show the result next to the image.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Run git describe on the build machine</source>
+        <translation>Run git describe on the build machine</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Extra files:</source>
+        <translation>Extra files:</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Further files pulled from the remote image folder next to update.img, comma-separated (for example sd_update.txt).</source>
+        <translation>Further files pulled from the remote image folder next to update.img, comma-separated (for example sd_update.txt).</translation>
+    </message>
+    <message>
+        <location line="-432"/>
         <location line="+25"/>
         <location line="+202"/>
+        <location line="+77"/>
+        <location line="+25"/>
+        <location line="+77"/>
         <source>Browse...</source>
         <translation>Browse...</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="-170"/>
         <source>Start logging automatically when a session connects</source>
         <translation>Start logging automatically when a session connects</translation>
     </message>
@@ -1929,7 +3286,18 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Hex dump</translation>
     </message>
     <message>
-        <location line="+156"/>
+        <location line="+6"/>
+        <location line="+2"/>
+        <source>Automatic: %1</source>
+        <translation>Automatic: %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>e.g. sd_update.txt</source>
+        <translation>e.g. sd_update.txt</translation>
+    </message>
+    <message>
+        <location line="+179"/>
         <source>Terminal Font</source>
         <translation>Terminal Font</translation>
     </message>
@@ -1955,11 +3323,34 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
     </message>
     <message>
         <location line="+0"/>
+        <location line="+14"/>
+        <location line="+16"/>
         <source>All files (*)</source>
         <translation>All files (*)</translation>
     </message>
     <message>
-        <location line="+207"/>
+        <location line="-18"/>
+        <location line="+16"/>
+        <source>Programs (*.exe);;All files (*)</source>
+        <translation>Programs (*.exe);;All files (*)</translation>
+    </message>
+    <message>
+        <location line="-12"/>
+        <source>Select upgrade_tool</source>
+        <translation>Select upgrade_tool</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Select adb</source>
+        <translation>Select adb</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Select Image Cache Folder</source>
+        <translation>Select Image Cache Folder</translation>
+    </message>
+    <message>
+        <location line="+217"/>
         <source>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</source>
         <translation>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</translation>
     </message>
@@ -2092,7 +3483,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
 <context>
     <name>QuickCommandStore</name>
     <message>
-        <location filename="../src/core/QuickCommand.cpp" line="+50"/>
+        <location filename="../src/core/QuickCommand.cpp" line="+53"/>
         <source>Invalid JSON at offset %1: %2</source>
         <translation>Invalid JSON at offset %1: %2</translation>
     </message>
@@ -2107,7 +3498,7 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Missing &quot;commands&quot; array</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+47"/>
         <source>Cannot create directory %1</source>
         <translation>Cannot create directory %1</translation>
     </message>
@@ -2118,12 +3509,12 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <translation>Cannot write %1: %2</translation>
     </message>
     <message>
-        <location line="+169"/>
+        <location line="+183"/>
         <source>General</source>
         <translation>General</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+39"/>
         <source>Interrupt (ETX, 0x03)</source>
         <translation>Interrupt (ETX, 0x03)</translation>
     </message>
@@ -2156,6 +3547,81 @@ Quit anyway? All tabs will be closed and logging stopped.</numerusform>
         <location line="+17"/>
         <source>Cannot read %1: %2</source>
         <translation>Cannot read %1: %2</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>SoC console: reboot into the USB download (Loader) mode for flashing</source>
+        <translation>SoC console: reboot into the USB download (Loader) mode for flashing</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SoC console: open the CC1310 CLI through the SoC; ~. leaves it</source>
+        <translation>SoC console: open the CC1310 CLI through the SoC; ~. leaves it</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: list the commands of this role (help &lt;command&gt; shows one usage)</source>
+        <translation>CC1310: list the commands of this role (help &lt;command&gt; shows one usage)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: firmware version and CLI baud rate</source>
+        <translation>CC1310: firmware version and CLI baud rate</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: reset cause, watchdog, uptime (sys | sys wdt_test; wdt_test resets the board)</source>
+        <translation>CC1310: reset cause, watchdog, uptime (sys | sys wdt_test; wdt_test resets the board)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: stack high-water marks of every task, and the heap</source>
+        <translation>CC1310: stack high-water marks of every task, and the heap</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: CLI rate and UART receive errors (uart | uart baud &lt;rate&gt;)</source>
+        <translation>CC1310: CLI rate and UART receive errors (uart | uart baud &lt;rate&gt;)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: power state (power | power off [delay_ms] | power soc on|off)</source>
+        <translation>CC1310: power state (power | power off [delay_ms] | power soc on|off)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: battery and charger (bat | bat sim &lt;mV&gt;|off | bat charge on|off)</source>
+        <translation>CC1310: battery and charger (bat | bat sim &lt;mV&gt;|off | bat charge on|off)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: packet, CRC and RSSI counters (rx status | rx dump on|off)</source>
+        <translation>CC1310 receiver: packet, CRC and RSSI counters (rx status | rx dump on|off)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: print one line per received frame until rx dump off or a reset</source>
+        <translation>CC1310 receiver: print one line per received frame until rx dump off or a reset</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: stop the per-frame output</source>
+        <translation>CC1310 receiver: stop the per-frame output</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 transmitter: state and counters of the sync frames</source>
+        <translation>CC1310 transmitter: state and counters of the sync frames</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: writes an update request and reboots into the UART updater</source>
+        <translation>CC1310: writes an update request and reboots into the UART updater</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>leave rfmcu console</source>
+        <translation>leave rfmcu console</translation>
     </message>
 </context>
 <context>
@@ -2572,6 +4038,57 @@ Nothing is saved until you press OK.</translation>
         <location line="+2"/>
         <source>Enter the local and the remote path.</source>
         <translation>Enter the local and the remote path.</translation>
+    </message>
+</context>
+<context>
+    <name>RkFirmwareInfo</name>
+    <message>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+161"/>
+        <source>chip %1</source>
+        <translation>chip %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>built %1</source>
+        <translation>built %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>loader %1</source>
+        <translation>loader %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>1 entry</source>
+        <translation>1 entry</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 entries</source>
+        <translation>%1 entries</translation>
+    </message>
+</context>
+<context>
+    <name>RockchipTool</name>
+    <message>
+        <location line="+145"/>
+        <source>no firmware image selected</source>
+        <translation>no firmware image selected</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>cannot read %1: %2</source>
+        <translation>cannot read %1: %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no firmware image at %1</source>
+        <translation>no firmware image at %1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>%1 is not a Rockchip update image (the RKFW magic is missing)</source>
+        <translation>%1 is not a Rockchip update image (the RKFW magic is missing)</translation>
     </message>
 </context>
 <context>
@@ -3374,9 +4891,188 @@ Nothing is saved until you press OK.</translation>
     </message>
 </context>
 <context>
+    <name>SocFlasher</name>
+    <message>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+141"/>
+        <source>  could not run: %1</source>
+        <translation>  could not run: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  timed out</source>
+        <translation>  timed out</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  exit code %1</source>
+        <translation>  exit code %1</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>upgrade_tool could not be run: %1</source>
+        <translation>upgrade_tool could not be run: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>upgrade_tool LD timed out</source>
+        <translation>upgrade_tool LD timed out</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>adb could not be run: %1</source>
+        <translation>adb could not be run: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb devices timed out</source>
+        <translation>adb devices timed out</translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>upgrade_tool not found: set its path in Preferences</source>
+        <translation>upgrade_tool not found: set its path in Preferences</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb not found: set its path in Preferences</source>
+        <translation>adb not found: set its path in Preferences</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>no tool runner</source>
+        <translation>no tool runner</translation>
+    </message>
+    <message>
+        <location line="+52"/>
+        <source>cannot cancel while upgrade_tool writes the flash</source>
+        <translation>cannot cancel while upgrade_tool writes the flash</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>stopped waiting for ADB; the image was already written</source>
+        <translation>stopped waiting for ADB; the image was already written</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>cancelled</source>
+        <translation>cancelled</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>board running %1, rebooting it into loader mode</source>
+        <translation>board running %1, rebooting it into loader mode</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>an unknown kernel</source>
+        <translation>an unknown kernel</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
+        <translation>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>waiting for the board to enter MASKROM/Loader mode (up to %1 s)</source>
+        <translation>waiting for the board to enter MASKROM/Loader mode (up to %1 s)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location line="+18"/>
+        <source>board is in download mode</source>
+        <translation>board is in download mode</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>board did not enter MASKROM/Loader within %1 s</source>
+        <translation>board did not enter MASKROM/Loader within %1 s</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>board flashed, but ADB did not come back within %1 s; check the serial console</source>
+        <translation>board flashed, but ADB did not come back within %1 s; check the serial console</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>flashing %1 (%2 mode)</source>
+        <translation>flashing %1 (%2 mode)</translation>
+    </message>
+    <message>
+        <location line="+60"/>
+        <source>cannot run upgrade_tool: %1</source>
+        <translation>cannot run upgrade_tool: %1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>upgrade_tool did not report success: %1</source>
+        <translation>upgrade_tool did not report success: %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output</source>
+        <translation>no output</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Upgrade firmware ok</source>
+        <translation>Upgrade firmware ok</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>waiting for the board to come back on ADB (up to %1 s)</source>
+        <translation>waiting for the board to come back on ADB (up to %1 s)</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>board is back on ADB</source>
+        <translation>board is back on ADB</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>board flashed, but adb could not be run (%1); check the serial console</source>
+        <translation>board flashed, but adb could not be run (%1); check the serial console</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Upgrade firmware ok; board is back on ADB</source>
+        <translation>Upgrade firmware ok; board is back on ADB</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>ADB device</source>
+        <translation>ADB device</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ADB device %1</source>
+        <translation>ADB device %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Loader mode</source>
+        <translation>Loader mode</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Maskrom mode</source>
+        <translation>Maskrom mode</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Rockchip USB device without a driver</source>
+        <translation>Rockchip USB device without a driver</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>no board</source>
+        <translation>no board</translation>
+    </message>
+</context>
+<context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+431"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+446"/>
         <source>No SSH host given</source>
         <translation>No SSH host given</translation>
     </message>
@@ -3391,7 +5087,7 @@ Nothing is saved until you press OK.</translation>
         <translation>Transfer aborted: the connection was closed</translation>
     </message>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+305"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+306"/>
         <source>unknown size</source>
         <translation>unknown size</translation>
     </message>
@@ -3953,14 +5649,16 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>SshWorker</name>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+279"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+282"/>
         <location line="+99"/>
         <location line="+1760"/>
+        <location line="+564"/>
+        <location line="+33"/>
         <source>Not connected</source>
         <translation>Not connected</translation>
     </message>
     <message>
-        <location line="-1855"/>
+        <location line="-2452"/>
         <source>Another transfer is still running</source>
         <translation>Another transfer is still running</translation>
     </message>
@@ -4184,23 +5882,24 @@ You will be asked for it when connecting.</translation>
     </message>
     <message>
         <location line="+29"/>
-        <location line="+904"/>
+        <location line="+905"/>
         <source>Connection to %1 cancelled</source>
         <translation>Connection to %1 cancelled</translation>
     </message>
     <message>
-        <location line="-901"/>
+        <location line="-902"/>
         <source>No answer within 5 minutes - connection to %1 cancelled</source>
         <translation>No answer within 5 minutes - connection to %1 cancelled</translation>
     </message>
     <message>
         <location line="+115"/>
-        <location line="+778"/>
+        <location line="+779"/>
+        <location line="+572"/>
         <source>Connection to %1 lost: %2</source>
         <translation>Connection to %1 lost: %2</translation>
     </message>
     <message>
-        <location line="-761"/>
+        <location line="-1334"/>
         <location line="+375"/>
         <location line="+67"/>
         <source>Write to %1 failed: %2</source>
@@ -4265,12 +5964,12 @@ You will be asked for it when connecting.</translation>
         <translation>the remote command ended without an exit status</translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="+68"/>
         <source>&apos;%1&apos; on %2 did not finish within %3 s</source>
         <translation>&apos;%1&apos; on %2 did not finish within %3 s</translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+87"/>
         <source>unexpected size &quot;%1&quot;</source>
         <translation>unexpected size &quot;%1&quot;</translation>
     </message>
@@ -4327,7 +6026,28 @@ You will be asked for it when connecting.</translation>
         <translation>Downloaded %1 to %2 (%3, via shell)</translation>
     </message>
     <message>
-        <location line="-697"/>
+        <location line="+212"/>
+        <source>The remote command ended without an exit status</source>
+        <translation>The remote command ended without an exit status</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <location line="+29"/>
+        <source>Cannot stat %1: %2</source>
+        <translation>Cannot stat %1: %2</translation>
+    </message>
+    <message>
+        <location line="-6"/>
+        <source>Unexpected answer of stat on %1: %2</source>
+        <translation>Unexpected answer of stat on %1: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>stat exited with status %1</source>
+        <translation>stat exited with status %1</translation>
+    </message>
+    <message>
+        <location line="-981"/>
         <location line="+19"/>
         <location line="+19"/>
         <location line="+30"/>
@@ -4572,6 +6292,19 @@ You will be asked for it when connecting.</translation>
     </message>
 </context>
 <context>
+    <name>ToolRunner</name>
+    <message>
+        <location filename="../src/firmware/ToolRunner.cpp" line="+298"/>
+        <source>timed out after %1 ms</source>
+        <translation>timed out after %1 ms</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the process crashed</source>
+        <translation>the process crashed</translation>
+    </message>
+</context>
+<context>
     <name>Transport</name>
     <message>
         <location filename="../src/core/Transport.cpp" line="+9"/>
@@ -4582,6 +6315,30 @@ You will be asked for it when connecting.</translation>
         <location line="+2"/>
         <source>SSH</source>
         <translation>SSH</translation>
+    </message>
+</context>
+<context>
+    <name>UsbProbe</name>
+    <message>
+        <location filename="../src/firmware/UsbProbe.cpp" line="+87"/>
+        <location line="+56"/>
+        <source>Unknown device</source>
+        <translation>Unknown device</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>%1: no driver bound. Install the Rockchip USB drivers (DriverAssistant) and replug the board.</source>
+        <translation>%1: no driver bound. Install the Rockchip USB drivers (DriverAssistant) and replug the board.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1: the driver reports problem code %2. Reinstall the Rockchip USB drivers (DriverAssistant) and replug the board.</source>
+        <translation>%1: the driver reports problem code %2. Reinstall the Rockchip USB drivers (DriverAssistant) and replug the board.</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</source>
+        <translation>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</translation>
     </message>
 </context>
 <context>

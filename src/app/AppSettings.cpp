@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QLocale>
 #include <QVariant>
+#include <QVariantMap>
 
 #include "app/Logging.h"
 
@@ -47,6 +48,18 @@ constexpr auto kShortcutsGroup = "shortcuts";
 constexpr auto kAutoBaudCandidates = "connection/autoBaudCandidates";
 constexpr auto kAutoBaudSampleMs = "connection/autoBaudSampleMs";
 constexpr auto kAutoBaudWatchdog = "connection/autoBaudWatchdog";
+constexpr auto kFirmwareSourceTarget = "firmware/sourceTarget";
+constexpr auto kFirmwareRemoteFolders = "firmware/remoteFolders";
+constexpr auto kFirmwareLastRemoteFolder = "firmware/lastRemoteFolder";
+constexpr auto kFirmwareCacheDirectory = "firmware/cacheDirectory";
+constexpr auto kFirmwareLocalImage = "firmware/localImage";
+constexpr auto kFirmwarePackagePath = "firmware/packagePath";
+constexpr auto kFirmwareUpgradeToolPath = "firmware/upgradeToolPath";
+constexpr auto kFirmwareAdbPath = "firmware/adbPath";
+constexpr auto kFirmwareLoaderWaitSeconds = "firmware/loaderWaitSeconds";
+constexpr auto kFirmwareAdbReturnSeconds = "firmware/adbReturnSeconds";
+constexpr auto kFirmwareGitDescribe = "firmware/gitDescribe";
+constexpr auto kFirmwareExtraFiles = "firmware/extraFiles";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -61,6 +74,12 @@ const QLatin1String kDefaultSshTerminalType("xterm-256color");
 constexpr int kMinAutoBaudSampleMs = 300;
 constexpr int kMaxAutoBaudSampleMs = 10000;
 constexpr int kDefaultAutoBaudSampleMs = 1500;
+// Firmware tab: the Loader wait is usb_update.sh's TIMEOUT, the ADB return its 60 s wait.
+constexpr int kMinFirmwareWaitSeconds = 5;
+constexpr int kMaxFirmwareWaitSeconds = 600;
+constexpr int kDefaultFirmwareLoaderWaitSeconds = 30;
+constexpr int kDefaultFirmwareAdbReturnSeconds = 60;
+const QLatin1String kDefaultFirmwareRemoteFolder("~/rk/rockchip-platforms/output/image");
 
 QVariant readValue(const char* key, const QVariant& fallback = QVariant())
 {
@@ -618,6 +637,173 @@ bool AppSettings::autoBaudWatchdog() const
 void AppSettings::setAutoBaudWatchdog(bool on)
 {
     SU_WRITE_SETTING(kAutoBaudWatchdog, on);
+}
+
+// ---------------------------------------------------------------------------
+// Firmware tab (v0.5)
+// ---------------------------------------------------------------------------
+
+QString AppSettings::firmwareSourceTarget() const
+{
+    return readValue(kFirmwareSourceTarget).toString().trimmed();
+}
+
+void AppSettings::setFirmwareSourceTarget(const QString& target)
+{
+    SU_WRITE_SETTING(kFirmwareSourceTarget, target.trimmed());
+}
+
+QString AppSettings::firmwareRemoteFolder(const QString& target) const
+{
+    const QString key = target.trimmed();
+    if (!key.isEmpty()) {
+        const QString folder = readValue(kFirmwareRemoteFolders).toMap().value(key).toString().trimmed();
+        if (!folder.isEmpty()) {
+            return folder;
+        }
+    }
+    // A target seen for the first time starts with the folder used last, wherever that was.
+    const QString last = firmwareLastRemoteFolder();
+    return last.isEmpty() ? defaultFirmwareRemoteFolder() : last;
+}
+
+void AppSettings::setFirmwareRemoteFolder(const QString& target, const QString& folder)
+{
+    const QString key = target.trimmed();
+    const QString value = folder.trimmed();
+    if (!key.isEmpty()) {
+        QVariantMap folders = readValue(kFirmwareRemoteFolders).toMap();
+        if (value.isEmpty()) {
+            folders.remove(key);
+        } else {
+            folders.insert(key, value);
+        }
+        SU_WRITE_SETTING(kFirmwareRemoteFolders, folders);
+    }
+    if (!value.isEmpty()) {
+        SU_WRITE_SETTING(kFirmwareLastRemoteFolder, value);
+    }
+}
+
+QString AppSettings::firmwareLastRemoteFolder() const
+{
+    return readValue(kFirmwareLastRemoteFolder).toString().trimmed();
+}
+
+QString AppSettings::defaultFirmwareRemoteFolder()
+{
+    return kDefaultFirmwareRemoteFolder;
+}
+
+QString AppSettings::firmwareCacheDirectory() const
+{
+    const QString dir = readValue(kFirmwareCacheDirectory).toString().trimmed();
+    return dir.isEmpty() ? AppSettings::dataDirectory() + QStringLiteral("/firmware") : dir;
+}
+
+void AppSettings::setFirmwareCacheDirectory(const QString& dir)
+{
+    SU_WRITE_SETTING(kFirmwareCacheDirectory, dir.trimmed());
+}
+
+QString AppSettings::firmwareLocalImage() const
+{
+    return readValue(kFirmwareLocalImage).toString().trimmed();
+}
+
+void AppSettings::setFirmwareLocalImage(const QString& path)
+{
+    SU_WRITE_SETTING(kFirmwareLocalImage, path.trimmed());
+}
+
+QString AppSettings::firmwarePackagePath() const
+{
+    return readValue(kFirmwarePackagePath).toString().trimmed();
+}
+
+void AppSettings::setFirmwarePackagePath(const QString& path)
+{
+    SU_WRITE_SETTING(kFirmwarePackagePath, path.trimmed());
+}
+
+QString AppSettings::firmwareUpgradeToolPath() const
+{
+    return readValue(kFirmwareUpgradeToolPath).toString().trimmed();
+}
+
+void AppSettings::setFirmwareUpgradeToolPath(const QString& path)
+{
+    SU_WRITE_SETTING(kFirmwareUpgradeToolPath, path.trimmed());
+}
+
+QString AppSettings::firmwareAdbPath() const
+{
+    return readValue(kFirmwareAdbPath).toString().trimmed();
+}
+
+void AppSettings::setFirmwareAdbPath(const QString& path)
+{
+    SU_WRITE_SETTING(kFirmwareAdbPath, path.trimmed());
+}
+
+int AppSettings::firmwareLoaderWaitSeconds() const
+{
+    bool ok = false;
+    const int seconds = readValue(kFirmwareLoaderWaitSeconds, kDefaultFirmwareLoaderWaitSeconds).toInt(&ok);
+    return qBound(kMinFirmwareWaitSeconds, ok ? seconds : kDefaultFirmwareLoaderWaitSeconds, kMaxFirmwareWaitSeconds);
+}
+
+void AppSettings::setFirmwareLoaderWaitSeconds(int seconds)
+{
+    SU_WRITE_SETTING(kFirmwareLoaderWaitSeconds, qBound(kMinFirmwareWaitSeconds, seconds, kMaxFirmwareWaitSeconds));
+}
+
+int AppSettings::firmwareAdbReturnSeconds() const
+{
+    bool ok = false;
+    const int seconds = readValue(kFirmwareAdbReturnSeconds, kDefaultFirmwareAdbReturnSeconds).toInt(&ok);
+    return qBound(kMinFirmwareWaitSeconds, ok ? seconds : kDefaultFirmwareAdbReturnSeconds, kMaxFirmwareWaitSeconds);
+}
+
+void AppSettings::setFirmwareAdbReturnSeconds(int seconds)
+{
+    SU_WRITE_SETTING(kFirmwareAdbReturnSeconds, qBound(kMinFirmwareWaitSeconds, seconds, kMaxFirmwareWaitSeconds));
+}
+
+bool AppSettings::firmwareGitDescribe() const
+{
+    return readValue(kFirmwareGitDescribe, true).toBool();
+}
+
+void AppSettings::setFirmwareGitDescribe(bool on)
+{
+    SU_WRITE_SETTING(kFirmwareGitDescribe, on);
+}
+
+QStringList AppSettings::firmwareExtraFiles() const
+{
+    // Stored as one comma-separated string so the INI file stays readable and editable.
+    QStringList names;
+    const QStringList parts = readValue(kFirmwareExtraFiles).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        const QString name = part.trimmed();
+        if (!name.isEmpty() && !names.contains(name)) {
+            names.append(name);
+        }
+    }
+    return names;
+}
+
+void AppSettings::setFirmwareExtraFiles(const QStringList& names)
+{
+    QStringList cleaned;
+    for (const QString& name : names) {
+        const QString trimmed = name.trimmed();
+        if (!trimmed.isEmpty() && !cleaned.contains(trimmed)) {
+            cleaned.append(trimmed);
+        }
+    }
+    SU_WRITE_SETTING(kFirmwareExtraFiles, cleaned.join(QLatin1Char(',')));
 }
 
 #undef SU_WRITE_SETTING

@@ -56,6 +56,44 @@
     </message>
 </context>
 <context>
+    <name>AdbTool</name>
+    <message>
+        <location filename="../src/firmware/AdbTool.cpp" line="+123"/>
+        <source>board %1 is &apos;%2&apos;, not ready (unauthorized/offline: replug the cable)</source>
+        <translation>开发板 %1 处于“%2”状态，尚未就绪（unauthorized/offline：请重新插拔数据线）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>board %1 is not attached; attached: %2</source>
+        <translation>开发板 %1 未连接；已连接：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>none</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source> in a ready state, found %1</source>
+        <translation>（处于就绪状态），发现 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no ADB board attached%1: connect the Node board&apos;s USB-C port to this PC (Windows needs the ADB driver from DriverAssistant once); %2</source>
+        <translation>没有连接 ADB 开发板%1：请将 Node 开发板的 USB-C 口连接到本机（Windows 需要先安装一次 DriverAssistant 中的 ADB 驱动）；%2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>several ADB boards attached (%1): choose one</source>
+        <translation>连接了多块 ADB 开发板（%1）：请选择一块</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>the SoC firmware needs ADB and rfmcu: rockchip-platforms rv1106-bg2-main v1.2.0 or later</source>
+        <translation>SoC 固件需要 ADB 和 rfmcu：rockchip-platforms rv1106-bg2-main v1.2.0 或更高版本</translation>
+    </message>
+</context>
+<context>
     <name>AuthPromptDialog</name>
     <message>
         <location filename="../src/dialogs/AuthPromptDialog.ui" line="+14"/>
@@ -464,6 +502,856 @@
     </message>
 </context>
 <context>
+    <name>FirmwareTab</name>
+    <message>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+667"/>
+        <source>Choose the Local Image Cache</source>
+        <translation>选择本地镜像缓存</translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <source>SSH: %1</source>
+        <translation>SSH：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Authenticated to %1 (%2)</source>
+        <translation>已通过 %1 的身份验证（%2）</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Remote %1: %2, built %3</source>
+        <translation>远程 %1：%2，构建于 %3</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Pulling update.img: %1 / %2 (%3 %)</source>
+        <translation>正在拉取 update.img：%1 / %2（%3 %）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pulling update.img: %1</source>
+        <translation>正在拉取 update.img：%1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Flashing SoC: %1 %2 %</source>
+        <translation>正在刷写 SoC：%1 %2 %</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flashing SoC: %1</source>
+        <translation>正在刷写 SoC：%1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Board information:</source>
+        <translation>开发板信息：</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>SoC flasher: %1</source>
+        <translation>SoC 刷写：%1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>MCU link: board %1</source>
+        <translation>MCU 链路：开发板 %1</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>MCU: probing the bootloader and the application</source>
+        <translation>MCU：正在探测引导程序和应用程序</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>MCU: rebooting into the UART updater</source>
+        <translation>MCU：正在重启进入 UART 更新程序</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>MCU: waiting for the application to restart</source>
+        <translation>MCU：正在等待应用程序重新启动</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Updating MCU: %1 / %2 bytes (%3 %)</source>
+        <translation>正在更新 MCU：%1 / %2 字节（%3 %）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Source</source>
+        <translation>来源</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Build machine:</source>
+        <translation>构建机：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>SSH profile or user@host[:port] of the Linux build machine</source>
+        <translation>Linux 构建机的 SSH 配置文件或 user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>user@host[:port]</source>
+        <translation>user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Manage SSH profiles...</source>
+        <translation>管理 SSH 配置文件...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remote folder:</source>
+        <translation>远程文件夹：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder on the build machine that holds update.img (&quot;~&quot; is the remote home)</source>
+        <translation>构建机上存放 update.img 的文件夹（&quot;~&quot; 表示远程主目录）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Local cache:</source>
+        <translation>本地缓存：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder on this PC that keeps the pulled image and the previous one</source>
+        <translation>本机上保存已拉取镜像及上一版镜像的文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose the cache folder</source>
+        <translation>选择缓存文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+691"/>
+        <source>Pull</source>
+        <translation>拉取</translation>
+    </message>
+    <message>
+        <location line="-690"/>
+        <source>Copy update.img from the build machine (skipped when it did not change)</source>
+        <translation>从构建机复制 update.img（未变化时跳过）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use local image...</source>
+        <translation>使用本地镜像...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flash an update.img from this PC instead of the build machine</source>
+        <translation>刷写本机上的 update.img，而不是构建机上的</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+8"/>
+        <source>Image:</source>
+        <translation>镜像：</translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>Roll back</source>
+        <translation>回滚</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Swap the cached image with the previous one</source>
+        <translation>将缓存的镜像与上一版互换</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SoC</source>
+        <translation>SoC</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Device:</source>
+        <translation>设备：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Install drivers</source>
+        <translation>安装驱动</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)</source>
+        <translation>运行随附的 Rockchip DriverAssistant（rockusb 和 ADB 驱动）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+681"/>
+        <source>Flash SoC</source>
+        <translation>刷写 SoC</translation>
+    </message>
+    <message>
+        <location line="-680"/>
+        <source>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</source>
+        <translation>通过 USB-C 线将镜像写入 Rockchip SoC（upgrade_tool UF）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Stop the running step (not while upgrade_tool writes the flash)</source>
+        <translation>停止当前步骤（upgrade_tool 写入闪存期间不可停止）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>MCU (CC1310)</source>
+        <translation>MCU (CC1310)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Package:</source>
+        <translation>固件包：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CC1310 firmware package (.pkg)</source>
+        <translation>CC1310 固件包（.pkg）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose the package</source>
+        <translation>选择固件包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Running:</source>
+        <translation>运行中：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Read</source>
+        <translation>读取</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ask the MCU for its version and role (adb shell rfmcu cmd version)</source>
+        <translation>向 MCU 查询版本和角色（adb shell rfmcu cmd version）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Role:</source>
+        <translation>角色：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Receiver firmware role</source>
+        <translation>接收端固件角色</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Transmitter firmware role</source>
+        <translation>发送端固件角色</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+669"/>
+        <source>Update MCU</source>
+        <translation>更新 MCU</translation>
+    </message>
+    <message>
+        <location line="-668"/>
+        <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
+        <translation>通过开发板将固件包发送到 CC1310（需要已确认的角色）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+670"/>
+        <source>Set role</source>
+        <translation>设置角色</translation>
+    </message>
+    <message>
+        <location line="-669"/>
+        <source>Store the selected role in the CC1310</source>
+        <translation>将所选角色写入 CC1310</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Pull &amp;&amp; Flash</source>
+        <translation>拉取并刷写</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Pull the image, flash the SoC, wait for the board, then update the MCU when its version differs</source>
+        <translation>拉取镜像、刷写 SoC、等待开发板，然后在版本不同时更新 MCU</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Log</source>
+        <translation>日志</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Empty the log pane</source>
+        <translation>清空日志窗格</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Save...</source>
+        <translation>保存...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Save the log pane to a text file</source>
+        <translation>将日志窗格保存为文本文件</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ready</source>
+        <translation>就绪</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <source>Firmware</source>
+        <translation>固件</translation>
+    </message>
+    <message>
+        <location line="+135"/>
+        <source>file not found</source>
+        <translation>找不到文件</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>not a Rockchip RKFW image</source>
+        <translation>不是 Rockchip RKFW 镜像</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Image %1 refused: %2</source>
+        <translation>已拒绝镜像 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Using the local image %1</source>
+        <translation>使用本地镜像 %1</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>unreadable file</source>
+        <translation>无法读取的文件</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Package %1 refused: %2</source>
+        <translation>已拒绝固件包 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Package %1: %2</source>
+        <translation>固件包 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+147"/>
+        <source>the SSH profile of the build machine no longer exists</source>
+        <translation>构建机的 SSH 配置文件已不存在</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>enter the build machine (an SSH profile or user@host)</source>
+        <translation>请输入构建机（SSH 配置文件或 user@host）</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>&quot;%1&quot; is not an SSH target such as user@host[:port]</source>
+        <translation>&quot;%1&quot; 不是 user@host[:port] 这样的 SSH 目标</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>no image yet: pull one from the build machine or use a local image</source>
+        <translation>还没有镜像：请从构建机拉取或使用本地镜像</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1, %2, modified %3 (local file)</source>
+        <translation>%1，%2，修改于 %3（本地文件）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+12"/>
+        <source>%1, %2, modified %3</source>
+        <translation>%1，%2，修改于 %3</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>previous: %1</source>
+        <translation>上一版：%1</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>upgrade_tool not found: no image details</source>
+        <translation>找不到 upgrade_tool：无法显示镜像详情</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>reading the image details...</source>
+        <translation>正在读取镜像详情...</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>upgrade_tool could not be started: %1</source>
+        <translation>无法启动 upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no image details (upgrade_tool SFI exit code %1)</source>
+        <translation>没有镜像详情（upgrade_tool SFI 退出码 %1）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>no image selected</source>
+        <translation>未选择镜像</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>not checked yet</source>
+        <translation>尚未检测</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>no board</source>
+        <translation>无开发板</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>a Rockchip device is attached but no driver claims it</source>
+        <translation>已连接 Rockchip 设备，但没有驱动程序接管它</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>ADB device %1</source>
+        <translation>ADB 设备 %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Loader mode %1</source>
+        <translation>Loader 模式 %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Maskrom mode %1</source>
+        <translation>Maskrom 模式 %1</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>%1 %2, %3 bytes, CRC OK</source>
+        <translation>%1 %2，%3 字节，CRC 正确</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>no package chosen</source>
+        <translation>未选择固件包</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>unknown</source>
+        <translation>未知</translation>
+    </message>
+    <message>
+        <location line="+61"/>
+        <source>upgrade_tool: %1</source>
+        <translation>upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>adb: %1</source>
+        <translation>adb：%1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Read MCU</source>
+        <translation>读取 MCU</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pull &amp; Flash</source>
+        <translation>拉取并刷写</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Busy: %1 is still running</source>
+        <translation>忙碌：%1 仍在运行</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>--- %1 ---</source>
+        <translation>--- %1 ---</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>%1: %2</source>
+        <translation>%1：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+34"/>
+        <source>%1 failed: %2</source>
+        <translation>%1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="-29"/>
+        <source>stopped at %1: %2</source>
+        <translation>在“%1”处停止：%2</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>%1 done: %2</source>
+        <translation>%1 完成：%2</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>enter the remote folder that holds update.img</source>
+        <translation>请输入存放 update.img 的远程文件夹</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot create the cache folder %1</source>
+        <translation>无法创建缓存文件夹 %1</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Pull: connecting to %1...</source>
+        <translation>拉取：正在连接 %1...</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Connecting to %1</source>
+        <translation>正在连接 %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot connect to %1</source>
+        <translation>无法连接到 %1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Connected to %1 (%2)</source>
+        <translation>已连接到 %1（%2）</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+339"/>
+        <location line="+178"/>
+        <location line="+10"/>
+        <location line="+13"/>
+        <source>cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <location line="-539"/>
+        <location line="+11"/>
+        <source>the connection to %1 closed</source>
+        <translation>与 %1 的连接已关闭</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Pull: checking update.img on %1...</source>
+        <translation>拉取：正在检查 %1 上的 update.img...</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image pull did not start</source>
+        <translation>镜像拉取未能启动</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>no image: pull one or choose a local image first</source>
+        <translation>没有镜像：请先拉取或选择本地镜像</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Flashing %1</source>
+        <translation>正在刷写 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flashing SoC: starting...</source>
+        <translation>正在刷写 SoC：启动中...</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>the SoC flasher did not start</source>
+        <translation>SoC 刷写未能启动</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Flashing SoC: looking for the board</source>
+        <translation>正在刷写 SoC：正在查找开发板</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: rebooting the board into Loader mode</source>
+        <translation>正在刷写 SoC：正在将开发板重启到 Loader 模式</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: waiting for the board in Loader / Maskrom mode</source>
+        <translation>正在刷写 SoC：正在等待开发板进入 Loader / Maskrom 模式</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: writing the flash - do not unplug the board</source>
+        <translation>正在刷写 SoC：正在写入闪存 - 请勿拔下开发板</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flashing SoC: waiting for the board to come back on ADB</source>
+        <translation>正在刷写 SoC：正在等待开发板重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: reading the board information</source>
+        <translation>正在刷写 SoC：正在读取开发板信息</translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>Firmware Update</source>
+        <translation>固件更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No board is visible on USB (no ADB, Loader or Maskrom device).
+
+Send &quot;reboot loader&quot; through the connected session %1 so the board restarts in Loader mode?</source>
+        <translation>USB 上看不到开发板（没有 ADB、Loader 或 Maskrom 设备）。
+
+是否通过已连接的会话 %1 发送 &quot;reboot loader&quot;，让开发板重启进入 Loader 模式？</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+5"/>
+        <source>Send through %1</source>
+        <translation>通过 %1 发送</translation>
+    </message>
+    <message>
+        <location line="-4"/>
+        <source>No, use the MASKROM button</source>
+        <translation>否，使用 MASKROM 按键</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Sent &quot;reboot loader&quot; through %1</source>
+        <translation>已通过 %1 发送 &quot;reboot loader&quot;</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
+        <translation>未找到开发板：请按住 MASKROM 按键再插入 USB-C 线（或在按住时给开发板重新上电）；最多等待 %1 秒</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>choose a valid .pkg package first</source>
+        <translation>请先选择有效的 .pkg 固件包</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>choose the MCU role (rx or tx) first: it is never guessed</source>
+        <translation>请先选择 MCU 角色（rx 或 tx）：程序不会自行猜测</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Updating the MCU with %1 (role %2)</source>
+        <translation>正在用 %1 更新 MCU（角色 %2）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Setting the MCU role to %1</source>
+        <translation>正在将 MCU 角色设置为 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1: opening the link through the board...</source>
+        <translation>%1：正在通过开发板打开链路...</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>the MCU link could not be opened</source>
+        <translation>无法打开 MCU 链路</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>the MCU updater did not start</source>
+        <translation>MCU 更新程序未能启动</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Reading the MCU version through ADB...</source>
+        <translation>正在通过 ADB 读取 MCU 版本...</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>rfmcu cmd %1</source>
+        <translation>rfmcu cmd %1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>adb could not be started: %1</source>
+        <translation>无法启动 adb：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>adb did not answer in time</source>
+        <translation>adb 未能及时响应</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</source>
+        <translation>MCU 端口忙（另一个 rfmcu 占用了 /dev/ttyS1）：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the MCU did not answer &quot;%1&quot;</source>
+        <translation>MCU 没有响应 &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>rfmcu cmd %1 failed (exit code %2): %3</source>
+        <translation>rfmcu cmd %1 失败（退出码 %2）：%3</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>unexpected reply to &quot;version&quot;: %1</source>
+        <translation>&quot;version&quot; 的回复不符合预期：%1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>nothing</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>MCU application version=%1 role=%2</source>
+        <translation>MCU 应用程序 version=%1 role=%2</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>No MCU package chosen: the MCU update is skipped</source>
+        <translation>未选择 MCU 固件包：跳过 MCU 更新</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>SoC flashed; no MCU package chosen</source>
+        <translation>SoC 已刷写；未选择 MCU 固件包</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>cannot read the running MCU version: %1</source>
+        <translation>无法读取正在运行的 MCU 版本：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the MCU already runs %1; update skipped</source>
+        <translation>MCU 已在运行 %1；跳过更新</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
+        <translation>拉取并刷写：拉取镜像、刷写 SoC、等待 ADB，必要时再更新 MCU</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Cannot cancel while upgrade_tool writes the flash</source>
+        <translation>upgrade_tool 写入闪存期间无法取消</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancelling %1</source>
+        <translation>正在取消 %1</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Roll back failed: %1</source>
+        <translation>回滚失败：%1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>there is no previous image</source>
+        <translation>没有上一版镜像</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Rolled back: the previous image is the current one again</source>
+        <translation>已回滚：上一版镜像重新成为当前镜像</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Choose a Rockchip Update Image</source>
+        <translation>选择 Rockchip 更新镜像</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rockchip update images (*.img);;All files (*)</source>
+        <translation>Rockchip 更新镜像 (*.img);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Choose a CC1310 Firmware Package</source>
+        <translation>选择 CC1310 固件包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CC1310 firmware packages (*.pkg);;All files (*)</source>
+        <translation>CC1310 固件包 (*.pkg);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</source>
+        <translation>缺少 Rockchip 驱动安装程序（%1）；请手动安装 DriverAssistant</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Starting the Rockchip driver installer %1</source>
+        <translation>正在启动 Rockchip 驱动安装程序 %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Could not start %1: %2. Run it as administrator from that folder.</source>
+        <translation>无法启动 %1：%2。请在该文件夹中以管理员身份运行它。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The driver installer ended (exit code %1); replug the board</source>
+        <translation>驱动安装程序已结束（退出码 %1）；请重新插拔开发板</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Save Firmware Log</source>
+        <translation>保存固件日志</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Text files (*.txt *.log);;All files (*)</source>
+        <translation>文本文件 (*.txt *.log);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Cannot write %1: %2</source>
+        <translation>无法写入 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Log saved to %1</source>
+        <translation>日志已保存到 %1</translation>
+    </message>
+</context>
+<context>
     <name>HexDumpView</name>
     <message numerus="yes">
         <location filename="../src/ui/HexDumpView.cpp" line="+162"/>
@@ -602,6 +1490,200 @@ Only replace the stored key if you are sure the change is expected.</source>
     </message>
 </context>
 <context>
+    <name>ImagePuller</name>
+    <message>
+        <location filename="../src/firmware/ImagePuller.cpp" line="+141"/>
+        <source>Cannot rename %1 to %2: %3</source>
+        <translation>无法将 %1 重命名为 %2：%3</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+34"/>
+        <source>Cannot remove %1</source>
+        <translation>无法删除 %1</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Cannot remove the old %1</source>
+        <translation>无法删除旧的 %1</translation>
+    </message>
+    <message>
+        <location line="+109"/>
+        <location line="+30"/>
+        <location line="+307"/>
+        <source>Not connected</source>
+        <translation>未连接</translation>
+    </message>
+    <message>
+        <location line="-333"/>
+        <source>No remote folder given</source>
+        <translation>未指定远程文件夹</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>No cache folder given</source>
+        <translation>未指定缓存文件夹</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Cannot create the cache folder %1</source>
+        <translation>无法创建缓存文件夹 %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Looking for %1 in %2 on %3</source>
+        <translation>正在 %3 的 %2 中查找 %1</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>The connection was closed</source>
+        <translation>连接已关闭</translation>
+    </message>
+    <message>
+        <location line="+69"/>
+        <source>Cannot read %1 in %2 on %3: %4</source>
+        <translation>无法读取 %3 上 %2 中的 %1：%4</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>no %1 in %2 on %3</source>
+        <translation>%3 上的 %2 中没有 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 in %2 on %3 is a folder, not a file</source>
+        <translation>%3 上 %2 中的 %1 是文件夹，不是文件</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1 on %2: %3, %4</source>
+        <translation>%2 上的 %1：%3，%4</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+109"/>
+        <source>Skipping %1: %2</source>
+        <translation>跳过 %1：%2</translation>
+    </message>
+    <message>
+        <location line="-107"/>
+        <source>it is a folder</source>
+        <translation>它是文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>not found on the build machine</source>
+        <translation>构建机上找不到</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>git describe printed nothing</source>
+        <translation>git describe 没有输出</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>git describe: %1</source>
+        <translation>git describe：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>No git version (git describe ended with status %1)</source>
+        <translation>没有 git 版本（git describe 以状态 %1 结束）</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>%1 unchanged (%2, %3)</source>
+        <translation>%1 未变化（%2，%3）</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Downloading %1 (%2)</source>
+        <translation>正在下载 %1（%2）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cannot start the download: the connection is busy or closed</source>
+        <translation>无法开始下载：连接正忙或已关闭</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+8"/>
+        <location line="+389"/>
+        <source>cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <location line="-384"/>
+        <source>Pulled %1</source>
+        <translation>已拉取 %1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>The download finished but %1 is missing</source>
+        <translation>下载已完成，但找不到 %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>downloaded file is not a Rockchip RKFW image</source>
+        <translation>下载的文件不是 Rockchip RKFW 镜像</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Downloaded %1 bytes but %2 is %3 bytes on %4 (it changed during the download; pull again)</source>
+        <translation>已下载 %1 字节，但 %4 上的 %2 为 %3 字节（下载期间文件发生了变化；请重新拉取）</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Cannot write the note of %1: %2</source>
+        <translation>无法写入 %1 的说明文件：%2</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Skipping %1: not a plain file name</source>
+        <translation>跳过 %1：不是普通文件名</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>pulled %1 (%2) from %3:%4</source>
+        <translation>已从 %3:%4 拉取 %1（%2）</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Skipping %1: cannot start the download</source>
+        <translation>跳过 %1：无法开始下载</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The connection was lost</source>
+        <translation>连接已断开</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>, built %1</source>
+        <translation>，构建于 %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>, pulled %1</source>
+        <translation>，拉取于 %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source> from %1</source>
+        <translation>，来自 %1</translation>
+    </message>
+    <message>
+        <location line="+165"/>
+        <source>No image path</source>
+        <translation>没有镜像路径</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>There is no previous image to go back to</source>
+        <translation>没有可回退的上一版镜像</translation>
+    </message>
+</context>
+<context>
     <name>LogReplayer</name>
     <message>
         <location filename="../src/core/LogReplayer.cpp" line="+57"/>
@@ -652,7 +1734,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>文件(&amp;F)</translation>
     </message>
     <message>
-        <location line="+17"/>
+        <location line="+18"/>
         <source>&amp;Session</source>
         <translation>会话(&amp;S)</translation>
     </message>
@@ -682,7 +1764,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>主工具栏</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+45"/>
         <source>&amp;New Session</source>
         <translation>新建会话(&amp;N)</translation>
     </message>
@@ -697,7 +1779,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>Ctrl+T</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+50"/>
         <source>&amp;Close Session</source>
         <translation>关闭会话(&amp;C)</translation>
     </message>
@@ -822,12 +1904,12 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>连接(&amp;C)</translation>
     </message>
     <message>
-        <location line="-213"/>
+        <location line="-235"/>
         <source>&amp;Window</source>
         <translation>窗口(&amp;W)</translation>
     </message>
     <message>
-        <location line="+104"/>
+        <location line="+105"/>
         <source>New &amp;SSH Session...</source>
         <translation>新建 SSH 会话(&amp;S)...</translation>
     </message>
@@ -845,6 +1927,26 @@ Only replace the stored key if you are sure the change is expected.</source>
         <location line="+3"/>
         <source>Ctrl+Shift+T</source>
         <translation>Ctrl+Shift+T</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Firmware &amp;Update...</source>
+        <translation>固件更新(&amp;U)...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Firmware</source>
+        <translation>固件</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pull the latest build, flash the SoC and update the CC1310 over the board&apos;s USB-C cable</source>
+        <translation>拉取最新构建，并通过开发板的 USB-C 线刷写 SoC、更新 CC1310</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Ctrl+Shift+U</source>
+        <translation>Ctrl+Shift+U</translation>
     </message>
     <message>
         <location line="+14"/>
@@ -1327,7 +2429,7 @@ Only replace the stored key if you are sure the change is expected.</source>
         <translation>BuildAI 主页(&amp;H)</translation>
     </message>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+515"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+552"/>
         <source>Session %1 is still connected.
 Close it anyway?</source>
         <translation>会话 %1 仍处于连接状态。
@@ -1348,12 +2450,18 @@ Close them anyway?</source>
         <translation>关闭会话</translation>
     </message>
     <message>
-        <location line="-6"/>
+        <location line="-113"/>
+        <source>The Firmware tab is busy (%1): wait until it finishes or cancel it first</source>
+        <translation>固件标签页正忙（%1）：请等待完成或先取消</translation>
+    </message>
+    <message>
+        <location line="+107"/>
+        <location line="+47"/>
         <source>Quit %1</source>
         <translation>退出 %1</translation>
     </message>
     <message numerus="yes">
-        <location line="+1"/>
+        <location line="-46"/>
         <source>%n session(s) are still connected (%1).
 Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>
@@ -1363,29 +2471,49 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+3"/>
+        <location line="+46"/>
         <source>Quit</source>
         <translation>退出</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-41"/>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+54"/>
-        <location line="+1097"/>
+        <location line="+25"/>
+        <source>The Firmware tab is still working (%1).
+Quitting now interrupts it; an interrupted flash can leave the board in Loader mode.</source>
+        <translation>固件标签页仍在工作（%1）。
+现在退出会中断它；中断的刷写可能使开发板停留在 Loader 模式。</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+9"/>
+        <source>%n session(s) are still connected (%1).</source>
+        <translation>
+            <numerusform>%n 个会话仍处于连接状态（%1）。</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Quit anyway?</source>
+        <translation>仍要退出吗？</translation>
+    </message>
+    <message>
+        <location line="+45"/>
+        <location line="+1117"/>
         <source>System Log</source>
         <translation>系统日志</translation>
     </message>
     <message>
-        <location line="-963"/>
-        <location line="+919"/>
+        <location line="-974"/>
+        <location line="+930"/>
         <location line="+19"/>
         <source>RX %1  TX %2</source>
         <translation>RX %1  TX %2</translation>
     </message>
     <message numerus="yes">
-        <location line="-833"/>
+        <location line="-844"/>
         <source>%n serial port(s) found</source>
         <translation>
             <numerusform>找到 %n 个串口</numerusform>
@@ -1398,12 +2526,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+585"/>
+        <location line="+591"/>
         <source>Cannot open %1</source>
         <translation>无法打开 %1</translation>
     </message>
     <message>
-        <location line="-542"/>
+        <location line="-548"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
@@ -1423,7 +2551,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>未找到</translation>
     </message>
     <message>
-        <location line="+129"/>
+        <location line="+132"/>
         <source>Switch to %1</source>
         <translation>切换到 %1</translation>
     </message>
@@ -1443,12 +2571,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>%1 菜单</translation>
     </message>
     <message>
-        <location line="+284"/>
+        <location line="+290"/>
         <source>Logging to %1</source>
         <translation>正在记录日志到 %1</translation>
     </message>
     <message>
-        <location line="+97"/>
+        <location line="+99"/>
         <source>Connection state and line settings</source>
         <translation>连接状态和线路设置</translation>
     </message>
@@ -1477,12 +2605,158 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <source>LOG</source>
         <translation>日志</translation>
     </message>
+    <message>
+        <location line="+170"/>
+        <source>Firmware update: pull the build, flash the SoC, update the CC1310</source>
+        <translation>固件更新：拉取构建、刷写 SoC、更新 CC1310</translation>
+    </message>
+</context>
+<context>
+    <name>McuLink</name>
+    <message>
+        <location filename="../src/firmware/McuLink.cpp" line="+142"/>
+        <source>cannot run %1: %2</source>
+        <translation>无法运行 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb %1 timed out after %2 s</source>
+        <translation>adb %1 在 %2 秒后超时</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>adb %1 failed (exit %2): %3</source>
+        <translation>adb %1 失败（退出码 %2）：%3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+146"/>
+        <source>no output</source>
+        <translation>无输出</translation>
+    </message>
+    <message>
+        <location line="-130"/>
+        <source>cannot run adb: the tool runner is gone</source>
+        <translation>无法运行 adb：工具运行器已不存在</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>board %1 has no rfmcu: %2</source>
+        <translation>开发板 %1 上没有 rfmcu：%2</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>adb forward did not report a local port (got &apos;%1&apos;); update adb</source>
+        <translation>adb forward 没有报告本地端口（收到“%1”）；请更新 adb</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <location line="+22"/>
+        <source>rfmcu bridge did not start on board %1: %2</source>
+        <translation>开发板 %1 上的 rfmcu bridge 未能启动：%2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the rfmcu bridge on board %1 ended (exit %2): %3</source>
+        <translation>开发板 %1 上的 rfmcu bridge 已结束（退出码 %2）：%3</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <location line="+18"/>
+        <source>cannot connect to the rfmcu bridge on 127.0.0.1:%1: %2</source>
+        <translation>无法连接到 127.0.0.1:%1 上的 rfmcu bridge：%2</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>the connection to the rfmcu bridge on board %1 was closed</source>
+        <translation>与开发板 %1 上 rfmcu bridge 的连接已关闭</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>timed out</source>
+        <translation>超时</translation>
+    </message>
+</context>
+<context>
+    <name>McuUpdater</name>
+    <message>
+        <location filename="../src/firmware/McuUpdater.cpp" line="+246"/>
+        <location line="+130"/>
+        <source>connection closed</source>
+        <translation>连接已关闭</translation>
+    </message>
+    <message>
+        <location line="-34"/>
+        <source>no bootloader response; put the device in UART update mode (CLI command &apos;bootloader&apos;) or drop --no-auto-bootloader</source>
+        <translation>引导程序无响应；请让设备进入 UART 更新模式（CLI 命令 &apos;bootloader&apos;），或去掉 --no-auto-bootloader</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+278"/>
+        <source>no acceptable response after %1 retries</source>
+        <translation>重试 %1 次后仍没有可接受的响应</translation>
+    </message>
+    <message>
+        <location line="-158"/>
+        <source>invalid INFO response</source>
+        <translation>无效的 INFO 响应</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>package target does not match device</source>
+        <translation>固件包目标与设备不匹配</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>package exceeds device App slot</source>
+        <translation>固件包超出设备的 App 分区</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>invalid READY response</source>
+        <translation>无效的 READY 响应</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>bootloader requested unsupported resume offset</source>
+        <translation>引导程序请求了不支持的续传偏移</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>invalid ACK/NACK response</source>
+        <translation>无效的 ACK/NACK 响应</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>invalid NACK offset</source>
+        <translation>无效的 NACK 偏移</translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>neither the bootloader nor the application CLI answered on this port</source>
+        <translation>该端口上引导程序和应用程序 CLI 均无响应</translation>
+    </message>
+    <message>
+        <location line="+149"/>
+        <source>application did not enter the bootloader: %1</source>
+        <translation>应用程序未进入引导程序：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no reply</source>
+        <translation>无回复</translation>
+    </message>
+    <message>
+        <location line="+99"/>
+        <source>cancelled</source>
+        <translation>已取消</translation>
+    </message>
 </context>
 <context>
     <name>PreferencesDialog</name>
     <message>
         <location filename="../src/dialogs/PreferencesDialog.ui" line="+14"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+204"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+226"/>
         <source>Preferences</source>
         <translation>首选项</translation>
     </message>
@@ -1644,7 +2918,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     <message>
         <location line="+7"/>
         <location line="+59"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+122"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="+125"/>
         <source> ms</source>
         <translation> ms</translation>
     </message>
@@ -1746,12 +3020,16 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+3"/>
+        <location line="+284"/>
+        <location line="+26"/>
         <location filename="../src/dialogs/PreferencesDialog.cpp" line="-1"/>
+        <location line="+19"/>
+        <location line="+2"/>
         <source> s</source>
         <translation> 秒</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="-291"/>
         <source>Saved passwords:</source>
         <translation>已保存的密码：</translation>
     </message>
@@ -1767,7 +3045,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+22"/>
-        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-20"/>
+        <location filename="../src/dialogs/PreferencesDialog.cpp" line="-41"/>
         <source>Action</source>
         <translation>操作</translation>
     </message>
@@ -1829,14 +3107,92 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>日志目录：</translation>
     </message>
     <message>
-        <location line="-215"/>
+        <location line="+67"/>
+        <source>Firmware</source>
+        <translation>固件</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool:</source>
+        <translation>upgrade_tool：</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Rockchip upgrade_tool that flashes the SoC. Empty = the copy bundled in tools/ next to the program.</source>
+        <translation>用于刷写 SoC 的 Rockchip upgrade_tool。留空 = 使用程序旁 tools/ 中随附的副本。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>adb:</source>
+        <translation>adb：</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>adb used to reach the board and the CC1310. Empty = the bundled copy, or the first adb on PATH when there is none.</source>
+        <translation>用于连接开发板和 CC1310 的 adb。留空 = 使用随附的副本；没有时使用 PATH 中的第一个 adb。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Loader wait:</source>
+        <translation>Loader 等待时间：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long Flash SoC waits for the board to show up in Loader or Maskrom mode.</source>
+        <translation>刷写 SoC 时等待开发板以 Loader 或 Maskrom 模式出现的时间。</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>ADB return wait:</source>
+        <translation>ADB 恢复等待时间：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>How long Flash SoC waits for the board to come back on ADB after the flash.</source>
+        <translation>刷写完成后等待开发板重新出现在 ADB 上的时间。</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Image cache:</source>
+        <translation>镜像缓存：</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Folder on this PC that keeps the pulled update.img and the previous one (for Roll back).</source>
+        <translation>本机上保存已拉取的 update.img 及上一版（用于回滚）的文件夹。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Run &quot;git describe --tags --dirty&quot; in the SDK on the build machine and show the result next to the image.</source>
+        <translation>在构建机的 SDK 中运行 &quot;git describe --tags --dirty&quot;，并在镜像旁显示结果。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Run git describe on the build machine</source>
+        <translation>在构建机上运行 git describe</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Extra files:</source>
+        <translation>附加文件：</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Further files pulled from the remote image folder next to update.img, comma-separated (for example sd_update.txt).</source>
+        <translation>与 update.img 一起从远程镜像文件夹拉取的其他文件，以逗号分隔（例如 sd_update.txt）。</translation>
+    </message>
+    <message>
+        <location line="-432"/>
         <location line="+25"/>
         <location line="+202"/>
+        <location line="+77"/>
+        <location line="+25"/>
+        <location line="+77"/>
         <source>Browse...</source>
         <translation>浏览...</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="-170"/>
         <source>Start logging automatically when a session connects</source>
         <translation>会话连接时自动开始记录日志</translation>
     </message>
@@ -1922,7 +3278,18 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>十六进制转储</translation>
     </message>
     <message>
-        <location line="+156"/>
+        <location line="+6"/>
+        <location line="+2"/>
+        <source>Automatic: %1</source>
+        <translation>自动：%1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>e.g. sd_update.txt</source>
+        <translation>例如 sd_update.txt</translation>
+    </message>
+    <message>
+        <location line="+179"/>
         <source>Terminal Font</source>
         <translation>终端字体</translation>
     </message>
@@ -1948,11 +3315,34 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
     </message>
     <message>
         <location line="+0"/>
+        <location line="+14"/>
+        <location line="+16"/>
         <source>All files (*)</source>
         <translation>所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+207"/>
+        <location line="-18"/>
+        <location line="+16"/>
+        <source>Programs (*.exe);;All files (*)</source>
+        <translation>程序 (*.exe);;所有文件 (*)</translation>
+    </message>
+    <message>
+        <location line="-12"/>
+        <source>Select upgrade_tool</source>
+        <translation>选择 upgrade_tool</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Select adb</source>
+        <translation>选择 adb</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Select Image Cache Folder</source>
+        <translation>选择镜像缓存文件夹</translation>
+    </message>
+    <message>
+        <location line="+217"/>
         <source>%1 cannot be a shortcut: while a session is connected it is typed into the device. Use Ctrl, Alt or Meta with a key, or an F-key.</source>
         <translation>%1 不能用作快捷键：会话连接时它会被发送到设备。请使用 Ctrl、Alt 或 Meta 加按键，或使用 F 功能键。</translation>
     </message>
@@ -2084,7 +3474,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
 <context>
     <name>QuickCommandStore</name>
     <message>
-        <location filename="../src/core/QuickCommand.cpp" line="+50"/>
+        <location filename="../src/core/QuickCommand.cpp" line="+53"/>
         <source>Invalid JSON at offset %1: %2</source>
         <translation>偏移 %1 处的 JSON 无效：%2</translation>
     </message>
@@ -2099,7 +3489,7 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>缺少 &quot;commands&quot; 数组</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+47"/>
         <source>Cannot create directory %1</source>
         <translation>无法创建目录 %1</translation>
     </message>
@@ -2110,12 +3500,12 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <translation>无法写入 %1：%2</translation>
     </message>
     <message>
-        <location line="+169"/>
+        <location line="+183"/>
         <source>General</source>
         <translation>常规</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+39"/>
         <source>Interrupt (ETX, 0x03)</source>
         <translation>中断（ETX，0x03）</translation>
     </message>
@@ -2148,6 +3538,81 @@ Quit anyway? All tabs will be closed and logging stopped.</source>
         <location line="+17"/>
         <source>Cannot read %1: %2</source>
         <translation>无法读取 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>SoC console: reboot into the USB download (Loader) mode for flashing</source>
+        <translation>SoC 控制台：重启进入 USB 下载（Loader）模式以便刷写</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>SoC console: open the CC1310 CLI through the SoC; ~. leaves it</source>
+        <translation>SoC 控制台：通过 SoC 打开 CC1310 CLI；输入 ~. 退出</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: list the commands of this role (help &lt;command&gt; shows one usage)</source>
+        <translation>CC1310：列出当前角色的命令（help &lt;command&gt; 显示单个命令的用法）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: firmware version and CLI baud rate</source>
+        <translation>CC1310：固件版本和 CLI 波特率</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: reset cause, watchdog, uptime (sys | sys wdt_test; wdt_test resets the board)</source>
+        <translation>CC1310：复位原因、看门狗、运行时间（sys | sys wdt_test；wdt_test 会复位开发板）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: stack high-water marks of every task, and the heap</source>
+        <translation>CC1310：各任务的栈高水位和堆</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: CLI rate and UART receive errors (uart | uart baud &lt;rate&gt;)</source>
+        <translation>CC1310：CLI 速率和 UART 接收错误（uart | uart baud &lt;rate&gt;）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: power state (power | power off [delay_ms] | power soc on|off)</source>
+        <translation>CC1310：电源状态（power | power off [delay_ms] | power soc on|off）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: battery and charger (bat | bat sim &lt;mV&gt;|off | bat charge on|off)</source>
+        <translation>CC1310：电池和充电器（bat | bat sim &lt;mV&gt;|off | bat charge on|off）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: packet, CRC and RSSI counters (rx status | rx dump on|off)</source>
+        <translation>CC1310 接收端：数据包、CRC 和 RSSI 计数（rx status | rx dump on|off）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: print one line per received frame until rx dump off or a reset</source>
+        <translation>CC1310 接收端：每收到一帧打印一行，直到 rx dump off 或复位</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 receiver: stop the per-frame output</source>
+        <translation>CC1310 接收端：停止逐帧输出</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310 transmitter: state and counters of the sync frames</source>
+        <translation>CC1310 发送端：同步帧的状态和计数</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>CC1310: writes an update request and reboots into the UART updater</source>
+        <translation>CC1310：写入更新请求并重启进入 UART 更新程序</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>leave rfmcu console</source>
+        <translation>退出 rfmcu console</translation>
     </message>
 </context>
 <context>
@@ -2562,6 +4027,57 @@ Nothing is saved until you press OK.</source>
         <location line="+2"/>
         <source>Enter the local and the remote path.</source>
         <translation>请输入本地路径和远程路径。</translation>
+    </message>
+</context>
+<context>
+    <name>RkFirmwareInfo</name>
+    <message>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+161"/>
+        <source>chip %1</source>
+        <translation>芯片 %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>built %1</source>
+        <translation>构建于 %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>loader %1</source>
+        <translation>loader %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>1 entry</source>
+        <translation>1 个条目</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 entries</source>
+        <translation>%1 个条目</translation>
+    </message>
+</context>
+<context>
+    <name>RockchipTool</name>
+    <message>
+        <location line="+145"/>
+        <source>no firmware image selected</source>
+        <translation>未选择固件镜像</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>cannot read %1: %2</source>
+        <translation>无法读取 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>no firmware image at %1</source>
+        <translation>%1 处没有固件镜像</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>%1 is not a Rockchip update image (the RKFW magic is missing)</source>
+        <translation>%1 不是 Rockchip 更新镜像（缺少 RKFW 标识）</translation>
     </message>
 </context>
 <context>
@@ -3364,9 +4880,188 @@ Nothing is saved until you press OK.</source>
     </message>
 </context>
 <context>
+    <name>SocFlasher</name>
+    <message>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+141"/>
+        <source>  could not run: %1</source>
+        <translation>  无法运行：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  timed out</source>
+        <translation>  超时</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  exit code %1</source>
+        <translation>  退出码 %1</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>upgrade_tool could not be run: %1</source>
+        <translation>无法运行 upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>upgrade_tool LD timed out</source>
+        <translation>upgrade_tool LD 超时</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>adb could not be run: %1</source>
+        <translation>无法运行 adb：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb devices timed out</source>
+        <translation>adb devices 超时</translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>upgrade_tool not found: set its path in Preferences</source>
+        <translation>找不到 upgrade_tool：请在首选项中设置其路径</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb not found: set its path in Preferences</source>
+        <translation>找不到 adb：请在首选项中设置其路径</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>no tool runner</source>
+        <translation>没有工具运行器</translation>
+    </message>
+    <message>
+        <location line="+52"/>
+        <source>cannot cancel while upgrade_tool writes the flash</source>
+        <translation>upgrade_tool 写入闪存期间无法取消</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>stopped waiting for ADB; the image was already written</source>
+        <translation>已停止等待 ADB；镜像已写入</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>board running %1, rebooting it into loader mode</source>
+        <translation>开发板正在运行 %1，正在将其重启到 loader 模式</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>an unknown kernel</source>
+        <translation>未知内核</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
+        <translation>在 ADB、MASKROM 或 Loader 模式下都找不到开发板：请通过会话发送 &apos;reboot loader&apos;，或按住 MASKROM 并重新插拔数据线</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>waiting for the board to enter MASKROM/Loader mode (up to %1 s)</source>
+        <translation>正在等待开发板进入 MASKROM/Loader 模式（最多 %1 秒）</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location line="+18"/>
+        <source>board is in download mode</source>
+        <translation>开发板已处于下载模式</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>board did not enter MASKROM/Loader within %1 s</source>
+        <translation>开发板未在 %1 秒内进入 MASKROM/Loader 模式</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>board flashed, but ADB did not come back within %1 s; check the serial console</source>
+        <translation>开发板已刷写，但 ADB 未在 %1 秒内恢复；请检查串口控制台</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>flashing %1 (%2 mode)</source>
+        <translation>正在刷写 %1（%2 模式）</translation>
+    </message>
+    <message>
+        <location line="+60"/>
+        <source>cannot run upgrade_tool: %1</source>
+        <translation>无法运行 upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>upgrade_tool did not report success: %1</source>
+        <translation>upgrade_tool 未报告成功：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output</source>
+        <translation>无输出</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Upgrade firmware ok</source>
+        <translation>Upgrade firmware ok（固件升级成功）</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>waiting for the board to come back on ADB (up to %1 s)</source>
+        <translation>正在等待开发板重新出现在 ADB 上（最多 %1 秒）</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>board is back on ADB</source>
+        <translation>开发板已重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>board flashed, but adb could not be run (%1); check the serial console</source>
+        <translation>开发板已刷写，但无法运行 adb（%1）；请检查串口控制台</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Upgrade firmware ok; board is back on ADB</source>
+        <translation>固件升级成功；开发板已重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>ADB device</source>
+        <translation>ADB 设备</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ADB device %1</source>
+        <translation>ADB 设备 %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Loader mode</source>
+        <translation>Loader 模式</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Maskrom mode</source>
+        <translation>Maskrom 模式</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Rockchip USB device without a driver</source>
+        <translation>没有驱动程序的 Rockchip USB 设备</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>no board</source>
+        <translation>无开发板</translation>
+    </message>
+</context>
+<context>
     <name>SshConnection</name>
     <message>
-        <location filename="../src/ssh/SshConnection.cpp" line="+431"/>
+        <location filename="../src/ssh/SshConnection.cpp" line="+446"/>
         <source>No SSH host given</source>
         <translation>未指定 SSH 主机</translation>
     </message>
@@ -3381,7 +5076,7 @@ Nothing is saved until you press OK.</source>
         <translation>传输中止：连接已关闭</translation>
     </message>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+305"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+306"/>
         <source>unknown size</source>
         <translation>大小未知</translation>
     </message>
@@ -3943,14 +5638,16 @@ You will be asked for it when connecting.</source>
 <context>
     <name>SshWorker</name>
     <message>
-        <location filename="../src/ssh/SshWorker.cpp" line="+279"/>
+        <location filename="../src/ssh/SshWorker.cpp" line="+282"/>
         <location line="+99"/>
         <location line="+1760"/>
+        <location line="+564"/>
+        <location line="+33"/>
         <source>Not connected</source>
         <translation>未连接</translation>
     </message>
     <message>
-        <location line="-1855"/>
+        <location line="-2452"/>
         <source>Another transfer is still running</source>
         <translation>另一个传输仍在进行</translation>
     </message>
@@ -4174,23 +5871,24 @@ You will be asked for it when connecting.</source>
     </message>
     <message>
         <location line="+29"/>
-        <location line="+904"/>
+        <location line="+905"/>
         <source>Connection to %1 cancelled</source>
         <translation>到 %1 的连接已取消</translation>
     </message>
     <message>
-        <location line="-901"/>
+        <location line="-902"/>
         <source>No answer within 5 minutes - connection to %1 cancelled</source>
         <translation>5 分钟内无应答 - 到 %1 的连接已取消</translation>
     </message>
     <message>
         <location line="+115"/>
-        <location line="+778"/>
+        <location line="+779"/>
+        <location line="+572"/>
         <source>Connection to %1 lost: %2</source>
         <translation>与 %1 的连接已断开：%2</translation>
     </message>
     <message>
-        <location line="-761"/>
+        <location line="-1334"/>
         <location line="+375"/>
         <location line="+67"/>
         <source>Write to %1 failed: %2</source>
@@ -4255,12 +5953,12 @@ You will be asked for it when connecting.</source>
         <translation>远程命令结束但未返回退出状态</translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="+68"/>
         <source>&apos;%1&apos; on %2 did not finish within %3 s</source>
         <translation>%2 上的 &apos;%1&apos; 在 %3 秒内未完成</translation>
     </message>
     <message>
-        <location line="+88"/>
+        <location line="+87"/>
         <source>unexpected size &quot;%1&quot;</source>
         <translation>意外的大小 &quot;%1&quot;</translation>
     </message>
@@ -4317,7 +6015,28 @@ You will be asked for it when connecting.</source>
         <translation>已将 %1 下载到 %2（%3，通过 shell）</translation>
     </message>
     <message>
-        <location line="-697"/>
+        <location line="+212"/>
+        <source>The remote command ended without an exit status</source>
+        <translation>远程命令结束时没有退出状态</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <location line="+29"/>
+        <source>Cannot stat %1: %2</source>
+        <translation>无法获取 %1 的状态：%2</translation>
+    </message>
+    <message>
+        <location line="-6"/>
+        <source>Unexpected answer of stat on %1: %2</source>
+        <translation>%1 上的 stat 返回了意外结果：%2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>stat exited with status %1</source>
+        <translation>stat 以状态 %1 退出</translation>
+    </message>
+    <message>
+        <location line="-981"/>
         <location line="+19"/>
         <location line="+19"/>
         <location line="+30"/>
@@ -4562,6 +6281,19 @@ You will be asked for it when connecting.</source>
     </message>
 </context>
 <context>
+    <name>ToolRunner</name>
+    <message>
+        <location filename="../src/firmware/ToolRunner.cpp" line="+298"/>
+        <source>timed out after %1 ms</source>
+        <translation>%1 毫秒后超时</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the process crashed</source>
+        <translation>进程已崩溃</translation>
+    </message>
+</context>
+<context>
     <name>Transport</name>
     <message>
         <location filename="../src/core/Transport.cpp" line="+9"/>
@@ -4572,6 +6304,30 @@ You will be asked for it when connecting.</source>
         <location line="+2"/>
         <source>SSH</source>
         <translation>SSH</translation>
+    </message>
+</context>
+<context>
+    <name>UsbProbe</name>
+    <message>
+        <location filename="../src/firmware/UsbProbe.cpp" line="+87"/>
+        <location line="+56"/>
+        <source>Unknown device</source>
+        <translation>未知设备</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>%1: no driver bound. Install the Rockchip USB drivers (DriverAssistant) and replug the board.</source>
+        <translation>%1：未绑定驱动程序。请安装 Rockchip USB 驱动（DriverAssistant）并重新插拔开发板。</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1: the driver reports problem code %2. Reinstall the Rockchip USB drivers (DriverAssistant) and replug the board.</source>
+        <translation>%1：驱动程序报告问题代码 %2。请重新安装 Rockchip USB 驱动（DriverAssistant）并重新插拔开发板。</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</source>
+        <translation>%1：已绑定驱动程序 %2，但 adb 和 upgrade_tool 都没有列出该开发板。请重新插拔数据线；如果仍然看不到，请重新安装 Rockchip USB 驱动（DriverAssistant）。</translation>
     </message>
 </context>
 <context>
