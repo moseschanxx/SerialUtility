@@ -1209,11 +1209,13 @@ struct SocFlasher::Private
                          .arg(row.name)
                          .arg(writeIndex + 1)
                          .arg(writeQueue.size());
-        log(QCoreApplication::translate("SocFlasher", "writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)")
+        log(QCoreApplication::translate("SocFlasher",
+                                        "writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5), partition of %6 sectors")
                 .arg(row.name, QFileInfo(row.file).fileName())
                 .arg(row.fileSize)
                 .arg(row.offset / kSectorBytes)
-                .arg(row.offset, 0, 16));
+                .arg(row.offset, 0, 16)
+                .arg(row.size == 0 ? QStringLiteral("-1") : QString::number(row.size / kSectorBytes)));
         emit q->progress(writeStage, overallPercent(0));
         if (id != flowId) {
             return;
@@ -1223,7 +1225,8 @@ struct SocFlasher::Private
         lastFlashOutput.start();
         silenceTimer->start(kUfSilenceLogMs);
         // Not kept in stepInvocation, like UF: a WL is never cancelled.
-        ToolInvocation* invocation = tracked(upgradeTool->writeLba(row.offset / kSectorBytes, row.file));
+        ToolInvocation* invocation =
+            tracked(upgradeTool->writeLba(row.offset / kSectorBytes, row.size / kSectorBytes, row.file));
         QObject::connect(invocation, &ToolInvocation::outputReceived, q, [this, id](const QByteArray& chunk) {
             if (id == flowId) {
                 onWriteOutput(chunk);

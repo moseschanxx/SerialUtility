@@ -48,7 +48,8 @@
  *       /proc/cmdline in step 2 (mtdPartsRead()) or set by the owner; when both are known and
  *       differ, logLine() shows both and the image's wins (the env being written defines the
  *       new layout) - and every image whose partition is
- *       in the layout is written with `WL <offset / 512> <file>` in package-file order (entries
+ *       in the layout is written with `WL <offset / 512> <size / 512> <file>` (the partition size
+ *       in sectors, as SocToolKit passes it; upgrade_tool needs it for jffs2 images) in package-file order (entries
  *       "package-file" and "bootloader" and names absent from the layout are skipped with a log
  *       line; an image larger than its partition stops the flow before anything is written:
  *       finished(false, "<file> (<n> bytes) does not fit partition <name> (<size> bytes)")); a

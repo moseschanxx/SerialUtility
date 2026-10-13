@@ -4287,7 +4287,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+194"/>
+        <location line="+198"/>
         <source>no firmware image selected</source>
         <translation>no firmware image selected</translation>
     </message>
@@ -5234,12 +5234,12 @@ Nothing is saved until you press OK.</translation>
     <message>
         <location line="-461"/>
         <location line="+489"/>
-        <location line="+229"/>
+        <location line="+232"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>cannot run upgrade_tool: %1</translation>
     </message>
     <message>
-        <location line="-1191"/>
+        <location line="-1194"/>
         <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
         <translation>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</translation>
     </message>
@@ -5330,12 +5330,12 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+268"/>
+        <location line="+271"/>
         <source>no output</source>
         <translation>no output</translation>
     </message>
     <message>
-        <location line="-265"/>
+        <location line="-268"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok</translation>
     </message>
@@ -5406,11 +5406,11 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</source>
-        <translation>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</translation>
+        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5), partition of %6 sectors</source>
+        <translation>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5), partition of %6 sectors</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+62"/>
         <source>writing %1 failed: %2</source>
         <translation>writing %1 failed: %2</translation>
     </message>

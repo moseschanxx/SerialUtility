@@ -249,10 +249,14 @@ ToolInvocation* RockchipTool::extractFirmware(const QString& image, const QStrin
                          imageCommandOptions(image, kExtractTimeoutMs));
 }
 
-ToolInvocation* RockchipTool::writeLba(quint64 startSector, const QString& file)
+ToolInvocation* RockchipTool::writeLba(quint64 startSector, quint64 sectorCount, const QString& file)
 {
     // No timeout, like UF: a WL stopped half way leaves a partition half written.
-    return m_runner->run(m_tool, {QStringLiteral("WL"), QString::number(startSector), QDir::toNativeSeparators(file)},
+    // The count is what SocToolKit passes: the partition size in sectors, -1 for "to the end"
+    // (upgrade_tool needs it to lay out a jffs2 image over the whole partition).
+    const QString count = sectorCount == 0 ? QStringLiteral("-1") : QString::number(sectorCount);
+    return m_runner->run(m_tool,
+                         {QStringLiteral("WL"), QString::number(startSector), count, QDir::toNativeSeparators(file)},
                          imageCommandOptions(file, 0));
 }
 

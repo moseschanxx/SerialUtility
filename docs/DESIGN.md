@@ -473,8 +473,11 @@ a tab of its own and touches no behaviour of the serial and SSH tabs.
   `Check Chip Fail` there (TEST_REPORT section 13). Rockchip's SocToolKit flashes the same board
   in Loader mode because its Download page never runs `UF`: `upgrade_tool EXF <image> <dir>`
   unpacks the package into its partition images plus `package-file` (`<partition>\t<file>`
-  lines), each image goes to the flash with `upgrade_tool WL <offset / 512> <file>` (512-byte
-  sectors, progress `Write LBA from file (nn%)`, no chip check) and `RD` resets the board
+  lines), each image goes to the flash with `upgrade_tool WL <offset / 512> <size / 512> <file>`
+  (512-byte sectors; the partition size in sectors is what SocToolKit passes and what
+  upgrade_tool needs for a jffs2 image such as userdata.img - without it v2.37 answers
+  "Image is jffs format,please tell the size!"; progress `Write LBA from file (nn%)`, no chip
+  check) and `RD` resets the board
   (`Reset Device OK.`, back on ADB about 25 s later). The offsets are the board's flash layout,
   the `mtdparts=` word of its kernel command line: `sfc_nor:64K(env),256K@64K(idblock),
   256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)` on the Node board (the SDK's
@@ -536,7 +539,7 @@ mode decides (`flashMethod()`, logged):
   images were built for, which the env being written makes the board use from its next boot),
   else `mtdParts()`; a board layout that differs is logged as a warning with both strings. Then every selected row is
   checked (in the layout, file present, not larger than its partition, sector-aligned) before
-  the first write, then one `WL <offset / 512> <file>` per row in package-file order (progress
+  the first write, then one `WL <offset / 512> <size / 512> <file>` per row in package-file order (progress
   "Writing boot (5 of 7)", the percentage over all bytes; rows not selected or not in the layout
   are logged as skipped; a failing `WL` stops with its last lines), then `RD`. The selection is
   `setSelectedPartitions()` (names; empty = every row in the layout, and then an image that does

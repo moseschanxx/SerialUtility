@@ -1784,14 +1784,19 @@ void tst_firmwaretools::rockchip_partitionCommandLines()
     QVERIFY(runner.lastOptions().timeoutMs >= 60000);                  // EXF may be stopped, generously
 
     const QString file = out + QStringLiteral("/boot.img");
-    tool.writeLba(1920, file);
+    tool.writeLba(1920, 6144, file);                                   // boot: 3 MiB = 6144 sectors
     QCOMPARE(runner.lastInvocation(),
              ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
-                                           {QStringLiteral("WL"), QStringLiteral("1920"), QDir::toNativeSeparators(file)}));
+                                           {QStringLiteral("WL"), QStringLiteral("1920"), QStringLiteral("6144"),
+                                            QDir::toNativeSeparators(file)}));
     QCOMPARE(runner.lastOptions().timeoutMs, 0);                       // a write is never stopped
-    tool.writeLba(0, QStringLiteral("D:/x/env.img"));
+    tool.writeLba(0, 128, QStringLiteral("D:/x/env.img"));
 #ifdef Q_OS_WIN
-    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool WL 0 D:\\x\\env.img"));
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool WL 0 128 D:\\x\\env.img"));
+#endif
+    tool.writeLba(18304, 0, QStringLiteral("D:/x/userdata.img"));      // "to the end": -1 like SocToolKit
+#ifdef Q_OS_WIN
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool WL 18304 -1 D:\\x\\userdata.img"));
 #endif
     tool.resetDevice();
     QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool RD"));
@@ -2670,12 +2675,12 @@ struct FlashRig
     QString ufCommand() const { return QStringLiteral("upgrade_tool UF ") + QDir::toNativeSeparators(image); }
     /// The default extract folder: "<image folder>/<image base name>.extracted".
     QString extractDir() const { return dir.path() + QStringLiteral("/update.extracted"); }
-    /// The WL command of a Node partition (offset / 512, the image unpacked into `folder`).
+    /// The WL command of a Node partition (offset / 512, size / 512, the image unpacked into `folder`).
     static QString wlCommand(const NodePartition& p, const QString& folder)
     {
         return ToolRunner::formatCommandLine(
             QStringLiteral("upgrade_tool"),
-            {QStringLiteral("WL"), QString::number(p.sector),
+            {QStringLiteral("WL"), QString::number(p.sector), QString::number(p.size / 512),
              QDir::toNativeSeparators(folder + QLatin1Char('/') + QLatin1String(p.name) + QStringLiteral(".img"))});
     }
     QStringList wlCommands() const { return runner.invocations().filter(wl()); }

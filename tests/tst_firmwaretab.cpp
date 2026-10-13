@@ -265,6 +265,7 @@ const QByteArray kNodeCmdline = "console=ttyFIQ0 root=/dev/mtdblock5 rootfstype=
 const char* const kNodeNames[] = {"env", "idblock", "uboot", "meta", "boot", "rootfs", "userdata"};
 const qint64 kNodeImageBytes[] = {65536, 174080, 196608, 393216, 3043840, 3830272, 3145728};
 const int kNodeSectors[] = {0, 128, 640, 1152, 1920, 8064, 18304};
+const int kNodeSizeSectors[] = {128, 512, 512, 768, 6144, 10240, 6144};   // partition sizes / 512: WL's count
 
 QStringList nodeNames()
 {
@@ -340,7 +341,7 @@ QString expectedWl(int k, const QString& extractDir)
 {
     return ToolRunner::formatCommandLine(
         QStringLiteral("upgrade_tool"),
-        {QStringLiteral("WL"), QString::number(kNodeSectors[k]),
+        {QStringLiteral("WL"), QString::number(kNodeSectors[k]), QString::number(kNodeSizeSectors[k]),
          QDir::toNativeSeparators(extractDir + QLatin1Char('/') + QLatin1String(kNodeNames[k]) + QStringLiteral(".img"))});
 }
 

@@ -122,10 +122,14 @@ public:
     /// `package-file` ("<partition>\t<file>" lines) and `bootloader.bin`; prints
     /// "start to extract <file>...(nn%)" lines and "Extract ok." (v2.37).
     ToolInvocation* extractFirmware(const QString& image, const QString& outDir);
-    /// upgrade_tool WL <startSector> <file>: write a file to the flash from a 512-byte sector
-    /// (the command SocToolKit's Download page uses for every partition of a Loader-mode board;
-    /// progress lines "Write LBA from file (nn%)"; no chip check). Never cancelled by SocFlasher.
-    ToolInvocation* writeLba(quint64 startSector, const QString& file);
+    /// upgrade_tool WL <startSector> <sectorCount> <file>: write a file to the flash from a 512-byte
+    /// sector; `sectorCount` = the partition's size in sectors (0 = "to the end", passed as -1), the
+    /// command SocToolKit's Download page runs for every partition of a Loader-mode board
+    /// (`wl <offset / 512> <size / 512> <file>`; progress lines "Write LBA from file (nn%)"; no
+    /// chip check). The size is required: without it upgrade_tool v2.37 refuses a jffs2 image
+    /// ("Image is jffs format,please tell the size!" for userdata.img, seen 2026-10-13). Never
+    /// cancelled by SocFlasher.
+    ToolInvocation* writeLba(quint64 startSector, quint64 sectorCount, const QString& file);
     ToolInvocation* resetDevice();                       ///< upgrade_tool RD ("Reset Device OK.")
 
     // ---- Parsers -------------------------------------------------------------------------

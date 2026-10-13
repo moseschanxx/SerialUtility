@@ -299,3 +299,44 @@ during it); a hung `upgrade_tool` is logged after five minutes without output bu
 is offered only in an administrator install; the pull keeps one previous image; extra files are plain names in
 the remote folder; `rfmcu` on the board is stopped before every MCU command, so an interactive `rfmcu console`
 someone left open ends when the tab talks to the MCU.
+
+## 14. v0.5.1 — SoC flash by partition, the way SocToolKit's Download page does it (2026-10-13)
+
+Why: in 0.5.0 the SoC flash ended at `upgrade_tool UF`, whose chip check the Node board's U-Boot fails in Loader
+mode (section 13). Moses: the program must work like the official tool - "flash by partition, it should be like
+options you can select ... you just want to flash a certain partition". Rockchip's SocToolKit (a PyInstaller /
+PySide6 application; its Python sources carry the LGPL header) was unpacked and read: its Download page lists the
+device with `upgrade_tool ld`, writes each partition with `-s <dev> wl <offset / 512> <size / 512> <file>` (no
+chip check) and resets with `rd`; `uf` runs only behind its Upgrade Firmware button.
+
+What changed (4503b41 + the WL size fix): `RockchipTool` gained `EXF` / `WL` / `RD` and the parsers (`mtdparts`
+from `/proc/cmdline` or the image's `env.img`, `package-file`, `planPartitions()`); `SocFlasher`'s Loader-mode
+method is now `PartitionWrites` (`EXF` into `<image>.extracted`, plan, size check of every checked row before the
+first write, one `WL` per checked row in package-file order with the partition size in sectors, `RD`, wait for
+ADB; MASKROM mode keeps `UF`; layout precedence image `env.img` > board `/proc/cmdline` > remembered per serial,
+a mismatch is logged); the Firmware tab lists the image's partitions with a checkbox each (name, file, offset,
+partition size, image size; All / None; rows not in the layout or too big are disabled with the reason), Flash
+SoC writes the checked rows, Pull & Flash writes all; `AppSettings` remembers the layout per board serial;
+README, DESIGN 4.11, VERSION.txt, translations.
+
+| Layer | Result |
+|---|---|
+| Tools | `tst_firmwaretools` 114 cases + 1 env-gated probe (was 97): `parseMtdParts` (with / without `mtdparts=` and the `sfc_nor:` prefix, `@` offsets, K/M/G and bytes, `-` size, malformed → empty), the real cmdline, `package-file` (tabs, spaces, comments), `planPartitions` on a temp tree (sizes, order, the two skipped entries, a name missing from the layout, an image too big → fits false), the command lines (`EXF <img> <dir>` with the directory created, `WL 1920 6144 <file>` / `WL 0 128 ...` / `WL 18304 -1 ...` for "to the end", `RD`), the Loader flow end to end on `FakeToolRunner` (`EXF` handler creating the files, 7 `WL` at sectors 0 / 128 / 640 / 1152 / 1920 / 8064 / 18304 with the right files, `RD`, ADB back, the "Writing <name> (k of 7)" stages with the overall percentage), a selection of two rows writes only those, an image too big stops before any `WL`, a failing `WL` stops with its tail, layout unknown, MASKROM → `UF` unchanged, `mtdPartsRead`, plan staleness |
+| GUI | `tst_firmwaretab` 47 cases + 1 env-gated real run (was 33): the table after `setImagePath()` with a fake `EXF` and a remembered layout (rows, offsets, checks, label), All / None, the selection handed to the flasher, the layout-unknown text, the layout read once from a fake ADB device and stored per serial, Flash SoC in Loader mode writes exactly the checked rows (`WL` lines), MASKROM ignores the selection (log line) |
+| Real board 62ecfc6ddeb3f579, first Pull & Flash on 4503b41 | Read MCU 0.8.2 rx, pull, `EXF`, layout from the image's `env.img` (= the board's cmdline), `adb reboot loader`, Loader mode after 1 s, `WL` of env, idblock, uboot, meta, boot, rootfs OK, then `WL 18304 userdata.img` refused: `Image is jffs format,please tell the size!` (exit 255) - the flow stopped as designed, nothing more written. Fix: `WL` now carries the partition size in sectors (`-1` for "to the end"), exactly what SocToolKit passes; userdata was then written by hand with `WL 18304 6144 userdata.img` (100 %), `RD`, board back on ADB after 3 s |
+| Flash verification | Loader-mode readback `upgrade_tool RL <start> <count> <file>` of env (128 sectors), boot (6144) and rootfs (10240): byte-identical to the image files over the image length (`cmp`). Linux-side reads on the board are NOT repeatable: `md5sum /dev/mtd0` and `/dev/mtdblock0` give a different value on every read (a few bytes differ at 4 KiB boundaries; `adb exec-out` is not supported by the board's adbd, so copies went through `/tmp` + `adb pull`) - a flash cannot be judged from the running system, only from Loader mode. The kernel inside the current build image is still the Sep 30 20:24 build, so `/proc/version` does not change after a flash |
+| Real board, Pull & Flash all seven (fixed `WL`) | PASS, 105 s (`tst_firmwaretab::realBoard_pullFlashUpdate`, `MCU_ACTION=none`): Read MCU 0.8.2 rx; pull with the host-key and password dialogs; `EXF`; layout from the image's `env.img`; `adb reboot loader`; `WL` env 0/128, idblock 128/512, uboot 640/512, meta 1152/768, boot 1920/6144 (23 s), rootfs 8064/10240 (27 s), userdata 18304/6144; `RD`; "board is back on ADB" after 3 s; 16:50:36 → 16:52:20 |
+| Real board, one partition (`SU_FIRMWARE_REAL_PARTITIONS=boot`) | PASS, 35 s: the table shows 7 rows with boot alone checked ("7 partitions, 1 selected"); six `skipping <name>: not selected` lines; one `WL 1920 6144 boot.img` (23 s); `RD`; ADB back after 3 s; method `PartitionWrites` |
+| GCC 11 `-Werror` (WSL) on 4503b41 | 28 / 28 passed, 0 warnings (before the `WL` size change; the rerun is in the final table) |
+
+Final numbers on the tagged tree:
+
+| Platform | Suites | Result |
+|---|---|---|
+| Windows MSVC 2022 Release (`build\Release`) | 28 | FINAL_MSVC |
+| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`) | 28 | FINAL_GCC |
+
+Known limitations: a `WL` cannot be cancelled once it writes (like `UF`); the U-Boot chip-info change is only
+needed for `UF` (MASKROM mode) now; the CC1310 package re-flash is still not covered on hardware (no 0.8.2
+package at hand); the partition table trusts the image's `env.img` when the board's layout differs (the env being
+written defines the new layout) - the mismatch is logged, not refused.

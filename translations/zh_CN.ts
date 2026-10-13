@@ -4276,7 +4276,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+194"/>
+        <location line="+198"/>
         <source>no firmware image selected</source>
         <translation>未选择固件镜像</translation>
     </message>
@@ -5223,12 +5223,12 @@ Nothing is saved until you press OK.</source>
     <message>
         <location line="-461"/>
         <location line="+489"/>
-        <location line="+229"/>
+        <location line="+232"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>无法运行 upgrade_tool：%1</translation>
     </message>
     <message>
-        <location line="-1191"/>
+        <location line="-1194"/>
         <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
         <translation>分区布局未知：请先让开发板正常启动一次以便通过 ADB 读取，或在 MASKROM 模式下刷写</translation>
     </message>
@@ -5319,12 +5319,12 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+268"/>
+        <location line="+271"/>
         <source>no output</source>
         <translation>无输出</translation>
     </message>
     <message>
-        <location line="-265"/>
+        <location line="-268"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok（固件升级成功）</translation>
     </message>
@@ -5395,11 +5395,11 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+4"/>
-        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</source>
-        <translation>正在写入 %1：%2（%3 字节），起始扇区 %4（偏移 0x%5）</translation>
+        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5), partition of %6 sectors</source>
+        <translation>正在写入 %1：%2（%3 字节），起始扇区 %4（偏移 0x%5），分区 %6 个扇区</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+62"/>
         <source>writing %1 failed: %2</source>
         <translation>写入 %1 失败：%2</translation>
     </message>

@@ -437,7 +437,7 @@ button. The tab has three sections and a log pane:
   it) -> otherwise it tells you to hold MASKROM and plug the board in. It then waits (30 s by
   default) for Loader / Maskrom and writes:
   - **Loader mode** (the normal case, after `adb reboot loader`): the checked partitions, one
-    `upgrade_tool WL <offset / 512> <image>` each in the image's order, then `RD` to restart the
+    `upgrade_tool WL <offset / 512> <size / 512> <image>` each in the image's order, then `RD` to restart the
     board - the commands SocToolKit's Download page runs. Every image is checked against its
     partition before the first byte is written; a write that fails stops the flash with
     upgrade_tool's last lines. This runs no chip check, so it works with the Node board's U-Boot.
