@@ -21,6 +21,31 @@ struct RockusbDevice
     bool operator==(const RockusbDevice& other) const;
 };
 
+/// One partition of a Linux `mtdparts=` string (what the Node board's /proc/cmdline carries):
+/// `sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)`.
+struct MtdPartition
+{
+    QString name;
+    quint64 offset = 0;   ///< bytes from the start of the flash
+    quint64 size = 0;     ///< bytes
+    bool operator==(const MtdPartition& other) const { return name == other.name && offset == other.offset && size == other.size; }
+};
+
+/// One image of an unpacked update.img placed in the flash layout (RockchipTool::planPartitions(),
+/// SocFlasher::partitions()): what the Firmware tab lists with a checkbox per row.
+struct PartitionImage
+{
+    QString name;            ///< partition name from package-file ("env", "boot", ...)
+    QString file;            ///< absolute path of the extracted image
+    qint64 fileSize = -1;    ///< bytes of that file (-1 when missing)
+    quint64 offset = 0;      ///< from the layout
+    quint64 size = 0;        ///< partition size from the layout; 0 = "to the end" (unknown)
+    bool inLayout = false;   ///< the layout has a partition of this name
+    bool fits = false;       ///< fileSize <= size (always true when size == 0)
+    bool selected = true;    ///< written by the next flash (the tab's checkbox)
+    bool operator==(const PartitionImage& other) const;
+};
+
 /// `upgrade_tool SFI <update.img>`.
 struct RkFirmwareInfo
 {
@@ -93,6 +118,15 @@ public:
     /// (Options::workingDirectory), a writable place for whatever upgrade_tool writes next to it.
     ToolInvocation* firmwareInfo(const QString& image);  ///< upgrade_tool SFI <image>
     ToolInvocation* upgradeFirmware(const QString& image);   ///< upgrade_tool UF <image>; never cancelled by SocFlasher
+    /// upgrade_tool EXF <image> <outDir>: unpacks the RKFW package into its partition images plus
+    /// `package-file` ("<partition>\t<file>" lines) and `bootloader.bin`; prints
+    /// "start to extract <file>...(nn%)" lines and "Extract ok." (v2.37).
+    ToolInvocation* extractFirmware(const QString& image, const QString& outDir);
+    /// upgrade_tool WL <startSector> <file>: write a file to the flash from a 512-byte sector
+    /// (the command SocToolKit's Download page uses for every partition of a Loader-mode board;
+    /// progress lines "Write LBA from file (nn%)"; no chip check). Never cancelled by SocFlasher.
+    ToolInvocation* writeLba(quint64 startSector, const QString& file);
+    ToolInvocation* resetDevice();                       ///< upgrade_tool RD ("Reset Device OK.")
 
     // ---- Parsers -------------------------------------------------------------------------
     static QList<RockusbDevice> parseDeviceList(const QString& output);
@@ -104,6 +138,30 @@ public:
     static QString tailForMessage(const QString& output, int count = 8);
     /// True when `path` starts with the RKFW magic (the 4 bytes "RKFW"); false for a missing file.
     static bool isRkfwImage(const QString& path, QString* error = nullptr);
+    /// Parse a Linux mtdparts string: the whole "mtdparts=<dev>:<list>" word, "<dev>:<list>" or
+    /// the bare list. Each entry is "<size>(<name>)" or "<size>@<offset>(<name>)"; sizes and
+    /// offsets take a K / M / G suffix (1024-based) or are plain bytes; an entry without "@"
+    /// starts where the previous one ended; "-" as a size means "to the end" (size 0 here).
+    /// Names are returned as written. An empty list when nothing parses.
+    static QList<MtdPartition> parseMtdParts(const QString& text);
+    /// The mtdparts word of a kernel command line ("... mtdparts=sfc_nor:64K(env),... rk_dma_heap_cma=72M")
+    /// without the "mtdparts=" prefix, or an empty string when absent.
+    static QString mtdPartsFromCommandLine(const QString& cmdline);
+    /// The layout an image carries: `env.img` of an unpacked update.img is a U-Boot environment
+    /// blob (a 4-byte CRC, then NUL-separated "key=value" entries) whose first entry is
+    /// "mtdparts=<dev>:<list>" on the Node board. Returns the value without the "mtdparts="
+    /// prefix, or an empty string when the file is missing or has no such entry. This is the
+    /// layout the image was built for, so SocFlasher prefers it over the board's (see there).
+    static QString mtdPartsFromEnvImage(const QString& envImagePath);
+    /// `package-file` of an extracted image: one "<partition>\t<file>" (or space separated) per
+    /// line; blank lines and lines starting with '#' skipped. First = partition name, second = file.
+    static QList<QPair<QString, QString>> parsePackageFile(const QString& text);
+    /// The rows of an extracted image placed in `layout`: every package-file entry in order except
+    /// "package-file" and "bootloader" (upgrade_tool's own entries), with the file's size, the
+    /// layout's offset / size, inLayout and fits computed; selected = inLayout && fits. An empty
+    /// list (with *error) when package-file is missing or unreadable.
+    static QList<PartitionImage> planPartitions(const QString& extractDir, const QList<MtdPartition>& layout,
+                                                QString* error = nullptr);
 
     /// Incremental UF progress parser (see the class comment).
     class ProgressParser

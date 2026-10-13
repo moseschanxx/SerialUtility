@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QPair>
 #include <QPointer>
 #include <QSignalSpy>
@@ -21,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -81,6 +83,113 @@ QString sfiSample(const QString& eol, const QString& sep)
           << QStringLiteral("    EntryNo=7 ;    file=package-file;    partition=userdata;    type=;    offset=0xa96a5f;    size=0xa7")
           << QStringLiteral("    EntryNo=8 ;    file=parameter.txt;    partition=parameter;    type=;    offset=0xb96a5f;    size=0x200");
     return lines.join(eol) + eol;
+}
+
+// ---- the Node board's flash (facts of 2026-10-13: /proc/cmdline, `upgrade_tool EXF`, the images) ----
+
+const QString kNodeMtdParts =
+    QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)");
+/// The board's /proc/cmdline around its mtdparts word.
+const QByteArray kNodeCmdline = "earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 root=/dev/mtdblock5 rootfstype=squashfs "
+                                "rootwait mtdparts=sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),"
+                                "5M(rootfs),3M(userdata) rk_dma_heap_cma=72M\n";
+/// `package-file` as upgrade_tool v2.37 extracted it from the Node image (tab separated).
+const QByteArray kNodePackageFile = "env\tenv.img\nidblock\tidblock.img\nuboot\tuboot.img\nmeta\tmeta.img\nboot\tboot.img\n"
+                                    "rootfs\trootfs.img\nuserdata\tuserdata.img\npackage-file\tpackage-file\n"
+                                    "bootloader\tdownload.bin\n";
+
+struct NodePartition
+{
+    const char* name;
+    quint64 offset;     ///< bytes, from the layout
+    quint64 size;       ///< bytes, from the layout
+    qint64 imageBytes;  ///< the image of the real build
+    quint64 sector;     ///< offset / 512: what `WL` gets
+};
+constexpr quint64 kKiB = 1024;
+const NodePartition kNodePartitions[] = {
+    {"env", 0, 64 * kKiB, 65536, 0},
+    {"idblock", 64 * kKiB, 256 * kKiB, 174080, 128},
+    {"uboot", 320 * kKiB, 256 * kKiB, 196608, 640},
+    {"meta", 576 * kKiB, 384 * kKiB, 393216, 1152},
+    {"boot", 960 * kKiB, 3 * 1024 * kKiB, 3043840, 1920},
+    {"rootfs", 4032 * kKiB, 5 * 1024 * kKiB, 3830272, 8064},
+    {"userdata", 9152 * kKiB, 3 * 1024 * kKiB, 3145728, 18304},
+};
+
+bool writeBytes(const QString& path, qint64 size, char fill)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    return file.write(QByteArray(size, fill)) == size;
+}
+
+/// What `upgrade_tool EXF` leaves in `dir` for the Node image: the seven partition images (the
+/// real sizes, or `sizes[name]`; -1 = no file), package-file, download.bin and bootloader.bin.
+bool writeNodeExtraction(const QString& dir, const QMap<QString, qint64>& sizes = {})
+{
+    if (!QDir().mkpath(dir)) {
+        return false;
+    }
+    char fill = 'a';
+    for (const NodePartition& partition : kNodePartitions) {
+        const qint64 size = sizes.value(QString::fromLatin1(partition.name), partition.imageBytes);
+        if (size >= 0 && !writeBytes(dir + QLatin1Char('/') + QLatin1String(partition.name) + QStringLiteral(".img"), size, fill++)) {
+            return false;
+        }
+    }
+    QFile list(dir + QStringLiteral("/package-file"));
+    if (!list.open(QIODevice::WriteOnly | QIODevice::Truncate) || list.write(kNodePackageFile) != kNodePackageFile.size()) {
+        return false;
+    }
+    return writeBytes(dir + QStringLiteral("/download.bin"), 4096, 'L') && writeBytes(dir + QStringLiteral("/bootloader.bin"), 4096, 'L');
+}
+
+/// The env.img of the Node image (facts of 2026-10-13): a 4-byte CRC (6a6798f8), then NUL-separated
+/// entries - "mtdparts=...", "sys_bootargs=... mtdparts=... ...", "sd_parts=..." - and "\0\0".
+/// `headerBytes` 5 adds the redundancy flag `flag`; `first` replaces the first entry ("" = none).
+QByteArray nodeEnvImage(const QByteArray& first = "mtdparts=" + kNodeMtdParts.toLatin1(), int headerBytes = 4, char flag = 1)
+{
+    QByteArray env = QByteArray::fromHex("6a6798f8");
+    if (headerBytes == 5) {
+        env.append(flag);
+    }
+    if (!first.isEmpty()) {
+        env.append(first).append('\0');
+    }
+    env.append("sys_bootargs= rootfstype=erofs mtdparts=" + kNodeMtdParts.toLatin1() + " rk_dma_heap_cma=72M").append('\0');
+    env.append("sd_parts=mmcblk0:16K@512(env),512K@32K(idblock),4M(uboot),32M(boot),2G(rootfs),-(userdata)").append('\0');
+    env.append('\0');
+    return env;
+}
+
+/// A FakeToolRunner handler for `upgrade_tool EXF <image> <dir>`: unpacks "the Node image" into
+/// <dir> (writeNodeExtraction()) and prints what v2.37 prints. With `envMtdParts` its env.img is a
+/// real environment (nodeEnvImage()) whose first entry is "mtdparts=<envMtdParts>", padded to 64 KiB.
+std::function<void(FakeToolInvocation*)> nodeExtractor(const QMap<QString, qint64>& sizes = {}, const QString& envMtdParts = QString())
+{
+    return [sizes, envMtdParts](FakeToolInvocation* i) {
+        const QStringList args = i->arguments();
+        const QString dir = args.size() >= 3 ? QDir::fromNativeSeparators(args.at(2)) : QString();
+        bool ok = !dir.isEmpty() && writeNodeExtraction(dir, sizes);
+        if (ok && !envMtdParts.isEmpty()) {
+            QByteArray env = nodeEnvImage("mtdparts=" + envMtdParts.toLatin1());
+            env.append(QByteArray(65536 - env.size(), '\0'));
+            QFile file(dir + QStringLiteral("/env.img"));
+            ok = file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(env) == env.size();
+        }
+        if (!ok) {
+            i->emitOutput("Extract failed\r\n");
+            i->finish(1);
+            return;
+        }
+        i->emitOutput("rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n");
+        i->emitOutput("start to extract env.img...(100%)\r\nstart to extract boot.img...(42%)\r");
+        i->emitOutput("start to extract boot.img...(100%)\r\nstart to extract package-file...(100%)\r\nExtract ok.\r\n");
+        i->finish(0);
+    };
 }
 
 QRegularExpression exact(const QString& commandLine)
@@ -281,6 +390,15 @@ private slots:
     void rockchip_progressFlushAndEdgeCases();
     void rockchip_commandLines();
 
+    // ---- RockchipTool: partitions (v0.5.1) --------------------------------------------------
+    void rockchip_parseMtdParts();
+    void rockchip_parseMtdPartsMalformed();
+    void rockchip_mtdPartsFromCommandLine();
+    void rockchip_mtdPartsFromEnvImage();
+    void rockchip_parsePackageFile();
+    void rockchip_planPartitions();
+    void rockchip_partitionCommandLines();
+
     // ---- AdbTool ----------------------------------------------------------------------------
     void adb_parseDevices();
     void adb_selectDeviceReady();
@@ -320,7 +438,7 @@ private slots:
     void soc_statusToolMissingAndSerial();
     void soc_statusQueriesNeverOverlap();
     void soc_startValidation();
-    void soc_alreadyInLoader();
+    void soc_alreadyInMaskrom();
     void soc_adbBoardRebootsToLoader();
     void soc_noBoardThenBoardAppears();
     void soc_noBoardThenAdbBoardAppears();
@@ -336,6 +454,18 @@ private slots:
     void soc_waitForAdbOff();
     void soc_boardInfoFailureIsStillSuccess();
     void soc_cancelWhenIdleAndRestart();
+
+    // ---- SocFlasher: partition writes in Loader mode (v0.5.1) ----------------------------------
+    void soc_loaderWritesPartitions();
+    void soc_loaderWritesSelection();
+    void soc_imageTooBigStopsBeforeWriting();
+    void soc_writeFailureStops();
+    void soc_layoutUnknown();
+    void soc_maskromKeepsUf();
+    void soc_stepTwoReadsMtdParts();
+    void soc_planSignalAndStaleness();
+    void soc_layoutFromImage();
+    void soc_layoutMismatchImageWins();
 
     // ---- Real board (env-gated; nothing is flashed) ----
     void realBoard_statusAndMcuInfo();
@@ -1420,6 +1550,255 @@ void tst_firmwaretools::rockchip_commandLines()
 }
 
 // =============================================================================================
+// RockchipTool: partitions (v0.5.1)
+// =============================================================================================
+
+namespace {
+
+QList<MtdPartition> nodeLayout()
+{
+    QList<MtdPartition> layout;
+    for (const NodePartition& p : kNodePartitions) {
+        layout.append({QString::fromLatin1(p.name), p.offset, p.size});
+    }
+    return layout;
+}
+
+} // namespace
+
+void tst_firmwaretools::rockchip_parseMtdParts()
+{
+    // The Node board's string in all three spellings: the whole word, "<dev>:<list>", the bare list.
+    const QList<MtdPartition> expected = nodeLayout();
+    QCOMPARE(expected.at(1).offset, quint64(0x10000));        // the sd_update.txt offsets
+    QCOMPARE(expected.at(2).offset, quint64(0x50000));
+    QCOMPARE(expected.at(3).offset, quint64(0x90000));
+    QCOMPARE(expected.at(4).offset, quint64(0xF0000));
+    QCOMPARE(expected.at(5).offset, quint64(0x3F0000));
+    QCOMPARE(expected.at(6).offset, quint64(0x8F0000));
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("mtdparts=") + kNodeMtdParts), expected);
+    QCOMPARE(RockchipTool::parseMtdParts(kNodeMtdParts), expected);
+    QCOMPARE(RockchipTool::parseMtdParts(kNodeMtdParts.mid(kNodeMtdParts.indexOf(QLatin1Char(':')) + 1)), expected);
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("  mtdparts=") + kNodeMtdParts + QStringLiteral("\n")), expected);
+
+    // "@" offsets; an entry without one starts where the previous one ended.
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("1M@2M(a),512K(b)")),
+             (QList<MtdPartition>{{QStringLiteral("a"), 2 * 1024 * kKiB, 1024 * kKiB},
+                                  {QStringLiteral("b"), 3 * 1024 * kKiB, 512 * kKiB}}));
+    // K / M / G (either case, 1024-based), plain bytes, hex.
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("4096(raw),1k(k),2m(m),1G(g),0x1000@0x40300000(h)")),
+             (QList<MtdPartition>{{QStringLiteral("raw"), 0, 4096},
+                                  {QStringLiteral("k"), 4096, 1024},
+                                  {QStringLiteral("m"), 5120, 2 * 1024 * kKiB},
+                                  {QStringLiteral("g"), 5120 + 2 * 1024 * kKiB, 1024 * 1024 * kKiB},
+                                  {QStringLiteral("h"), 0x40300000, 0x1000}}));
+    // "-" as a size: to the end of the flash (size 0), with or without an offset.
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("spi-nand0:1M(boot),-(rootfs)")),
+             (QList<MtdPartition>{{QStringLiteral("boot"), 0, 1024 * kKiB}, {QStringLiteral("rootfs"), 1024 * kKiB, 0}}));
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("1M(boot),-@4M(rest)")).last(),
+             (MtdPartition{QStringLiteral("rest"), 4 * 1024 * kKiB, 0}));
+    // Flags after the name, names as written, only the first of several devices.
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("1M(Boot_A)ro,2M(data)lk")).size(), qsizetype(2));
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("1M(Boot_A)ro,2M(data)lk")).first().name, QStringLiteral("Boot_A"));
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral("mtdparts=spi0.0:1M(a);nand:2M(b)")),
+             (QList<MtdPartition>{{QStringLiteral("a"), 0, 1024 * kKiB}}));
+    QCOMPARE(RockchipTool::parseMtdParts(QStringLiteral(" 64K ( env ) , 256K @ 64K (idblock)")).last().offset, 64 * kKiB);
+}
+
+void tst_firmwaretools::rockchip_parseMtdPartsMalformed()
+{
+    // Anything malformed gives no layout at all: a wrong offset would make WL write over another partition.
+    for (const QString& text : {QString(), QStringLiteral("   "), QStringLiteral("mtdparts="), QStringLiteral("sfc_nor:"),
+                                QStringLiteral("64K"), QStringLiteral("64K()"), QStringLiteral("64X(env)"),
+                                QStringLiteral("(env)"), QStringLiteral("64K(env),"), QStringLiteral("64K(env"),
+                                QStringLiteral("-(a),1M(b)"), QStringLiteral("1M@0(a),1M@512K(b)"), QStringLiteral("0(a)"),
+                                QStringLiteral("99999999999999999999G(a)"), QStringLiteral("17179869184G(a)"),
+                                QStringLiteral("1M(a)garbage"), QStringLiteral("abc"), QStringLiteral("1M@(a)"),
+                                QStringLiteral("1M@-(a)"), QStringLiteral("sfc_nor:64K(env),,3M(boot)")}) {
+        QVERIFY2(RockchipTool::parseMtdParts(text).isEmpty(), qPrintable(text));
+    }
+}
+
+void tst_firmwaretools::rockchip_mtdPartsFromCommandLine()
+{
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QString::fromLatin1(kNodeCmdline)), kNodeMtdParts);
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QStringLiteral("... mtdparts=") + kNodeMtdParts
+                                                   + QStringLiteral(" rk_dma_heap_cma=72M")),
+             kNodeMtdParts);   // the line as the facts quote it
+    QCOMPARE(RockchipTool::parseMtdParts(RockchipTool::mtdPartsFromCommandLine(QString::fromLatin1(kNodeCmdline))), nodeLayout());
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QStringLiteral("mtdparts=x:1M(a)\r\n")), QStringLiteral("x:1M(a)"));
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QStringLiteral("mtdparts=x:1M(a) quiet mtdparts=y:2M(b)")),
+             QStringLiteral("y:2M(b)"));   // the kernel takes the last one
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QStringLiteral("console=ttyFIQ0 root=/dev/mmcblk0p5")), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QStringLiteral("xmtdparts=x:1M(a) blkdevparts=mmcblk0:1M(a)")), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromCommandLine(QString()), QString());
+}
+
+void tst_firmwaretools::rockchip_mtdPartsFromEnvImage()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const auto envFile = [&dir](const QString& name, const QByteArray& bytes) {
+        const QString path = dir.filePath(name);
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            file.write(bytes);
+        }
+        return path;
+    };
+    // The Node image's env.img: CRC, then the "mtdparts=" entry first (padded to 64 KiB like the real one).
+    QByteArray real = nodeEnvImage();
+    QCOMPARE(real.left(4), QByteArray::fromHex("6a6798f8"));
+    real.append(QByteArray(65536 - real.size(), '\0'));
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("env.img"), real)), kNodeMtdParts);
+    QCOMPARE(RockchipTool::parseMtdParts(RockchipTool::mtdPartsFromEnvImage(dir.filePath(QStringLiteral("env.img")))), nodeLayout());
+    // A 5-byte header (CRC + redundancy flag), the flag set or not; padding with 0xFF.
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("flag1.img"), nodeEnvImage("mtdparts=" + kNodeMtdParts.toLatin1(), 5, 1))),
+             kNodeMtdParts);
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("flag0.img"), nodeEnvImage("mtdparts=" + kNodeMtdParts.toLatin1(), 5, 0))),
+             kNodeMtdParts);
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("ff.img"), nodeEnvImage() + QByteArray(1000, '\xFF'))), kNodeMtdParts);
+    // Not the first entry: still the one that is "mtdparts=" itself, never the word inside sys_bootargs.
+    const QByteArray later = QByteArray::fromHex("6a6798f8") + "sys_bootargs= mtdparts=x:1M(wrong)" + '\0' + "baudrate=1500000" + '\0'
+                             + "mtdparts=sfc_nor:1M(a),2M(b)" + '\0' + '\0';
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("later.img"), later)), QStringLiteral("sfc_nor:1M(a),2M(b)"));
+    // No such entry (only inside sys_bootargs), an empty value, a missing / empty / too short file.
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("none.img"), nodeEnvImage(QByteArray()))), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("emptyvalue.img"), nodeEnvImage("mtdparts="))), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(dir.filePath(QStringLiteral("missing.img"))), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("empty.img"), QByteArray())), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("short.img"), QByteArray("abc"))), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("zeros.img"), QByteArray(65536, '\0'))), QString());
+    QCOMPARE(RockchipTool::mtdPartsFromEnvImage(envFile(QStringLiteral("noise.img"), QByteArray(65536, 'a'))), QString());
+}
+
+void tst_firmwaretools::rockchip_parsePackageFile()
+{
+    using Entries = QList<QPair<QString, QString>>;
+    const Entries node{{QStringLiteral("env"), QStringLiteral("env.img")},
+                       {QStringLiteral("idblock"), QStringLiteral("idblock.img")},
+                       {QStringLiteral("uboot"), QStringLiteral("uboot.img")},
+                       {QStringLiteral("meta"), QStringLiteral("meta.img")},
+                       {QStringLiteral("boot"), QStringLiteral("boot.img")},
+                       {QStringLiteral("rootfs"), QStringLiteral("rootfs.img")},
+                       {QStringLiteral("userdata"), QStringLiteral("userdata.img")},
+                       {QStringLiteral("package-file"), QStringLiteral("package-file")},
+                       {QStringLiteral("bootloader"), QStringLiteral("download.bin")}};
+    QCOMPARE(RockchipTool::parsePackageFile(QString::fromLatin1(kNodePackageFile)), node);
+    // CRLF, spaces instead of tabs, comments, blank lines, a name without a file, a BOM.
+    const QString variants = QString(QChar(0xFEFF))
+                             + QStringLiteral("# NAME\tRelative path\r\n\r\n   env     env.img\r\n#boot\tboot.img\r\n"
+                                              "lonely\r\nboot \t Image/boot.img  \r\n\t\r\n");
+    QCOMPARE(RockchipTool::parsePackageFile(variants),
+             (Entries{{QStringLiteral("env"), QStringLiteral("env.img")}, {QStringLiteral("boot"), QStringLiteral("Image/boot.img")}}));
+    QVERIFY(RockchipTool::parsePackageFile(QString()).isEmpty());
+    QVERIFY(RockchipTool::parsePackageFile(QStringLiteral("# only a comment\n")).isEmpty());
+}
+
+void tst_firmwaretools::rockchip_planPartitions()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(writeNodeExtraction(dir.path()));
+    QString error = QStringLiteral("stale");
+    QList<PartitionImage> rows = RockchipTool::planPartitions(dir.path(), nodeLayout(), &error);
+    QVERIFY(error.isEmpty());
+    // Package-file order; its own two entries (package-file, bootloader) are not partitions to write.
+    QCOMPARE(rows.size(), qsizetype(7));
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        const NodePartition& p = kNodePartitions[i];
+        const PartitionImage& row = rows.at(i);
+        QCOMPARE(row.name, QString::fromLatin1(p.name));
+        QCOMPARE(row.file, QDir(dir.path()).absoluteFilePath(row.name + QStringLiteral(".img")));
+        QVERIFY(QFileInfo(row.file).isAbsolute());
+        QCOMPARE(row.fileSize, p.imageBytes);
+        QCOMPARE(row.offset, p.offset);
+        QCOMPARE(row.size, p.size);
+        QVERIFY(row.inLayout);
+        QVERIFY(row.fits);
+        QVERIFY(row.selected);
+        QCOMPARE(row.offset / 512, p.sector);
+    }
+    QVERIFY(rows.at(0) == rows.at(0));
+    QVERIFY(!(rows.at(0) == rows.at(1)));
+
+    // A name the layout lacks, an image one byte too big, a partition "to the end", a missing file.
+    QList<MtdPartition> layout = nodeLayout();
+    layout.removeAt(3);                                   // no "meta"
+    layout[5].size = 0;                                   // userdata: "-"
+    QVERIFY(writeBytes(dir.filePath(QStringLiteral("boot.img")), 3 * 1024 * 1024 + 1, 'x'));
+    QVERIFY(QFile::remove(dir.filePath(QStringLiteral("rootfs.img"))));
+    rows = RockchipTool::planPartitions(dir.path(), layout, &error);
+    QCOMPARE(rows.size(), qsizetype(7));
+    const PartitionImage& meta = rows.at(3);
+    QVERIFY(!meta.inLayout);
+    QCOMPARE(meta.offset, quint64(0));
+    QCOMPARE(meta.size, quint64(0));
+    QVERIFY(meta.fits);                                   // size 0: nothing to compare against
+    QVERIFY(!meta.selected);                              // not in the layout: never selected
+    const PartitionImage& boot = rows.at(4);
+    QVERIFY(boot.inLayout);
+    QCOMPARE(boot.fileSize, qint64(3 * 1024 * 1024 + 1));
+    QVERIFY(!boot.fits);
+    QVERIFY(!boot.selected);
+    const PartitionImage& rootfs = rows.at(5);
+    QCOMPARE(rootfs.fileSize, qint64(-1));
+    QVERIFY(!rootfs.fits);                                // no file: nothing to write
+    QVERIFY(!rootfs.selected);
+    const PartitionImage& userdata = rows.at(6);
+    QCOMPARE(userdata.size, quint64(0));
+    QVERIFY(userdata.fits);
+    QVERIFY(userdata.selected);
+
+    // No layout at all: the rows are still listed, none in the layout.
+    rows = RockchipTool::planPartitions(dir.path(), {}, &error);
+    QCOMPARE(rows.size(), qsizetype(7));
+    for (const PartitionImage& row : std::as_const(rows)) {
+        QVERIFY(!row.inLayout && !row.selected);
+    }
+
+    // No package-file: nothing, with the reason.
+    QTemporaryDir empty;
+    rows = RockchipTool::planPartitions(empty.path(), nodeLayout(), &error);
+    QVERIFY(rows.isEmpty());
+    QVERIFY2(error.contains(QStringLiteral("package-file")), qPrintable(error));
+    QVERIFY(RockchipTool::planPartitions(empty.path(), nodeLayout()).isEmpty());   // the error pointer is optional
+}
+
+void tst_firmwaretools::rockchip_partitionCommandLines()
+{
+    QTemporaryDir dir;
+    FakeToolRunner runner;
+    RockchipTool tool(&runner);
+    tool.setToolPath(QStringLiteral("upgrade_tool"));
+    tool.setTimeoutMs(2500);
+    const QString image = dir.filePath(QStringLiteral("my images/update.img"));
+    const QString out = dir.filePath(QStringLiteral("my images/update.extracted"));
+    QVERIFY(!QFileInfo::exists(out));
+    tool.extractFirmware(image, out);
+    QCOMPARE(runner.lastInvocation(), ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                                                    {QStringLiteral("EXF"), QDir::toNativeSeparators(image),
+                                                                     QDir::toNativeSeparators(out)}));
+    QVERIFY(QFileInfo(out).isDir());                                    // upgrade_tool does not create it
+    QCOMPARE(runner.lastOptions().workingDirectory, QFileInfo(image).absolutePath());
+    QVERIFY(runner.lastOptions().timeoutMs >= 60000);                  // EXF may be stopped, generously
+
+    const QString file = out + QStringLiteral("/boot.img");
+    tool.writeLba(1920, file);
+    QCOMPARE(runner.lastInvocation(),
+             ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                           {QStringLiteral("WL"), QStringLiteral("1920"), QDir::toNativeSeparators(file)}));
+    QCOMPARE(runner.lastOptions().timeoutMs, 0);                       // a write is never stopped
+    tool.writeLba(0, QStringLiteral("D:/x/env.img"));
+#ifdef Q_OS_WIN
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool WL 0 D:\\x\\env.img"));
+#endif
+    tool.resetDevice();
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool RD"));
+    QCOMPARE(runner.lastOptions().timeoutMs, 2500);
+}
+
+// =============================================================================================
 // AdbTool
 // =============================================================================================
 
@@ -2257,7 +2636,9 @@ namespace {
 
 /// A SocFlasher on a FakeToolRunner with an image, tool paths and short polls. The scripts for
 /// the commands of a normal flash are installed by installFlashScripts(); a test registers its
-/// own handlers first (the first matching handler wins) for whatever differs.
+/// own handlers first (the first matching handler wins) for whatever differs. Both methods are
+/// scripted: UF for MASKROM mode, and for Loader mode the board's /proc/cmdline (the Node
+/// layout), EXF unpacking "the Node image" (nodeExtractor()), WL and RD.
 struct FlashRig
 {
     FlashRig()
@@ -2271,6 +2652,9 @@ struct FlashRig
 
     static QRegularExpression ld() { return exact(QStringLiteral("upgrade_tool LD")); }
     static QRegularExpression uf() { return QRegularExpression(QStringLiteral("^upgrade_tool UF ")); }
+    static QRegularExpression exf() { return QRegularExpression(QStringLiteral("^upgrade_tool EXF ")); }
+    static QRegularExpression wl() { return QRegularExpression(QStringLiteral("^upgrade_tool WL ")); }
+    static QRegularExpression rd() { return exact(QStringLiteral("upgrade_tool RD")); }
     static QRegularExpression adbDevices() { return exact(QStringLiteral("adb devices")); }
     /// An adb command of the flow: with `-s <serial>` once the flow found its board on ADB.
     static QRegularExpression flowAdb(const QString& rest)
@@ -2280,9 +2664,30 @@ struct FlashRig
     static QRegularExpression getState() { return flowAdb(QStringLiteral("get-state")); }
     static QRegularExpression reboot() { return flowAdb(QStringLiteral("reboot loader")); }
     static QRegularExpression catVersion() { return flowAdb(QStringLiteral("shell \"cat /proc/version\"")); }
+    static QRegularExpression catCmdline() { return flowAdb(QStringLiteral("shell \"cat /proc/cmdline\"")); }
     static QRegularExpression boardInfoCommand() { return flowAdb(QStringLiteral("shell \"cat /proc/version; uptime\"")); }
     /// The UF command line as upgrade_tool gets it (the image path in native separators).
     QString ufCommand() const { return QStringLiteral("upgrade_tool UF ") + QDir::toNativeSeparators(image); }
+    /// The default extract folder: "<image folder>/<image base name>.extracted".
+    QString extractDir() const { return dir.path() + QStringLiteral("/update.extracted"); }
+    /// The WL command of a Node partition (offset / 512, the image unpacked into `folder`).
+    static QString wlCommand(const NodePartition& p, const QString& folder)
+    {
+        return ToolRunner::formatCommandLine(
+            QStringLiteral("upgrade_tool"),
+            {QStringLiteral("WL"), QString::number(p.sector),
+             QDir::toNativeSeparators(folder + QLatin1Char('/') + QLatin1String(p.name) + QStringLiteral(".img"))});
+    }
+    QStringList wlCommands() const { return runner.invocations().filter(wl()); }
+
+    /// WL printing what v2.37 prints, "(10" split from "0%)".
+    static void successfulWl(FakeToolInvocation* i)
+    {
+        i->emitOutput(kBanner);
+        i->emitOutput("Write LBA from file (50%)\rWrite LBA from file (10");
+        i->emitOutput("0%)\r\n");
+        i->finish(0);
+    }
 
     /// UF with progress chunks split inside "(42%" and across "\r\n", ending with the success line.
     static void successfulUf(FakeToolInvocation* i)
@@ -2298,8 +2703,12 @@ struct FlashRig
     void installFlashScripts()
     {
         runner.addHandler(uf(), &FlashRig::successfulUf);
+        runner.addHandler(exf(), nodeExtractor());
+        runner.addHandler(wl(), &FlashRig::successfulWl);
+        runner.addScript(rd(), kBanner + "Reset Device OK.\r\n");
         runner.addScript(getState(), "device\n");
         runner.addScript(catVersion(), kProcVersion);
+        runner.addScript(catCmdline(), kNodeCmdline);
         runner.addScript(boardInfoCommand(), kProcVersion);
         runner.addScript(reboot(), "");
     }
@@ -2335,6 +2744,8 @@ struct FlashRig
     QSignalSpy boardInfo{&flasher, &SocFlasher::boardInfo};
     QSignalSpy statuses{&flasher, &SocFlasher::statusChanged};
     QSignalSpy downloadNeeded{&flasher, &SocFlasher::downloadModeNeeded};
+    QSignalSpy mtdPartsRead{&flasher, &SocFlasher::mtdPartsRead};
+    QSignalSpy planned{&flasher, &SocFlasher::partitionsPlanned};
 };
 
 } // namespace
@@ -2579,7 +2990,7 @@ void tst_firmwaretools::soc_startValidation()
     {
         FlashRig rig;   // start() while a flash runs is refused without a finished()
         QPointer<FakeToolInvocation> uf;
-        rig.runner.addScript(FlashRig::ld(), kLdLoader);
+        rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
         rig.runner.addHandler(FlashRig::uf(), [&uf](FakeToolInvocation* i) {
             uf = i;
             i->hang();
@@ -2598,11 +3009,14 @@ void tst_firmwaretools::soc_startValidation()
     }
 }
 
-void tst_firmwaretools::soc_alreadyInLoader()
+void tst_firmwaretools::soc_alreadyInMaskrom()
 {
+    // A board already in download mode is flashed at once. MASKROM mode (the BootROM answers the
+    // chip check) is the UF method: the whole image, upgrade_tool's own progress.
     FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.installFlashScripts();
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::None);
     QVERIFY(rig.flasher.start());
     QVERIFY(rig.flasher.isRunning());
     QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Detecting);
@@ -2611,6 +3025,7 @@ void tst_firmwaretools::soc_alreadyInLoader()
     QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("Upgrade firmware ok; board is back on ADB"));
     QVERIFY(!rig.flasher.isRunning());
     QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Done);
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::UpgradeFirmware);
 
     using P = SocFlasher::Phase;
     QCOMPARE(rig.phaseList(), (QList<P>{P::Detecting, P::WaitingForLoader, P::Flashing, P::WaitingForAdb, P::ReadingBoardInfo, P::Done}));
@@ -2618,8 +3033,10 @@ void tst_firmwaretools::soc_alreadyInLoader()
     QCOMPARE(rig.runner.count(FlashRig::reboot()), 0);      // already in download mode: no reboot
     QCOMPARE(rig.runner.count(FlashRig::adbDevices()), 0);  // and adb is not even asked
     QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
+    QCOMPARE(rig.runner.count(FlashRig::exf()) + rig.runner.count(FlashRig::wl()) + rig.runner.count(FlashRig::rd()), 0);
     QVERIFY(rig.runner.invocations().contains(rig.ufCommand()));
-    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Loader mode)").arg(QDir::toNativeSeparators(rig.image))));
+    QVERIFY(rig.logged(QStringLiteral("flashing %1 (Maskrom mode)").arg(QDir::toNativeSeparators(rig.image))));
+    QVERIFY(rig.logged(QStringLiteral("MASKROM mode: writing the whole image with upgrade_tool UF")));
     QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool UF")));   // command lines go to the log
     QVERIFY(rig.logged(QStringLiteral("exit code 0")));
 
@@ -2659,7 +3076,7 @@ void tst_firmwaretools::soc_alreadyInLoader()
     QVERIFY(commands.indexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(rig.ufCommand()));
     QVERIFY(commands.indexOf(rig.ufCommand()) < commands.indexOf(QStringLiteral("adb get-state")));
     QVERIFY(commands.indexOf(QStringLiteral("adb get-state")) < commands.indexOf(QStringLiteral("adb shell \"cat /proc/version; uptime\"")));
-    // Found in Loader mode, the board's ADB serial is unknown: the ADB wait runs without -s.
+    // Found in download mode, the board's ADB serial is unknown: the ADB wait runs without -s.
     QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^adb -s "))), 0);
     // UF runs in the image's folder (upgrade_tool may write its Log folder into the working directory).
     const int ufIndex = static_cast<int>(commands.indexOf(rig.ufCommand()));
@@ -2688,15 +3105,23 @@ void tst_firmwaretools::soc_adbBoardRebootsToLoader()
                                         P::ReadingBoardInfo, P::Done}));
     QCOMPARE(rig.downloadNeeded.count(), 0);
     QCOMPARE(*ldCalls, 4);
-    // The order of usb_update.sh: LD, adb devices, the kernel read, reboot, LD polls, UF. From the
-    // moment `adb devices` found the board, every adb command names it (`adb -s <serial> ...`).
+    // The order of usb_update.sh: LD, adb devices, the kernel read (and, new, the layout read),
+    // reboot, LD polls, then the Loader-mode method: EXF, one WL per partition, RD. From the moment
+    // `adb devices` found the board, every adb command names it (`adb -s <serial> ...`).
     const QStringList commands = rig.runner.invocations();
     const QString board = QStringLiteral("adb -s 0225ce3c8d8d6e44 ");
+    const qsizetype firstWl = commands.indexOf(rig.wlCommands().value(0));
+    const qsizetype reset = commands.indexOf(QStringLiteral("upgrade_tool RD"));
     QVERIFY(commands.indexOf(QStringLiteral("adb devices")) < commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\"")));
-    QVERIFY(commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\"")) < commands.indexOf(board + QStringLiteral("reboot loader")));
+    QVERIFY(commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\"")) < commands.indexOf(board + QStringLiteral("shell \"cat /proc/cmdline\"")));
+    QVERIFY(commands.indexOf(board + QStringLiteral("shell \"cat /proc/cmdline\"")) < commands.indexOf(board + QStringLiteral("reboot loader")));
     QVERIFY(commands.indexOf(board + QStringLiteral("reboot loader")) < commands.lastIndexOf(QStringLiteral("upgrade_tool LD")));
-    QVERIFY(commands.lastIndexOf(QStringLiteral("upgrade_tool LD")) < commands.indexOf(rig.ufCommand()));
-    QVERIFY(commands.indexOf(rig.ufCommand()) < commands.indexOf(board + QStringLiteral("get-state")));
+    QVERIFY(commands.lastIndexOf(QStringLiteral("upgrade_tool LD")) < firstWl);
+    QCOMPARE(rig.wlCommands().size(), qsizetype(7));
+    QVERIFY(firstWl < reset);
+    QVERIFY(reset < commands.indexOf(board + QStringLiteral("get-state")));
+    QCOMPARE(rig.runner.count(FlashRig::uf()), 0);
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::PartitionWrites);
     QVERIFY(commands.contains(board + QStringLiteral("shell \"cat /proc/version; uptime\"")));
     for (const QString& command : commands) {
         QVERIFY2(!command.startsWith(QStringLiteral("adb ")) || command == QLatin1String("adb devices") || command.startsWith(board),
@@ -2905,8 +3330,8 @@ void tst_firmwaretools::soc_loaderNeverComes()
 
 void tst_firmwaretools::soc_flashWithoutSuccessLine()
 {
-    FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    FlashRig rig;   // MASKROM mode: UF (the Loader-mode method has its own cases below)
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addHandler(FlashRig::uf(), [](FakeToolInvocation* i) {
         i->emitOutput(kBanner);
         i->emitOutput("Using /home/u/config.ini\r\nLoading firmware...\r\nDownload Boot Start\r\n");
@@ -2925,7 +3350,7 @@ void tst_firmwaretools::soc_flashWithoutSuccessLine()
     QCOMPARE(rig.boardInfo.count(), 0);
 
     FlashRig silent;   // a UF that prints nothing
-    silent.runner.addScript(FlashRig::ld(), kLdLoader);
+    silent.runner.addScript(FlashRig::ld(), kLdMaskrom);
     silent.runner.addScript(FlashRig::uf(), "", 1);
     silent.installFlashScripts();
     QVERIFY(silent.flasher.start());
@@ -2936,7 +3361,7 @@ void tst_firmwaretools::soc_flashWithoutSuccessLine()
 void tst_firmwaretools::soc_flashToolMissing()
 {
     FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addHandler(FlashRig::uf(), [](FakeToolInvocation* i) { i->failToStart(QStringLiteral("access denied")); });
     rig.installFlashScripts();
     QVERIFY(rig.flasher.start());
@@ -2983,7 +3408,7 @@ void tst_firmwaretools::soc_cancelRefusedWhileFlashing()
 {
     FlashRig rig;
     QPointer<FakeToolInvocation> uf;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addHandler(FlashRig::uf(), [&uf](FakeToolInvocation* i) {
         uf = i;
         i->emitOutput("Download Image... (10%)\r");
@@ -3019,7 +3444,7 @@ void tst_firmwaretools::soc_cancelRefusedWhileFlashing()
 void tst_firmwaretools::soc_adbDoesNotComeBack()
 {
     FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addScript(FlashRig::getState(), "error: no devices/emulators found\n", 1);
     rig.installFlashScripts();
     rig.flasher.setAdbReturnTimeoutSeconds(1);
@@ -3040,7 +3465,7 @@ void tst_firmwaretools::soc_adbComesBackLate()
 {
     FlashRig rig;
     auto polls = std::make_shared<int>(0);
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addHandler(FlashRig::getState(), [polls](FakeToolInvocation* i) {
         ++*polls;
         if (*polls >= 4) {
@@ -3063,7 +3488,7 @@ void tst_firmwaretools::soc_adbComesBackLate()
 void tst_firmwaretools::soc_waitForAdbOff()
 {
     FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.installFlashScripts();
     rig.flasher.setWaitForAdb(false);
     QVERIFY(!rig.flasher.waitForAdb());
@@ -3080,7 +3505,7 @@ void tst_firmwaretools::soc_waitForAdbOff()
 void tst_firmwaretools::soc_boardInfoFailureIsStillSuccess()
 {
     FlashRig rig;
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.runner.addScript(FlashRig::boardInfoCommand(), "", 1);   // nothing to show
     rig.installFlashScripts();
     QVERIFY(rig.flasher.start());
@@ -3099,7 +3524,7 @@ void tst_firmwaretools::soc_cancelWhenIdleAndRestart()
     QVERIFY(rig.flasher.lastStatus() == SocFlasher::DeviceStatus());
 
     // A finished flasher can run again, and a refresh works again.
-    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
     rig.installFlashScripts();
     QVERIFY(rig.flasher.start());
     QTRY_COMPARE(rig.finished.count(), 1);
@@ -3114,6 +3539,652 @@ void tst_firmwaretools::soc_cancelWhenIdleAndRestart()
     QTRY_COMPARE(rig.finished.count(), 2);
     QCOMPARE(rig.finished.last().at(0).toBool(), true);
     QCOMPARE(rig.runner.count(FlashRig::uf()), 2);
+}
+
+// =============================================================================================
+// SocFlasher: partition writes in Loader mode (v0.5.1)
+// =============================================================================================
+
+namespace {
+
+using ProgressList = QList<QPair<QString, int>>;
+
+ProgressList progressOf(const QSignalSpy& spy)
+{
+    ProgressList seen;
+    for (const QList<QVariant>& args : spy) {
+        seen.append({args.at(0).toString(), args.at(1).toInt()});
+    }
+    return seen;
+}
+
+QStringList textsOf(const QSignalSpy& spy)
+{
+    QStringList texts;
+    for (const QList<QVariant>& args : spy) {
+        texts << args.at(0).toString();
+    }
+    return texts;
+}
+
+/// The Node layout with "meta" renamed: the image's meta.img has no partition in it.
+QString layoutWithoutMeta()
+{
+    return QString(kNodeMtdParts).replace(QStringLiteral("(meta)"), QStringLiteral("(misc)"));
+}
+
+} // namespace
+
+void tst_firmwaretools::soc_loaderWritesPartitions()
+{
+    // A board already in Loader mode (U-Boot rockusb, whose chip id reads zero) with the layout the
+    // owner remembered for it: SocToolKit's Download page - EXF, one WL per partition at the
+    // partition's offset / 512, RD - then the ADB wait as after UF.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(QStringLiteral("mtdparts=") + kNodeMtdParts);
+    QCOMPARE(rig.flasher.mtdParts(), QStringLiteral("mtdparts=") + kNodeMtdParts);
+    QCOMPARE(rig.flasher.extractDirectory(), rig.extractDir());
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("Upgrade firmware ok; board is back on ADB"));
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::PartitionWrites);
+    using P = SocFlasher::Phase;
+    QCOMPARE(rig.phaseList(), (QList<P>{P::Detecting, P::WaitingForLoader, P::Flashing, P::WaitingForAdb, P::ReadingBoardInfo, P::Done}));
+
+    // EXF into "<image folder>/update.extracted", run in the image's folder ...
+    const QStringList commands = rig.runner.invocations();
+    const QString exf = ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                                      {QStringLiteral("EXF"), QDir::toNativeSeparators(rig.image),
+                                                       QDir::toNativeSeparators(rig.extractDir())});
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+    QVERIFY(commands.contains(exf));
+    QCOMPARE(QDir::fromNativeSeparators(rig.runner.optionsAt(static_cast<int>(commands.indexOf(exf))).workingDirectory),
+             QFileInfo(rig.image).absolutePath());
+    // ... the seven writes in package-file order at the layout's sectors, never timed out ...
+    QStringList expected;
+    for (const NodePartition& p : kNodePartitions) {
+        expected << FlashRig::wlCommand(p, rig.extractDir());
+    }
+    QCOMPARE(rig.wlCommands(), expected);
+    QStringList sectors;
+    for (const QString& wl : rig.wlCommands()) {
+        sectors << wl.section(QLatin1Char(' '), 2, 2);
+        QCOMPARE(rig.runner.optionsAt(static_cast<int>(commands.indexOf(wl))).timeoutMs, 0);
+    }
+    QCOMPARE(sectors, (QStringList{QStringLiteral("0"), QStringLiteral("128"), QStringLiteral("640"), QStringLiteral("1152"),
+                                   QStringLiteral("1920"), QStringLiteral("8064"), QStringLiteral("18304")}));
+    // ... then RD, then the ADB wait; no UF, no reboot (the board was in Loader mode already).
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 1);
+    QVERIFY(commands.indexOf(exf) < commands.indexOf(expected.first()));
+    QVERIFY(commands.indexOf(expected.last()) < commands.indexOf(QStringLiteral("upgrade_tool RD")));
+    QVERIFY(commands.indexOf(QStringLiteral("upgrade_tool RD")) < commands.indexOf(QStringLiteral("adb get-state")));
+    QCOMPARE(rig.runner.count(FlashRig::uf()), 0);
+    QCOMPARE(rig.runner.count(FlashRig::reboot()), 0);
+    QTRY_VERIFY(rig.runner.liveInvocations().isEmpty());
+
+    // The plan the flow made went out through partitionsPlanned() and stays in partitions().
+    QCOMPARE(rig.planned.count(), 1);
+    QVERIFY(rig.planned.first().at(0).toBool());
+    const auto rows = rig.planned.first().at(1).value<QList<PartitionImage>>();
+    QCOMPARE(rows.size(), qsizetype(7));
+    QCOMPARE(rig.flasher.partitions(), rows);
+    QCOMPARE(rows.at(4).name, QStringLiteral("boot"));
+    QCOMPARE(rows.at(4).offset, quint64(0xF0000));
+
+    // Progress: "Extracting", then "Writing <name> (k of 7)" with the percentage over all bytes.
+    const ProgressList seen = progressOf(rig.progress);
+    QCOMPARE(seen.first(), (QPair<QString, int>{QStringLiteral("Extracting"), -1}));
+    QVERIFY(seen.contains({QStringLiteral("Writing env (1 of 7)"), 0}));
+    QVERIFY(seen.contains({QStringLiteral("Writing rootfs (6 of 7)"), 53}));   // 5 written + half of rootfs = 53 % of 10,849,280 bytes
+    QVERIFY(seen.contains({QStringLiteral("Writing userdata (7 of 7)"), 100}));
+    int previous = 0;
+    for (const auto& entry : seen) {
+        if (entry.first.startsWith(QLatin1String("Writing "))) {
+            QVERIFY2(entry.second >= previous, qPrintable(entry.first));
+            previous = entry.second;
+        }
+    }
+    // The log: the method, what is written where, every command; the tool lines for the pane.
+    QVERIFY(rig.logged(QStringLiteral("Loader mode: writing partition by partition with upgrade_tool WL")));
+    QVERIFY(rig.logged(QStringLiteral("writing 7 of 7 partitions (10849280 bytes): env, idblock, uboot, meta, boot, rootfs, userdata")));
+    QVERIFY(rig.logged(QStringLiteral("writing boot: boot.img (3043840 bytes) at sector 1920 (offset 0xf0000)")));
+    QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool EXF ")));
+    QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool WL 18304 ")));
+    QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool RD")));
+    QVERIFY(rig.logged(QStringLiteral("partitions written; the board restarts")));
+    const QStringList raw = textsOf(rig.toolOutput);
+    QVERIFY(raw.contains(QStringLiteral("Extract ok.")));
+    QVERIFY(raw.contains(QStringLiteral("Write LBA from file (100%)")));
+    QVERIFY(raw.contains(QStringLiteral("Reset Device OK.")));
+    QCOMPARE(rig.boardInfo.count(), 1);
+}
+
+void tst_firmwaretools::soc_loaderWritesSelection()
+{
+    // Two partitions chosen (blanks, a repeat and an unknown name are dropped / ignored): only
+    // those two are written, the others are logged as skipped.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(kNodeMtdParts);
+    rig.flasher.setSelectedPartitions({QStringLiteral(" boot "), QStringLiteral("rootfs"), QStringLiteral("nonexistent"),
+                                       QStringLiteral("boot"), QString()});
+    QCOMPARE(rig.flasher.selectedPartitions(), (QStringList{QStringLiteral("boot"), QStringLiteral("rootfs"), QStringLiteral("nonexistent")}));
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.wlCommands(), (QStringList{FlashRig::wlCommand(kNodePartitions[4], rig.extractDir()),
+                                            FlashRig::wlCommand(kNodePartitions[5], rig.extractDir())}));
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 1);
+    for (const char* skipped : {"env", "idblock", "uboot", "meta", "userdata"}) {
+        QVERIFY2(rig.logged(QStringLiteral("skipping %1: not selected").arg(QLatin1String(skipped))), skipped);
+    }
+    QVERIFY(rig.logged(QStringLiteral("writing 2 of 7 partitions (6874112 bytes): boot, rootfs")));
+    const ProgressList seen = progressOf(rig.progress);
+    QVERIFY(seen.contains({QStringLiteral("Writing boot (1 of 2)"), 0}));
+    QVERIFY(seen.contains({QStringLiteral("Writing rootfs (2 of 2)"), 100}));
+    for (const PartitionImage& row : rig.flasher.partitions()) {
+        QCOMPARE(row.selected, row.name == QLatin1String("boot") || row.name == QLatin1String("rootfs"));
+    }
+
+    // A layout without one of the image's partitions: the default writes the six it has and says
+    // why the seventh is left out. Without the ADB wait the flow ends after RD.
+    FlashRig partial;
+    partial.runner.addScript(FlashRig::ld(), kLdLoader);
+    partial.installFlashScripts();
+    partial.flasher.setMtdParts(layoutWithoutMeta());
+    partial.flasher.setWaitForAdb(false);
+    QVERIFY(partial.flasher.start());
+    QTRY_COMPARE(partial.finished.count(), 1);
+    QVERIFY2(partial.finished.first().at(0).toBool(), qPrintable(partial.finished.first().at(1).toString()));
+    QCOMPARE(partial.finished.first().at(1).toString(), QStringLiteral("partitions written; board reset"));
+    QCOMPARE(partial.wlCommands().size(), qsizetype(6));
+    QVERIFY(!partial.wlCommands().join(QLatin1Char('\n')).contains(QStringLiteral("meta.img")));
+    QVERIFY(partial.logged(QStringLiteral("skipping meta: not in the board's partition layout")));
+    QCOMPARE(partial.runner.count(FlashRig::getState()), 0);
+    using P = SocFlasher::Phase;
+    QCOMPARE(partial.phaseList(), (QList<P>{P::Detecting, P::WaitingForLoader, P::Flashing, P::Done}));
+}
+
+void tst_firmwaretools::soc_imageTooBigStopsBeforeWriting()
+{
+    // boot.img one byte larger than its 3 MiB partition: WL would run into rootfs. Every image is
+    // checked before the first write, so nothing is written at all.
+    const QMap<QString, qint64> bigBoot{{QStringLiteral("boot"), 3 * 1024 * 1024 + 1}};
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addHandler(FlashRig::exf(), nodeExtractor(bigBoot));
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(0).toBool(), false);
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("boot.img (3145729 bytes) does not fit partition boot (3145728 bytes)"));
+    QCOMPARE(rig.runner.count(FlashRig::wl()), 0);
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+    QCOMPARE(rig.runner.count(FlashRig::getState()), 0);
+    QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Failed);
+    const auto rows = rig.planned.first().at(1).value<QList<PartitionImage>>();
+    QVERIFY(!rows.at(4).fits);
+    QVERIFY(!rows.at(4).selected);
+
+    // Named explicitly it stops the flow the same way ...
+    FlashRig named;
+    named.runner.addScript(FlashRig::ld(), kLdLoader);
+    named.runner.addHandler(FlashRig::exf(), nodeExtractor(bigBoot));
+    named.installFlashScripts();
+    named.flasher.setMtdParts(kNodeMtdParts);
+    named.flasher.setSelectedPartitions({QStringLiteral("env"), QStringLiteral("boot")});
+    QVERIFY(named.flasher.start());
+    QTRY_COMPARE(named.finished.count(), 1);
+    QCOMPARE(named.finished.first().at(1).toString(), rig.finished.first().at(1).toString());
+    QCOMPARE(named.runner.count(FlashRig::wl()), 0);
+
+    // ... and a selection without it writes the others.
+    FlashRig others;
+    others.runner.addScript(FlashRig::ld(), kLdLoader);
+    others.runner.addHandler(FlashRig::exf(), nodeExtractor(bigBoot));
+    others.installFlashScripts();
+    others.flasher.setMtdParts(kNodeMtdParts);
+    others.flasher.setSelectedPartitions({QStringLiteral("env"), QStringLiteral("uboot")});
+    QVERIFY(others.flasher.start());
+    QTRY_COMPARE(others.finished.count(), 1);
+    QVERIFY2(others.finished.first().at(0).toBool(), qPrintable(others.finished.first().at(1).toString()));
+    QCOMPARE(others.wlCommands().size(), qsizetype(2));
+}
+
+void tst_firmwaretools::soc_writeFailureStops()
+{
+    // The third WL fails: the flow stops there with upgrade_tool's last lines; no RD, no ADB wait.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    auto writes = std::make_shared<int>(0);
+    rig.runner.addHandler(FlashRig::wl(), [writes](FakeToolInvocation* i) {
+        if (++*writes == 3) {
+            i->emitOutput(kBanner);
+            i->emitOutput("Write LBA from file (10%)\r\nError:Write LBA failed,can't read flash info from device!\r\nWrite LBA failed!\r\n");
+            i->finish(1);
+            return;
+        }
+        FlashRig::successfulWl(i);
+    });
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(0).toBool(), false);
+    QCOMPARE(rig.finished.first().at(1).toString(),
+             QStringLiteral("writing uboot failed: Write LBA from file (10%)\nError:Write LBA failed,can't read flash info from "
+                            "device!\nWrite LBA failed!"));
+    QCOMPARE(rig.runner.count(FlashRig::wl()), 3);
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+    QCOMPARE(rig.runner.count(FlashRig::getState()), 0);
+    QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Failed);
+
+    // Exit code 0, but upgrade_tool says it gave up: a failure as well.
+    FlashRig quit;
+    quit.runner.addScript(FlashRig::ld(), kLdLoader);
+    quit.runner.addScript(FlashRig::wl(), "Write LBA quit, creating comm object failed!\r\n", 0);
+    quit.installFlashScripts();
+    quit.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(quit.flasher.start());
+    QTRY_COMPARE(quit.finished.count(), 1);
+    QCOMPARE(quit.finished.first().at(1).toString(), QStringLiteral("writing env failed: Write LBA quit, creating comm object failed!"));
+    QCOMPARE(quit.runner.count(FlashRig::wl()), 1);
+
+    // upgrade_tool that cannot be started.
+    FlashRig missing;
+    missing.runner.addScript(FlashRig::ld(), kLdLoader);
+    missing.runner.addHandler(FlashRig::wl(), [](FakeToolInvocation* i) { i->failToStart(QStringLiteral("access denied")); });
+    missing.installFlashScripts();
+    missing.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(missing.flasher.start());
+    QTRY_COMPARE(missing.finished.count(), 1);
+    QCOMPARE(missing.finished.first().at(1).toString(), QStringLiteral("cannot run upgrade_tool: access denied"));
+
+    // Every partition written, but RD fails: the board must be replugged, and the flow says so.
+    FlashRig noReset;
+    noReset.runner.addScript(FlashRig::ld(), kLdLoader);
+    noReset.runner.addScript(FlashRig::rd(), "Reset Device Fail!\r\n", 1);
+    noReset.installFlashScripts();
+    noReset.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(noReset.flasher.start());
+    QTRY_COMPARE(noReset.finished.count(), 1);
+    QCOMPARE(noReset.finished.first().at(0).toBool(), false);
+    QCOMPARE(noReset.finished.first().at(1).toString(),
+             QStringLiteral("the partitions were written, but upgrade_tool RD did not reset the board (Reset Device Fail!); replug it"));
+    QCOMPARE(noReset.runner.count(FlashRig::wl()), 7);
+    QCOMPARE(noReset.runner.count(FlashRig::getState()), 0);
+}
+
+void tst_firmwaretools::soc_layoutUnknown()
+{
+    const QString unknown = QStringLiteral("partition layout unknown: boot the board once so it can be read over ADB, "
+                                           "or flash it in MASKROM mode");
+    // A board already in Loader mode, no layout from the owner and none in the image (its env.img
+    // has no mtdparts): unpacked to look, nothing written.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.installFlashScripts();
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(0).toBool(), false);
+    QCOMPARE(rig.finished.first().at(1).toString(), unknown);
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::PartitionWrites);
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(rig.runner.count(FlashRig::wl()) + rig.runner.count(FlashRig::uf()), 0);
+    QCOMPARE(rig.phaseList().last(), SocFlasher::Phase::Failed);
+
+    // A malformed layout is none either.
+    FlashRig bad;
+    bad.runner.addScript(FlashRig::ld(), kLdLoader);
+    bad.installFlashScripts();
+    bad.flasher.setMtdParts(QStringLiteral("sfc_nor:64K(env),oops"));
+    QVERIFY(bad.flasher.start());
+    QTRY_COMPARE(bad.finished.count(), 1);
+    QCOMPARE(bad.finished.first().at(1).toString(), unknown);
+    QCOMPARE(bad.runner.count(FlashRig::wl()), 0);
+
+    // A running board whose /proc/cmdline has no mtdparts, no remembered layout and an image
+    // without one: the image is unpacked while the board still runs, and the flow stops before
+    // `adb reboot loader`, so the board keeps running instead of waiting in Loader mode.
+    FlashRig noMtd;
+    noMtd.runner.addScript(FlashRig::ld(), kLdEmpty);
+    noMtd.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    noMtd.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/mmcblk0p5 rootwait\n");
+    noMtd.installFlashScripts();
+    QVERIFY(noMtd.flasher.start());
+    QTRY_COMPARE(noMtd.finished.count(), 1);
+    QCOMPARE(noMtd.finished.first().at(1).toString(), unknown);
+    QCOMPARE(noMtd.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(noMtd.runner.count(FlashRig::reboot()), 0);
+    QCOMPARE(noMtd.mtdPartsRead.count(), 0);
+    QVERIFY(noMtd.logged(QStringLiteral("the board's /proc/cmdline has no mtdparts")));
+    using P = SocFlasher::Phase;
+    QCOMPARE(noMtd.phaseList(), (QList<P>{P::Detecting, P::RebootingToLoader, P::Failed}));
+
+    // The same board with a layout the owner remembered: that one is used.
+    FlashRig remembered;
+    remembered.runner.addHandler(FlashRig::ld(), [calls = std::make_shared<int>(0)](FakeToolInvocation* i) {
+        i->emitOutput(++*calls >= 2 ? kLdLoader : kLdEmpty);
+        i->finish(0);
+    });
+    remembered.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    remembered.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/mmcblk0p5 rootwait\n");
+    remembered.installFlashScripts();
+    remembered.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(remembered.flasher.start());
+    QTRY_COMPARE(remembered.finished.count(), 1);
+    QVERIFY2(remembered.finished.first().at(0).toBool(), qPrintable(remembered.finished.first().at(1).toString()));
+    QVERIFY(remembered.logged(QStringLiteral("using the layout remembered for it: ") + kNodeMtdParts));
+    QCOMPARE(remembered.flasher.mtdParts(), kNodeMtdParts);
+    QCOMPARE(remembered.wlCommands().size(), qsizetype(7));
+}
+
+void tst_firmwaretools::soc_maskromKeepsUf()
+{
+    // MASKROM: the BootROM answers UF's chip check, so the whole image goes with UF as in 0.5.0;
+    // a partition selection does not apply and the log says so.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(kNodeMtdParts);
+    rig.flasher.setSelectedPartitions({QStringLiteral("boot")});
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.flasher.flashMethod(), SocFlasher::FlashMethod::UpgradeFirmware);
+    QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
+    QCOMPARE(rig.runner.count(FlashRig::exf()) + rig.runner.count(FlashRig::wl()) + rig.runner.count(FlashRig::rd()), 0);
+    QVERIFY(rig.logged(QStringLiteral("MASKROM mode: writing the whole image with upgrade_tool UF")));
+    QVERIFY(rig.logged(QStringLiteral("the partition selection (boot) is ignored: UF writes every partition")));
+    QVERIFY(rig.planned.isEmpty());
+
+    // No layout needed in MASKROM mode, and without a selection there is nothing to ignore.
+    FlashRig plain;
+    plain.runner.addScript(FlashRig::ld(), kLdMaskrom);
+    plain.installFlashScripts();
+    QVERIFY(plain.flasher.start());
+    QTRY_COMPARE(plain.finished.count(), 1);
+    QVERIFY(plain.finished.first().at(0).toBool());
+    QCOMPARE(plain.runner.count(FlashRig::uf()), 1);
+    QVERIFY(!plain.logged(QStringLiteral("is ignored")));
+}
+
+void tst_firmwaretools::soc_stepTwoReadsMtdParts()
+{
+    // An ADB board: step 2 reads /proc/version, then /proc/cmdline - the layout the running
+    // board's kernel uses, which replaces the owner's value and is announced by mtdPartsRead() -
+    // then reboots it into Loader mode, where the partitions go to exactly those offsets.
+    FlashRig rig;
+    rig.runner.addHandler(FlashRig::ld(), [calls = std::make_shared<int>(0)](FakeToolInvocation* i) {
+        i->emitOutput(++*calls >= 2 ? kLdLoader : kLdEmpty);
+        i->finish(0);
+    });
+    rig.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(QStringLiteral("old:1M(x)"));
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.mtdPartsRead.count(), 1);
+    QCOMPARE(rig.mtdPartsRead.first().at(0).toString(), kNodeMtdParts);
+    QCOMPARE(rig.flasher.mtdParts(), kNodeMtdParts);
+    QVERIFY(rig.logged(QStringLiteral("partition layout of the board: ") + kNodeMtdParts));
+    const QStringList commands = rig.runner.invocations();
+    const QString board = QStringLiteral("adb -s 0225ce3c8d8d6e44 ");
+    const qsizetype version = commands.indexOf(board + QStringLiteral("shell \"cat /proc/version\""));
+    const qsizetype cmdline = commands.indexOf(board + QStringLiteral("shell \"cat /proc/cmdline\""));
+    const qsizetype reboot = commands.indexOf(board + QStringLiteral("reboot loader"));
+    QVERIFY(version >= 0 && version < cmdline && cmdline < reboot);
+    QStringList expected;
+    for (const NodePartition& p : kNodePartitions) {
+        expected << FlashRig::wlCommand(p, rig.extractDir());
+    }
+    QCOMPARE(rig.wlCommands(), expected);
+}
+
+void tst_firmwaretools::soc_planSignalAndStaleness()
+{
+    FlashRig rig;
+    rig.installFlashScripts();
+    // Without an image or a tool path nothing starts and nothing is reported.
+    rig.flasher.setImagePath(QString());
+    QVERIFY(!rig.flasher.planPartitions());
+    rig.flasher.setImagePath(rig.image);
+    rig.flasher.upgradeTool()->setToolPath(QString());
+    QVERIFY(!rig.flasher.planPartitions());
+    rig.flasher.upgradeTool()->setToolPath(QStringLiteral("upgrade_tool"));
+    QCoreApplication::processEvents();
+    QVERIFY(rig.planned.isEmpty());
+    QVERIFY(rig.flasher.partitions().isEmpty());
+
+    // The plan: EXF, then the rows in the layout. Asynchronous, one at a time.
+    rig.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(rig.flasher.planPartitions());
+    QVERIFY(!rig.flasher.planPartitions());
+    QVERIFY(rig.planned.isEmpty());   // never from inside the call
+    QTRY_COMPARE(rig.planned.count(), 1);
+    QVERIFY(rig.planned.at(0).at(0).toBool());
+    const auto rows = rig.planned.at(0).at(1).value<QList<PartitionImage>>();
+    QCOMPARE(rows.size(), qsizetype(7));
+    QCOMPARE(rig.planned.at(0).at(2).toString(), QStringLiteral("7 partition images, 7 in the layout"));
+    QCOMPARE(rig.flasher.partitions(), rows);
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+    QVERIFY(QFileInfo(rig.extractDir() + QStringLiteral("/package-file")).isFile());
+    QVERIFY(rig.logged(QStringLiteral("$ upgrade_tool EXF ")));   // the command is logged ...
+    QVERIFY(rig.toolOutput.isEmpty());                           // ... its progress lines only during a flash
+    QVERIFY(rig.progress.isEmpty());
+
+    // Only the layout changed: new rows from the files already unpacked, no second EXF.
+    rig.flasher.setMtdParts(layoutWithoutMeta());
+    QVERIFY(rig.flasher.planPartitions());
+    QTRY_COMPARE(rig.planned.count(), 2);
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(rig.planned.at(1).at(2).toString(), QStringLiteral("7 partition images, 6 in the layout"));
+    QVERIFY(!rig.flasher.partitions().at(3).inLayout);
+    // The selection marks the rows (unknown names ignored); the empty one is the default again.
+    rig.flasher.setSelectedPartitions({QStringLiteral("boot"), QStringLiteral("nope")});
+    for (const PartitionImage& row : rig.flasher.partitions()) {
+        QCOMPARE(row.selected, row.name == QLatin1String("boot"));
+    }
+    rig.flasher.setSelectedPartitions({});
+    for (const PartitionImage& row : rig.flasher.partitions()) {
+        QCOMPARE(row.selected, row.inLayout && row.fits);
+    }
+    // Another image path has no rows until it is planned.
+    rig.flasher.setImagePath(rig.dir.filePath(QStringLiteral("other.img")));
+    QVERIFY(rig.flasher.partitions().isEmpty());
+    rig.flasher.setImagePath(rig.image);
+    QCOMPARE(rig.flasher.partitions().size(), qsizetype(7));
+
+    // start() writes from the kept plan: no further EXF, no further plan.
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.at(0).at(0).toBool(), qPrintable(rig.finished.at(0).at(1).toString()));
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(rig.planned.count(), 2);
+    QCOMPARE(rig.wlCommands().size(), qsizetype(6));
+
+    // The image changed on disk (a new mtime): the next flash unpacks it again ("Extracting").
+    {
+        QFile touch(rig.image);
+        QVERIFY(touch.open(QIODevice::ReadWrite));
+        QVERIFY(touch.setFileTime(QDateTime::currentDateTime().addSecs(120), QFileDevice::FileModificationTime));
+    }
+    rig.progress.clear();
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 2);
+    QVERIFY(rig.finished.at(1).at(0).toBool());
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 2);
+    QCOMPARE(rig.planned.count(), 3);
+    QVERIFY(progressOf(rig.progress).contains({QStringLiteral("Extracting"), -1}));
+
+    // An unpacked file changed by hand: stale as well, unpacked again before anything is written.
+    QVERIFY(writeBytes(rig.extractDir() + QStringLiteral("/boot.img"), 1000, 'z'));
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 3);
+    QVERIFY(rig.finished.at(2).at(0).toBool());
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 3);
+    QCOMPARE(QFileInfo(rig.extractDir() + QStringLiteral("/boot.img")).size(), qint64(3043840));
+
+    // A failing EXF: partitionsPlanned(false, {}, reason), no rows; a flash stops with the reason.
+    FlashRig failing;
+    failing.runner.addScript(FlashRig::exf(), "Extract failed\r\n", 1);
+    failing.runner.addScript(FlashRig::ld(), kLdLoader);
+    failing.installFlashScripts();
+    failing.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(failing.flasher.planPartitions());
+    QTRY_COMPARE(failing.planned.count(), 1);
+    QCOMPARE(failing.planned.at(0).at(0).toBool(), false);
+    QVERIFY(failing.planned.at(0).at(1).value<QList<PartitionImage>>().isEmpty());
+    QCOMPARE(failing.planned.at(0).at(2).toString(), QStringLiteral("unpacking update.img failed: Extract failed"));
+    QVERIFY(failing.flasher.partitions().isEmpty());
+    QVERIFY(failing.flasher.start());
+    QTRY_COMPARE(failing.finished.count(), 1);
+    QCOMPARE(failing.finished.at(0).at(1).toString(), QStringLiteral("unpacking update.img failed: Extract failed"));
+    QCOMPARE(failing.runner.count(FlashRig::wl()), 0);
+
+    // A folder of the owner's choice.
+    FlashRig custom;
+    custom.installFlashScripts();
+    const QString folder = custom.dir.filePath(QStringLiteral("x y/unpacked"));
+    custom.flasher.setExtractDirectory(QDir::toNativeSeparators(folder));
+    QCOMPARE(custom.flasher.extractDirectory(), folder);
+    custom.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(custom.flasher.planPartitions());
+    QTRY_COMPARE(custom.planned.count(), 1);
+    QVERIFY(custom.runner.invocations().contains(ToolRunner::formatCommandLine(
+        QStringLiteral("upgrade_tool"), {QStringLiteral("EXF"), QDir::toNativeSeparators(custom.image), QDir::toNativeSeparators(folder)})));
+    QVERIFY(QFileInfo(folder + QStringLiteral("/package-file")).isFile());
+
+    // A plan already running when the flash reaches step 5: the flow waits for it, one EXF only.
+    FlashRig waiting;
+    waiting.runner.addHandler(FlashRig::exf(), [](FakeToolInvocation* i) {
+        writeNodeExtraction(QDir::fromNativeSeparators(i->arguments().at(2)));
+        i->emitOutput("Extract ok.\r\n", 300);
+        i->finish(0);
+    });
+    waiting.runner.addScript(FlashRig::ld(), kLdLoader);
+    waiting.installFlashScripts();
+    waiting.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(waiting.flasher.planPartitions());
+    QVERIFY(waiting.flasher.start());
+    QVERIFY(!waiting.flasher.planPartitions());   // not while a flash runs
+    QTRY_COMPARE(waiting.finished.count(), 1);
+    QVERIFY2(waiting.finished.at(0).at(0).toBool(), qPrintable(waiting.finished.at(0).at(1).toString()));
+    QCOMPARE(waiting.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(waiting.wlCommands().size(), qsizetype(7));
+    QVERIFY(waiting.logged(QStringLiteral("waiting for the image to be unpacked")));
+}
+
+void tst_firmwaretools::soc_layoutFromImage()
+{
+    // The image's env.img carries the layout it was built for: a board already in Loader mode is
+    // flashed without any layout from the board or the owner.
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addHandler(FlashRig::exf(), nodeExtractor({}, kNodeMtdParts));
+    rig.installFlashScripts();
+    QVERIFY(rig.flasher.mtdParts().isEmpty());
+    QVERIFY(rig.flasher.planPartitions());
+    QTRY_COMPARE(rig.planned.count(), 1);
+    QVERIFY(rig.planned.at(0).at(0).toBool());
+    QCOMPARE(rig.planned.at(0).at(2).toString(), QStringLiteral("7 partition images, 7 in the layout"));
+    QVERIFY(rig.logged(QStringLiteral("layout from the image's env.img: ") + kNodeMtdParts));
+    QVERIFY(!rig.logged(QStringLiteral("differs")));
+    const QList<PartitionImage> rows = rig.flasher.partitions();
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        QCOMPARE(rows.at(i).offset, kNodePartitions[i].offset);
+        QVERIFY(rows.at(i).selected);
+    }
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QStringList expected;
+    for (const NodePartition& p : kNodePartitions) {
+        expected << FlashRig::wlCommand(p, rig.extractDir());
+    }
+    QCOMPARE(rig.wlCommands(), expected);
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);   // the plan was current
+    QVERIFY(rig.logged(QStringLiteral("flash layout in use (from the image's env.img): ") + kNodeMtdParts));
+
+    // A running board without mtdparts in its command line: the image is unpacked before the
+    // reboot, its layout found, the board rebooted and written; the plan of step 2 serves step 5.
+    FlashRig adbBoard;
+    adbBoard.runner.addHandler(FlashRig::ld(), [calls = std::make_shared<int>(0)](FakeToolInvocation* i) {
+        i->emitOutput(++*calls >= 2 ? kLdLoader : kLdEmpty);
+        i->finish(0);
+    });
+    adbBoard.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    adbBoard.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/mtdblock5 rootwait\n");
+    adbBoard.runner.addHandler(FlashRig::exf(), nodeExtractor({}, kNodeMtdParts));
+    adbBoard.installFlashScripts();
+    QVERIFY(adbBoard.flasher.start());
+    QTRY_COMPARE(adbBoard.finished.count(), 1);
+    QVERIFY2(adbBoard.finished.first().at(0).toBool(), qPrintable(adbBoard.finished.first().at(1).toString()));
+    QCOMPARE(adbBoard.runner.count(FlashRig::exf()), 1);
+    QCOMPARE(adbBoard.runner.count(FlashRig::reboot()), 1);
+    QCOMPARE(adbBoard.wlCommands().size(), qsizetype(7));
+    const QStringList commands = adbBoard.runner.invocations();
+    const qsizetype cmdline = commands.indexOf(QStringLiteral("adb -s 0225ce3c8d8d6e44 shell \"cat /proc/cmdline\""));
+    const qsizetype exf = commands.indexOf(commands.filter(FlashRig::exf()).value(0));
+    const qsizetype reboot = commands.indexOf(QStringLiteral("adb -s 0225ce3c8d8d6e44 reboot loader"));
+    QVERIFY(cmdline >= 0 && cmdline < exf && exf < reboot);
+    QCOMPARE(adbBoard.mtdPartsRead.count(), 0);
+
+    // An env.img whose mtdparts cannot be read: the board's layout, and the log says why.
+    FlashRig unreadable;
+    unreadable.runner.addHandler(FlashRig::exf(), nodeExtractor({}, QStringLiteral("garbage")));
+    unreadable.installFlashScripts();
+    unreadable.flasher.setMtdParts(kNodeMtdParts);
+    QVERIFY(unreadable.flasher.planPartitions());
+    QTRY_COMPARE(unreadable.planned.count(), 1);
+    QVERIFY(unreadable.logged(QStringLiteral("the image's env.img has an unreadable mtdparts (garbage); using the board's layout")));
+    QCOMPARE(unreadable.planned.at(0).at(2).toString(), QStringLiteral("7 partition images, 7 in the layout"));
+}
+
+void tst_firmwaretools::soc_layoutMismatchImageWins()
+{
+    // The board runs an older layout (boot 4 MiB, userdata 2 MiB); the new image's env.img says
+    // otherwise. The env written with the partitions defines the board's next layout, so the
+    // image's offsets are used; the log carries both strings.
+    const QString boardLayout =
+        QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),4M(boot),5M(rootfs),2M(userdata)");
+    FlashRig rig;
+    rig.runner.addScript(FlashRig::ld(), kLdLoader);
+    rig.runner.addHandler(FlashRig::exf(), nodeExtractor({}, kNodeMtdParts));
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(QStringLiteral("mtdparts=") + boardLayout);
+    QVERIFY(rig.flasher.planPartitions());
+    QTRY_COMPARE(rig.planned.count(), 1);
+    QVERIFY(rig.logged(QStringLiteral("layout from the image's env.img: ") + kNodeMtdParts));
+    QVERIFY(rig.logged(QStringLiteral("warning: the image's flash layout differs from the board's; the image's is used. "
+                                      "image: %1; board: %2")
+                           .arg(kNodeMtdParts, boardLayout)));
+    const QList<PartitionImage> rows = rig.flasher.partitions();
+    QCOMPARE(rows.at(5).name, QStringLiteral("rootfs"));
+    QCOMPARE(rows.at(5).offset, quint64(4032 * kKiB));   // the image's; the board's would be 5056 KiB
+    QCOMPARE(rows.at(6).size, quint64(3 * 1024 * kKiB));
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.wlCommands().at(5), FlashRig::wlCommand(kNodePartitions[5], rig.extractDir()));   // sector 8064
+    QCOMPARE(rig.runner.count(FlashRig::exf()), 1);
+
+    // The same layout written differently ("mtdparts=" prefix, an explicit @0) is no mismatch.
+    FlashRig same;
+    same.runner.addHandler(FlashRig::exf(), nodeExtractor({}, kNodeMtdParts));
+    same.installFlashScripts();
+    same.flasher.setMtdParts(QStringLiteral("mtdparts=") + QString(kNodeMtdParts).replace(QStringLiteral("64K(env)"),
+                                                                                         QStringLiteral("64K@0(env)")));
+    QVERIFY(same.flasher.planPartitions());
+    QTRY_COMPARE(same.planned.count(), 1);
+    QVERIFY(!same.logged(QStringLiteral("differs")));
 }
 
 // ---------------------------------------------------------------------------------------------

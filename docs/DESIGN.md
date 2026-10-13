@@ -445,7 +445,7 @@ fixed-rate session too. The simulators have native rates (`DeviceSimulator::nati
 1 500 000, MCU 115200, loopback any) and emit paced garbage while the session rate differs, so the
 whole flow is testable offscreen (`tst_bauddetector`, `tst_devicesimulator`, `tst_sessionwidget`).
 
-### 4.11 Firmware tab (v0.5)
+### 4.11 Firmware tab (v0.5; partition writes in Loader mode since v0.5.1)
 
 Spec: `docs/firmware-update/REQUIREMENTS.md`; plan, and the facts found on the real tools and the
 real board before any code was written: `docs/firmware-update/PLAN.md`. The headers under
@@ -468,6 +468,19 @@ a tab of its own and touches no behaviour of the serial and SSH tabs.
   <update.img>` writes the RKFW image (about 11 MB, every partition including userdata), resets
   the board and prints `Upgrade firmware ok`. `upgrade_tool.exe` v2.37 runs without a `config.ini`
   (Linux v2.26 reads an optional one next to it).
+- `UF` first compares the chip id the loader reports with the image's ("110E"); the board's
+  U-Boot (rockchip-platforms up to v1.3.0) answers with zeros in Loader mode, so `UF` stops at
+  `Check Chip Fail` there (TEST_REPORT section 13). Rockchip's SocToolKit flashes the same board
+  in Loader mode because its Download page never runs `UF`: `upgrade_tool EXF <image> <dir>`
+  unpacks the package into its partition images plus `package-file` (`<partition>\t<file>`
+  lines), each image goes to the flash with `upgrade_tool WL <offset / 512> <file>` (512-byte
+  sectors, progress `Write LBA from file (nn%)`, no chip check) and `RD` resets the board
+  (`Reset Device OK.`, back on ADB about 25 s later). The offsets are the board's flash layout,
+  the `mtdparts=` word of its kernel command line: `sfc_nor:64K(env),256K@64K(idblock),
+  256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)` on the Node board (the SDK's
+  `sd_update.txt` writes to the same offsets). The image carries the same string itself: its
+  `env.img` (64 KiB, a 4-byte CRC then NUL-separated `key=value` entries) starts with
+  `mtdparts=sfc_nor:...`, as Rockchip's `rkdownload.sh` reads it (`strings env.img | head -1`).
 - The CC1310's UART0 is wired to the SoC's UART1 (`/dev/ttyS1`, 115200 8N1). `rfmcu bridge 7000`
   on the board joins it to 127.0.0.1:7000 (one client at a time, exclusive `flock` on the tty);
   on the PC `adb forward tcp:0 tcp:7000` prints a free local port to connect a socket to. A stale
@@ -482,7 +495,7 @@ a tab of its own and touches no behaviour of the serial and SSH tabs.
 ```
 FirmwareTab (su_app, one instance in MainWindow's QTabWidget)
   ├── ImagePuller  ─────► SshConnection (runCommand, statRemote, startTransfer: the SSH stack of 4.8)
-  ├── SocFlasher   ─────► RockchipTool (upgrade_tool LD / SFI / UF) + AdbTool + UsbProbe ─► ToolRunner
+  ├── SocFlasher   ─────► RockchipTool (upgrade_tool LD / SFI / EXF / WL / RD / UF) + AdbTool + UsbProbe ─► ToolRunner
   ├── McuLink      ─────► AdbTool + QTcpSocket ──► McuUpdater ──► CcProtocol / CcPackage
   └── SessionProvider ──► SessionWidget::sendBytes()     (`reboot loader`, only after a Yes)
 ```
@@ -495,25 +508,59 @@ All of `src/firmware/` is part of `su_core` (UI-free, Qt Core + Network); only `
 |---|---|
 | `ToolRunner` / `ProcessToolRunner` / `ToolInvocation` | One external process, asynchronous (`QProcess`, merged stdout + stderr delivered raw with `\r`), cancel (terminate, kill after 2 s), `ToolResult` (started, cancelled, timed out, exit code, output). Never blocks the GUI thread; a program that cannot start reports through `finished()` from the event loop. |
 | `ToolLocator` | Where `upgrade_tool`, `adb` and the DriverAssistant installer are: the Preferences override, then `tools/` next to the executable, then (adb only) the first one on `PATH`. |
-| `RockchipTool` | `upgrade_tool` behind the runner and the parsers of its output: `LD` device list (Loader / Maskrom), `SFI` image info, the incremental `UF` progress parser (`\r`-separated segments, `(nn%)`), the success check (`Upgrade firmware ok`), the RKFW magic check. |
+| `RockchipTool` | `upgrade_tool` behind the runner and the parsers of its output: `LD` device list (Loader / Maskrom), `SFI` image info, the incremental progress parser (`\r`-separated segments, `(nn%)`; `UF` and `WL` alike), the success check (`Upgrade firmware ok`), the RKFW magic check; since 0.5.1 also `EXF` / `WL` / `RD`, the `mtdparts` parser (`<size>[@<offset>](<name>)`, K / M / G, `-`; anything malformed gives no layout), the kernel command line's `mtdparts=` word, the `mtdparts=` entry of an `env.img` (`mtdPartsFromEnvImage()`: entries from byte 4 or 5, never the word inside `sys_bootargs`), `package-file`, and `planPartitions()`: the unpacked images placed in a layout (`PartitionImage`: offset, size, in layout, fits, selected). |
 | `AdbTool` | `adb devices` / `get-state` / `reboot loader` / `shell` / `forward tcp:0` / `forward --remove` and the long-running `shell rfmcu bridge`, with the device selection and error texts of `adb_link.py`. |
 | `UsbProbe` | Windows: SetupAPI enumeration of `USB\VID_2207*` (present, driver class, problem code) so "a Rockchip device is plugged in but no driver claims it" can be said and the bundled DriverAssistant offered; Linux: `/sys/bus/usb/devices`; other platforms: nothing. |
-| `SocFlasher` | The flow of `rockchip-platforms/tools/usb_update.sh` as a cancellable state machine (below), plus the 2 s device status (`queryStatus()`). |
+| `SocFlasher` | The flow of `rockchip-platforms/tools/usb_update.sh` as a cancellable state machine (below), plus the 2 s device status (`queryStatus()`) and the partition plan (`planPartitions()`: `EXF` + `RockchipTool::planPartitions()`, kept per image path, mtime and layout). |
 | `CcProtocol` | The CC1310 UART bootloader protocol exactly as `fw_protocol.py` defines it: COBS, CRC16-CCITT (0xFFFF, 0x1021), frame v2 (`<BBHH>` header + payload + CRC16), message ids HELLO ... SET_ROLE, `FrameSplitter`, the INFO payload. |
 | `CcPackage` | The `.pkg` format of `fw_package.py`: the 32-byte FWPK header, header and image CRC32, address 0x8000, size up to 0x17000, version `0x00MMmmpp`; the same checks in the same order with the same reasons. |
 | `McuUpdater` | The `fw_update.py` state machine over a `QIODevice` (Info, Flash, SetRole), every wait a `QTimer` deadline: HELLO, else the application CLI probe, `bootloader`, BEGIN / READY, 128-byte DATA / ACK / NACK with resume, END / COMPLETE, the restart banner; the Python timeouts and retry counts are the defaults. |
 | `McuLink` | The road to the CC1310 through the SoC (`McuUpdater -- QTcpSocket -- adb forward -- USB-C -- rfmcu bridge -- /dev/ttyS1 -- CC1310`): select the board, check `rfmcu`, `killall rfmcu`, `forward tcp:0 tcp:7000`, start `rfmcu bridge 7000`, wait for "bridging", connect; `close()` undoes it all; `cliCommand()` runs `rfmcu cmd` without a bridge. |
 | `ImagePuller` | Over an `SshConnection` the owner connected: stat the remote `update.img`, optional `git describe`, the skip rule, download, RKFW check, one-level history (`update.prev.img`), optional extra files, `rollBack()`. |
-| `FirmwareTab` | The widget: the Source / SoC / MCU sections, Pull & Flash, the log pane; owns the collaborators above and an `SshConnection` of its own. |
+| `FirmwareTab` | The widget: the Source / SoC / MCU sections (SoC with the partition table since 0.5.1), Pull & Flash, the log pane; owns the collaborators above and an `SshConnection` of its own. |
 
 **SoC flow** (`SocFlasher::start()`, as `usb_update.sh`): *Detecting* (`LD`, then `adb devices`;
 Loader / Maskrom wins) -> an ADB device is told `adb reboot loader` (*RebootingToLoader*, after
-logging its `/proc/version`; busybox on the board has no `uname`) -> with no board at all
-`downloadModeNeeded()` lets the tab offer `reboot loader\r` through a connected session tab (asked
-every time) or show the MASKROM instructions -> *WaitingForLoader* (`LD` every second, 30 s) ->
-*Flashing* (`UF`, progress, the success line is required; **not cancellable**) ->
-*WaitingForAdb* (`adb get-state`, 60 s; a late board is a success with a warning) ->
+logging its `/proc/version` - busybox on the board has no `uname` - and reading its
+`/proc/cmdline`, whose `mtdparts=` becomes the board's layout: `mtdPartsRead()`; without one and
+without a layout from the owner the image is unpacked right there, and when its `env.img` carries
+no layout either the flow stops with "partition layout unknown" before the board is rebooted) ->
+with no board at all `downloadModeNeeded()` lets the tab offer `reboot loader\r`
+through a connected session tab (asked every time) or show the MASKROM instructions ->
+*WaitingForLoader* (`LD` every second, 30 s) -> *Flashing*, **not cancellable**, by the method the
+mode decides (`flashMethod()`, logged):
+- Loader mode, `PartitionWrites` (0.5.1, SocToolKit's Download page): the plan of the image (made
+  by the tab when the image or the layout changed, reused while image path, mtime, board layout,
+  the unpacked files and the layout in use are unchanged; else `EXF` again, stage "Extracting").
+  The layout in use is the image's own when its `env.img` carries a readable one (the layout the
+  images were built for, which the env being written makes the board use from its next boot),
+  else `mtdParts()`; a board layout that differs is logged as a warning with both strings. Then every selected row is
+  checked (in the layout, file present, not larger than its partition, sector-aligned) before
+  the first write, then one `WL <offset / 512> <file>` per row in package-file order (progress
+  "Writing boot (5 of 7)", the percentage over all bytes; rows not selected or not in the layout
+  are logged as skipped; a failing `WL` stops with its last lines), then `RD`. The selection is
+  `setSelectedPartitions()` (names; empty = every row in the layout, and then an image that does
+  not fit stops the flash instead of being left out). Without a layout: "partition layout
+  unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode".
+- Maskrom mode, `UpgradeFirmware`: `UF`, progress, the success line is required; a partition
+  selection does not apply (logged).
+
+-> *WaitingForAdb* (`adb get-state`, 60 s; a late board is a success with a warning) ->
 *ReadingBoardInfo* (`/proc/version`, `uptime`). The image must exist and carry the RKFW magic.
+
+**Partition table** (0.5.1, `FirmwareTab`): one row per `package-file` entry of the unpacked
+image (`EXF` into `<image folder>/<image base name>.extracted`; upgrade_tool's own entries
+`package-file` and `bootloader` are not partitions), a checkbox, name, file, offset, partition
+size, image size; rows not in the layout, without a file or too large are unchecked and disabled
+with the reason as the tooltip. The layout in use (`flashLayout()`) is the image's own (its
+`env.img`) when it carries one, else the board's: `AppSettings::firmwareMtdParts(serial)`, read
+once per session with `adb shell cat /proc/cmdline` when the status refresh sees an ADB board whose
+layout is not known yet, and stored from `mtdPartsRead()` too; the entry `*` is the layout read
+last, used for a board met in Loader mode (rockusb reports no ADB serial). The board's is what the
+tab hands to `SocFlasher::setMtdParts()`; the label says which one is in use ("layout from the
+image" / "from the board", "the board's differs"). Flash SoC hands the
+checked names to the flasher (refused when none is checked); Pull & Flash checks every row and
+hands over the empty list (every row); MASKROM mode ignores the selection.
 
 **MCU flow.** `McuLink::open()` brings the bridge up (above); `McuUpdater::flash(role)` runs the
 connect sequence (HELLO twice; otherwise probe the CLI, log `power` when `throughSoc`, `bootloader`,
@@ -527,7 +574,7 @@ cached note matches size and mtime -> download to `update.img.new` (the transfer
 `<path>.part` and renames) -> RKFW check -> rotate the old image to `update.prev.img` -> write the
 note `update.img.json`.
 
-**Pull & Flash** chains pull (skipped when unchanged), Flash SoC, the wait for ADB and, when a
+**Pull & Flash** chains pull (skipped when unchanged), Flash SoC (every partition), the wait for ADB and, when a
 package is selected whose version differs from the running MCU version (read after the SoC is
 back), Update MCU. SoC first because the MCU path needs `rfmcu` on the SoC; it stops at the first
 failure.
@@ -551,15 +598,16 @@ timer); errors go to the status bar and the log pane, not to modal boxes - the o
 asked are the ones that have to be (the SSH host-key and password prompts of 4.8, sending
 `reboot loader` through a session tab, quitting while busy); every UI string is `tr()`; every
 external command line and its output go to the log pane and to the System Log (`lcFirmware`),
-never a password or key; Cancel exists only where it is safe (waiting for the Loader, never during
-`UF`). The first real flash of a board is an integration test of its own: what will run on it is
+never a password or key; Cancel exists only where it is safe (waiting for the Loader, never while
+`EXF` / `WL` / `RD` / `UF` run in the Flashing phase). The first real flash of a board is an integration test of its own: what will run on it is
 announced before it runs (`docs/firmware-update/PLAN.md`, "Ask me before").
 
 **Settings** (`firmware/` group of `AppSettings`, edited in *Preferences > Firmware*): the last
 source target, the remote folder per target (default `~/rk/rockchip-platforms/output/image`), the
 cache folder (default `<data>/firmware`), the last local image and package, the `upgrade_tool` and
 `adb` path overrides, the Loader wait (30 s) and ADB-return wait (60 s), `git describe` on or off,
-extra remote file names.
+extra remote file names; since 0.5.1 `firmware/mtdparts` (a map: board serial -> flash layout,
+`*` = the one read last; written by the tab, not shown in Preferences).
 
 **Packaging.** The tools are plain files in `third_party/` (provenance, versions and licences:
 `third_party/README.md`): `rockchip/windows/` (`upgrade_tool.exe` v2.37, `license.txt` - the LGPL
@@ -583,10 +631,17 @@ committed under `tests/data/firmware/`: COBS, CRC16 `123456789` = 0x29B1, frames
 `firmware-0.8.1.pkg`), `tst_mcuupdater` (the C++ `FakeMcu` behind a `QTcpServer`: full update, a
 CC1310 already in its updater, NACK and resume, a lost frame, the banner after COMPLETE, set role,
 `power` logged before `bootloader`), `tst_firmwaretools` (the `LD` / `SFI` / `UF` / adb parsers,
-`SocFlasher` and `McuLink` with fake tools, the driver hint), `tst_imagepuller` (against
+`SocFlasher` and `McuLink` with fake tools, the driver hint; since 0.5.1 the `mtdparts` /
+command-line / `package-file` parsers, `planPartitions()`, and the Loader-mode flow against a fake
+`EXF` that unpacks the Node image: the seven `WL` sectors 0, 128, 640, 1152, 1920, 8064, 18304,
+a selection, an image too big, a failing `WL` / `RD`, the layout unknown, the plan signal and its
+staleness, the `env.img` reader and the image's layout winning over a different board layout),
+`tst_imagepuller` (against
 `TestSshServer`: stat, skip, `.part`, magic, history, `git describe`), `tst_firmwaretab` (the GUI:
 the action, single instance, enable states, a pull, a flash and an MCU update with the fakes, the
-main window's actions while the tab is current, close and restore) and `tst_quickcommand` (the
+main window's actions while the tab is current, close and restore; since 0.5.1 the partition
+table, All / None, the layout read once from a board, the layout from the image, Flash SoC writing the checked rows, MASKROM
+ignoring them, Pull & Flash writing every row) and `tst_quickcommand` (the
 Node group and the version-1 migration of 4.3).
 
 ## 5. Build, run, test

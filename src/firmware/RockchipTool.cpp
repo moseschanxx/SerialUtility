@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <limits>
 
 namespace {
 
@@ -152,6 +153,12 @@ bool RockusbDevice::operator==(const RockusbDevice& o) const
            && serial == o.serial;
 }
 
+bool PartitionImage::operator==(const PartitionImage& o) const
+{
+    return name == o.name && file == o.file && fileSize == o.fileSize && offset == o.offset && size == o.size
+           && inLayout == o.inLayout && fits == o.fits && selected == o.selected;
+}
+
 QString RkFirmwareInfo::summary() const
 {
     if (!isValid()) {
@@ -223,6 +230,37 @@ ToolInvocation* RockchipTool::upgradeFirmware(const QString& image)
 {
     // No timeout: UF writes the flash, and killing it half way is what the owner must never do.
     return m_runner->run(m_tool, {QStringLiteral("UF"), QDir::toNativeSeparators(image)}, imageCommandOptions(image, 0));
+}
+
+namespace {
+
+/// EXF only reads the package and writes files on this PC, so it may be stopped; the limit is
+/// generous because an eMMC image of a few GB takes minutes (the Node board's 11 MB take two seconds).
+constexpr int kExtractTimeoutMs = 10 * 60 * 1000;
+
+} // namespace
+
+ToolInvocation* RockchipTool::extractFirmware(const QString& image, const QString& outDir)
+{
+    // upgrade_tool joins "<outDir><separator><file>" itself (its "%s%cbootloader.bin" format), so
+    // the folder goes without a trailing separator; it does not create the folder.
+    QDir().mkpath(outDir);
+    return m_runner->run(m_tool, {QStringLiteral("EXF"), QDir::toNativeSeparators(image), QDir::toNativeSeparators(outDir)},
+                         imageCommandOptions(image, kExtractTimeoutMs));
+}
+
+ToolInvocation* RockchipTool::writeLba(quint64 startSector, const QString& file)
+{
+    // No timeout, like UF: a WL stopped half way leaves a partition half written.
+    return m_runner->run(m_tool, {QStringLiteral("WL"), QString::number(startSector), QDir::toNativeSeparators(file)},
+                         imageCommandOptions(file, 0));
+}
+
+ToolInvocation* RockchipTool::resetDevice()
+{
+    ToolRunner::Options options;
+    options.timeoutMs = m_timeoutMs;
+    return m_runner->run(m_tool, {QStringLiteral("RD")}, options);
 }
 
 QList<RockusbDevice> RockchipTool::parseDeviceList(const QString& output)
@@ -358,6 +396,244 @@ bool RockchipTool::isRkfwImage(const QString& path, QString* error)
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Partition layout (mtdparts) and the unpacked image (package-file)
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// A size or an offset of an mtdparts entry as the kernel's memparse() reads it: decimal or 0x
+/// hex, optionally followed by K / M / G (1024-based, either case). False for anything else and
+/// for a value that does not fit 64 bits.
+bool parseMemSize(const QString& text, quint64* value)
+{
+    static const QRegularExpression pattern(QStringLiteral("^(0[xX][0-9a-fA-F]+|\\d+)([kKmMgG]?)$"));
+    const QRegularExpressionMatch match = pattern.match(text.trimmed());
+    if (!match.hasMatch()) {
+        return false;
+    }
+    const QString digits = match.captured(1);
+    bool ok = false;
+    const quint64 number = digits.startsWith(QLatin1String("0x"), Qt::CaseInsensitive) ? digits.mid(2).toULongLong(&ok, 16)
+                                                                                         : digits.toULongLong(&ok, 10);
+    if (!ok) {
+        return false;
+    }
+    const QString suffix = match.captured(2).toUpper();
+    const int shift = suffix == QLatin1String("K")   ? 10
+                      : suffix == QLatin1String("M") ? 20
+                      : suffix == QLatin1String("G") ? 30
+                                                     : 0;
+    if (shift > 0 && number > (std::numeric_limits<quint64>::max() >> shift)) {
+        return false;
+    }
+    *value = number << shift;
+    return true;
+}
+
+/// The entries of an mtdparts list split at the commas that are not inside a "(name)".
+QStringList splitMtdEntries(const QString& list)
+{
+    QStringList entries;
+    int depth = 0;
+    qsizetype start = 0;
+    for (qsizetype i = 0; i < list.size(); ++i) {
+        const QChar c = list.at(i);
+        if (c == QLatin1Char('(')) {
+            ++depth;
+        } else if (c == QLatin1Char(')')) {
+            depth = qMax(0, depth - 1);
+        } else if (c == QLatin1Char(',') && depth == 0) {
+            entries << list.mid(start, i - start);
+            start = i + 1;
+        }
+    }
+    entries << list.mid(start);
+    return entries;
+}
+
+} // namespace
+
+QList<MtdPartition> RockchipTool::parseMtdParts(const QString& text)
+{
+    // <size>[@<offset>](<name>)[ro][lk][slc], the grammar of drivers/mtd/parsers/cmdlinepart.c.
+    static const QRegularExpression entryPattern(
+        QStringLiteral("^\\s*([^@()]+?)\\s*(?:@\\s*([^@()]+?)\\s*)?\\(([^()]*)\\)\\s*(?:ro|lk|slc)*\\s*$"));
+    QString list = text.trimmed();
+    if (list.startsWith(QLatin1String("mtdparts="))) {
+        list = list.mid(9);
+    }
+    // Several flash devices ("<dev>:<list>;<dev>:<list>"): the first one is the board's boot flash.
+    const qsizetype semicolon = list.indexOf(QLatin1Char(';'));
+    if (semicolon >= 0) {
+        list = list.left(semicolon);
+    }
+    // The device id ("sfc_nor:") ends at the first colon that comes before any "(name)".
+    const qsizetype colon = list.indexOf(QLatin1Char(':'));
+    const qsizetype paren = list.indexOf(QLatin1Char('('));
+    if (colon >= 0 && (paren < 0 || colon < paren)) {
+        list = list.mid(colon + 1);
+    }
+    if (list.trimmed().isEmpty()) {
+        return {};
+    }
+
+    // Anything malformed empties the whole list: every offset depends on the entries before it,
+    // and a wrong offset would make WL overwrite another partition.
+    QList<MtdPartition> partitions;
+    quint64 next = 0;          // where an entry without "@" starts
+    bool toTheEnd = false;     // a "-" entry was seen: nothing may follow it
+    for (const QString& entry : splitMtdEntries(list)) {
+        const QRegularExpressionMatch match = entryPattern.match(entry);
+        if (!match.hasMatch() || toTheEnd || match.captured(3).trimmed().isEmpty()) {
+            return {};
+        }
+        MtdPartition partition;
+        partition.name = match.captured(3);
+        partition.offset = next;
+        if (!match.captured(2).isEmpty()) {
+            quint64 offset = 0;
+            if (!parseMemSize(match.captured(2), &offset) || offset < next) {
+                return {};   // overlapping the previous partition
+            }
+            partition.offset = offset;
+        }
+        const QString sizeText = match.captured(1).trimmed();
+        if (sizeText == QLatin1String("-")) {
+            partition.size = 0;
+            toTheEnd = true;
+        } else {
+            quint64 size = 0;
+            if (!parseMemSize(sizeText, &size) || size == 0 || size > std::numeric_limits<quint64>::max() - partition.offset) {
+                return {};
+            }
+            partition.size = size;
+            next = partition.offset + size;
+        }
+        partitions.append(partition);
+    }
+    return partitions;
+}
+
+QString RockchipTool::mtdPartsFromCommandLine(const QString& cmdline)
+{
+    // The kernel takes the last of repeated parameters, so does this.
+    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+    QString found;
+    for (const QString& word : cmdline.split(whitespace, Qt::SkipEmptyParts)) {
+        if (word.startsWith(QLatin1String("mtdparts="))) {
+            found = word.mid(9);
+        }
+    }
+    return found.trimmed();
+}
+
+QString RockchipTool::mtdPartsFromEnvImage(const QString& envImagePath)
+{
+    // A U-Boot environment blob: a CRC32 (4 bytes, ignored here), with a redundant environment one
+    // more flag byte, then "key=value" entries each ending in a NUL, "\0\0" (or the padding) after
+    // the last. The Node image: "mtdparts=sfc_nor:...", then "sys_bootargs= ... mtdparts=...
+    // ...", "sd_parts=..." - only an entry that itself starts with "mtdparts=" counts.
+    constexpr qint64 kMaxEnvBytes = 4 * 1024 * 1024;   // the Node env is 64 KiB
+    static const QByteArray key("mtdparts=");
+    QFile file(envImagePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    const QByteArray data = file.read(kMaxEnvBytes);
+    for (const qsizetype headerBytes : {qsizetype(4), qsizetype(5)}) {
+        qsizetype pos = headerBytes;
+        while (pos < data.size()) {
+            const qsizetype nul = data.indexOf('\0', pos);
+            const qsizetype end = nul < 0 ? data.size() : nul;
+            if (end == pos) {
+                break;   // an empty entry: the end of the environment
+            }
+            if (end - pos > key.size() && data.mid(pos, key.size()) == key) {
+                return QString::fromLatin1(data.mid(pos + key.size(), end - pos - key.size())).trimmed();
+            }
+            pos = end + 1;
+        }
+    }
+    return QString();
+}
+
+QList<QPair<QString, QString>> RockchipTool::parsePackageFile(const QString& text)
+{
+    static const QRegularExpression whitespace(QStringLiteral("\\s"));
+    QList<QPair<QString, QString>> entries;
+    for (const QString& rawLine : splitLines(text)) {
+        QString line = rawLine.trimmed();
+        if (line.startsWith(QChar(0xFEFF))) {
+            line = line.mid(1).trimmed();   // a byte-order mark in front of the first line
+        }
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+        const qsizetype gap = line.indexOf(whitespace);
+        if (gap < 0) {
+            continue;   // a partition name without a file
+        }
+        const QString file = line.mid(gap).trimmed();
+        if (!file.isEmpty()) {
+            entries.append({line.left(gap), file});
+        }
+    }
+    return entries;
+}
+
+QList<PartitionImage> RockchipTool::planPartitions(const QString& extractDir, const QList<MtdPartition>& layout,
+                                                   QString* error)
+{
+    if (error) {
+        error->clear();
+    }
+    const QDir dir(extractDir);
+    QFile packageFile(dir.filePath(QStringLiteral("package-file")));
+    if (!packageFile.exists()) {
+        if (error) {
+            *error = QCoreApplication::translate("RockchipTool", "no package-file in %1: the image was not unpacked")
+                         .arg(QDir::toNativeSeparators(extractDir));
+        }
+        return {};
+    }
+    if (!packageFile.open(QIODevice::ReadOnly)) {
+        if (error) {
+            *error = QCoreApplication::translate("RockchipTool", "cannot read %1: %2")
+                         .arg(QDir::toNativeSeparators(packageFile.fileName()), packageFile.errorString());
+        }
+        return {};
+    }
+    QList<PartitionImage> rows;
+    for (const auto& [name, fileName] : parsePackageFile(QString::fromUtf8(packageFile.readAll()))) {
+        // upgrade_tool's own entries: the list itself and the loader (download.bin), which the
+        // board's loader in Loader mode does not need and no partition holds.
+        if (name.compare(QLatin1String("package-file"), Qt::CaseInsensitive) == 0
+            || name.compare(QLatin1String("bootloader"), Qt::CaseInsensitive) == 0) {
+            continue;
+        }
+        PartitionImage row;
+        row.name = name;
+        row.file = QDir::cleanPath(dir.absoluteFilePath(fileName));
+        const QFileInfo info(row.file);
+        row.fileSize = info.isFile() ? info.size() : -1;
+        for (const MtdPartition& partition : layout) {
+            if (partition.name == name) {
+                row.inLayout = true;
+                row.offset = partition.offset;
+                row.size = partition.size;
+                break;
+            }
+        }
+        // A missing file (a "RESERVED" entry, an extraction that stopped) fits nothing: there is
+        // nothing to write.
+        row.fits = row.fileSize >= 0 && (row.size == 0 || static_cast<quint64>(row.fileSize) <= row.size);
+        row.selected = row.inLayout && row.fits;
+        rows.append(row);
+    }
+    return rows;
 }
 
 // ---------------------------------------------------------------------------------------------

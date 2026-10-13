@@ -3,6 +3,7 @@
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QEvent>
@@ -11,6 +12,7 @@
 #include <QFontInfo>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
@@ -22,8 +24,11 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTcpSocket>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -90,6 +95,29 @@ constexpr int kRfmcuPortBusy = 2;
 constexpr int kRfmcuNoReply = 3;
 
 const QColor kErrorText(0xC0, 0x39, 0x2B);
+
+/// The columns of partitionTable(); column 0 is the checkbox (its item carries the name as
+/// Qt::UserRole data).
+enum PartitionColumn { ColCheck, ColName, ColFile, ColOffset, ColSize, ColImageSize, PartitionColumnCount };
+/// The table shows up to this many rows before it scrolls, so it never pushes the log pane away.
+constexpr int kPartitionTableVisibleRows = 8;
+
+/// A partition size as mtdparts writes it: "64 KiB", "3 MiB", "to the end".
+QString layoutSizeText(quint64 bytes)
+{
+    constexpr quint64 kKiB = 1024;
+    constexpr quint64 kMiB = 1024 * 1024;
+    if (bytes == 0) {
+        return QCoreApplication::translate("FirmwareTab", "to the end");
+    }
+    if (bytes % kMiB == 0) {
+        return QStringLiteral("%1 MiB").arg(bytes / kMiB);
+    }
+    if (bytes % kKiB == 0) {
+        return QStringLiteral("%1 KiB").arg(bytes / kKiB);
+    }
+    return QStringLiteral("%1 B").arg(QLocale().toString(static_cast<qulonglong>(bytes)));
+}
 
 /// Combo text of a stored profile, exactly as SshConnectionBar shows it: "name - user@host:port".
 QString profileItemText(const SshProfile& profile)
@@ -225,6 +253,11 @@ struct FirmwareTab::Private
     QPushButton* installDriversButton = nullptr;
     QLabel* socImageCaption = nullptr;
     QLabel* socImageLabel = nullptr;
+    QLabel* partitionsCaption = nullptr;
+    QLabel* partitionsLabel = nullptr;
+    QPushButton* partitionsAllButton = nullptr;
+    QPushButton* partitionsNoneButton = nullptr;
+    QTableWidget* partitionTable = nullptr;
     QPushButton* flashSocButton = nullptr;
     QPushButton* cancelButton = nullptr;
 
@@ -272,6 +305,23 @@ struct FirmwareTab::Private
     bool restoring = false;         ///< loading the remembered values: nothing is written back
     bool progressShowsReady = true; ///< the progress label still says "Ready" (retranslated with the rest)
 
+    // ---- Partitions (v0.5.1) -------------------------------------------------------------------
+    enum class PlanState { NoImage, Planning, Ready, Failed };
+    PlanState planState = PlanState::NoImage;
+    QString planMessage;            ///< SocFlasher::partitionsPlanned()'s message (the reason when it failed)
+    QList<PartitionImage> partitionRows;   ///< what the table shows: the rows of plannedImage
+    QString plannedImage;
+    QString requestedPlanKey;       ///< image, mtime and layout of the last plan asked for
+    QString selectionImageKey;      ///< image and mtime the checkboxes belong to (a new image checks everything)
+    bool planInFlight = false;      ///< the tab's own SocFlasher::planPartitions() has not reported yet
+    bool planPending = false;       ///< a plan could not start (another one, a flash): asked again afterwards
+    bool checkAll = true;           ///< every enabled row is checked
+    QStringList checkedNames;       ///< the checked rows while !checkAll
+    QString imageLayout;            ///< the mtdparts of plannedImage's env.img ("" = it carries none)
+    QString layoutSerial;           ///< the ADB board boardLayout() belongs to (the last one seen)
+    QSet<QString> layoutReadTried;  ///< boards whose /proc/cmdline was read in this session
+    QPointer<ToolInvocation> cmdlineInvocation;
+
     // ---- Operation state ---------------------------------------------------------------------
     QString operation;              ///< currentOperation(): the top-level operation
     QString step;                   ///< the step running right now (== operation unless Pull & Flash)
@@ -315,6 +365,20 @@ struct FirmwareTab::Private
     void refreshImage(bool reread = false);   ///< reread: the file changed in place (pull, roll back)
     void runFirmwareInfo(const QString& image);
     void renderSocImage();
+
+    // ---- Partitions -----------------------------------------------------------------------------
+    static QString imageKey(const QString& image);
+    void requestPlan(bool force);
+    void onPartitionsPlanned(bool ok, const QList<PartitionImage>& rows, const QString& message);
+    QString boardLayout() const;    ///< remembered for the board (or "*"): what the flasher gets as mtdParts()
+    bool usingImageLayout() const;  ///< flashLayout() is the image's own (its env.img)
+    bool layoutKnown() const;
+    static QString rowProblem(const PartitionImage& row, bool layoutIsKnown);   ///< empty = the row can be checked
+    void renderPartitions();
+    void onPartitionItemChanged(QTableWidgetItem* item);
+    void pushSelection();
+    void readBoardLayout(const QString& serial);
+    void storeLayout(const QString& serial, const QString& mtdparts);
 
     // ---- Status / rendering ------------------------------------------------------------------
     void renderDeviceStatus();
@@ -437,7 +501,7 @@ FirmwareTab::~FirmwareTab()
     if (d->profiles) {
         disconnect(d->profiles, nullptr, this, nullptr);
     }
-    for (ToolInvocation* invocation : {d->sfiInvocation.data(), d->cliInvocation.data()}) {
+    for (ToolInvocation* invocation : {d->sfiInvocation.data(), d->cliInvocation.data(), d->cmdlineInvocation.data()}) {
         if (invocation) {
             disconnect(invocation, nullptr, this, nullptr);
             invocation->cancel();
@@ -569,6 +633,35 @@ void FirmwareTab::Private::setupUi()
     socImageRow->addWidget(socImageCaption);
     socImageRow->addWidget(socImageLabel, 1);
     socLayout->addLayout(socImageRow);
+
+    // The partitions of the image, SocToolKit-style: one checkbox per row.
+    partitionsCaption = new QLabel(q);
+    partitionsLabel = makeValueLabel("partitionsLabel");
+    partitionsAllButton = makeButton("partitionsAllButton");
+    partitionsNoneButton = makeButton("partitionsNoneButton");
+    auto* partitionsRow = makeRow();
+    partitionsRow->addWidget(partitionsCaption);
+    partitionsRow->addWidget(partitionsLabel, 1);
+    partitionsRow->addWidget(partitionsAllButton);
+    partitionsRow->addWidget(partitionsNoneButton);
+    socLayout->addLayout(partitionsRow);
+    partitionTable = new QTableWidget(0, PartitionColumnCount, q);
+    partitionTable->setObjectName(QStringLiteral("partitionTable"));
+    partitionTable->setSelectionMode(QAbstractItemView::NoSelection);
+    partitionTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    partitionTable->setAlternatingRowColors(true);
+    partitionTable->setShowGrid(false);
+    partitionTable->setWordWrap(false);
+    partitionTable->verticalHeader()->setVisible(false);
+    QHeaderView* header = partitionTable->horizontalHeader();
+    header->setSectionResizeMode(QHeaderView::ResizeToContents);
+    header->setStretchLastSection(true);
+    header->setHighlightSections(false);
+    const int rowHeight = partitionTable->verticalHeader()->defaultSectionSize();
+    partitionTable->setMaximumHeight(header->sizeHint().height() + kPartitionTableVisibleRows * rowHeight
+                                     + 2 * partitionTable->frameWidth());
+    partitionTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    socLayout->addWidget(partitionTable);
 
     flashSocButton = makeButton("flashSocButton");
     cancelButton = makeButton("cancelButton");
@@ -708,6 +801,18 @@ void FirmwareTab::Private::wireWidgets()
     connect(flashSocButton, &QPushButton::clicked, q, &FirmwareTab::flashSoc);
     connect(cancelButton, &QPushButton::clicked, q, &FirmwareTab::cancel);
     connect(installDriversButton, &QPushButton::clicked, q, &FirmwareTab::installDrivers);
+    connect(partitionsAllButton, &QPushButton::clicked, q, [this]() {
+        checkAll = true;
+        checkedNames.clear();
+        renderPartitions();
+        pushSelection();
+    });
+    connect(partitionsNoneButton, &QPushButton::clicked, q, [this]() {
+        checkAll = false;
+        checkedNames.clear();
+        renderPartitions();
+    });
+    connect(partitionTable, &QTableWidget::itemChanged, q, [this](QTableWidgetItem* item) { onPartitionItemChanged(item); });
 
     // ---- MCU ----
     connect(packageEdit, &QLineEdit::editingFinished, q, [this]() {
@@ -816,7 +921,27 @@ void FirmwareTab::Private::wireCollaborators()
         deviceStatus = status;
         hasDeviceStatus = true;
         renderDeviceStatus();
+        if (status.mode == SocFlasher::DeviceStatus::Mode::Adb && !status.serial.isEmpty()) {
+            // A running board can tell its flash layout; Loader mode later cannot. Read it once
+            // per board and session, only while nothing else uses adb.
+            const bool otherBoard = status.serial != layoutSerial;
+            layoutSerial = status.serial;
+            if (operation.isEmpty() && !cmdlineInvocation && !layoutReadTried.contains(status.serial)
+                && AppSettings::instance().firmwareMtdParts(status.serial).isEmpty()) {
+                readBoardLayout(status.serial);
+            }
+            if (otherBoard) {
+                requestPlan(false);   // flashLayout() follows the board
+            }
+        }
     });
+    connect(flasher, &SocFlasher::mtdPartsRead, q, [this](const QString& mtdparts) {
+        // Step 2 of a flash read it from the board the flow found on ADB.
+        const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : layoutSerial;
+        storeLayout(serial, mtdparts);
+    });
+    connect(flasher, &SocFlasher::partitionsPlanned, q,
+            [this](bool ok, const QList<PartitionImage>& rows, const QString& message) { onPartitionsPlanned(ok, rows, message); });
     connect(flasher, &SocFlasher::phaseChanged, q, [this](SocFlasher::Phase phase) { onFlasherPhase(phase); });
     connect(flasher, &SocFlasher::downloadModeNeeded, q, [this]() {
         // Not inside the flasher's emit: the question runs a nested event loop.
@@ -966,8 +1091,19 @@ void FirmwareTab::Private::retranslate()
     installDriversButton->setText(FirmwareTab::tr("Install drivers"));
     installDriversButton->setToolTip(FirmwareTab::tr("Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)"));
     socImageCaption->setText(FirmwareTab::tr("Image:"));
+    partitionsCaption->setText(FirmwareTab::tr("Partitions:"));
+    partitionsAllButton->setText(FirmwareTab::tr("All"));
+    partitionsAllButton->setToolTip(FirmwareTab::tr("Check every partition that can be written"));
+    partitionsNoneButton->setText(FirmwareTab::tr("None"));
+    partitionsNoneButton->setToolTip(FirmwareTab::tr("Uncheck every partition"));
+    partitionTable->setHorizontalHeaderLabels({QString(), FirmwareTab::tr("Partition"), FirmwareTab::tr("Image file"),
+                                               FirmwareTab::tr("Offset"), FirmwareTab::tr("Size"),
+                                               FirmwareTab::tr("Image size")});
+    partitionTable->setToolTip(FirmwareTab::tr("The partitions of the image: in Loader mode Flash SoC writes the checked ones "
+                                               "(MASKROM mode writes the whole image)"));
     flashSocButton->setText(FirmwareTab::tr("Flash SoC"));
-    flashSocButton->setToolTip(FirmwareTab::tr("Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)"));
+    flashSocButton->setToolTip(FirmwareTab::tr("Write the image to the Rockchip SoC over the USB-C cable: the checked partitions "
+                                               "in Loader mode, the whole image in MASKROM mode"));
     cancelButton->setText(FirmwareTab::tr("Cancel"));
     cancelButton->setToolTip(FirmwareTab::tr("Stop the running step (not while upgrade_tool writes the flash)"));
 
@@ -1000,6 +1136,7 @@ void FirmwareTab::Private::retranslate()
     }
     refreshImage();
     renderSocImage();
+    renderPartitions();
     renderDeviceStatus();
     renderPackage();
     renderMcuStatus();
@@ -1079,7 +1216,8 @@ void FirmwareTab::setToolPaths(const QString& upgradeTool, const QString& adb, c
     d->toolPathsPinned = true;
     d->pushToolPaths();
     qCInfo(lcFirmware) << "tool paths set: upgrade_tool" << upgradeTool << "adb" << adb;
-    d->runFirmwareInfo(imagePath());   // the image line depends on upgrade_tool
+    d->runFirmwareInfo(imagePath());   // the image line and the partitions depend on upgrade_tool
+    d->requestPlan(true);
 }
 
 void FirmwareTab::setSessionProvider(SessionProvider provider)
@@ -1284,6 +1422,45 @@ QLabel* FirmwareTab::imageInfoLabel() const { return d->imageInfoLabel; }
 QPushButton* FirmwareTab::rollbackButton() const { return d->rollbackButton; }
 QLabel* FirmwareTab::socStatusLabel() const { return d->socStatusLabel; }
 QLabel* FirmwareTab::socImageLabel() const { return d->socImageLabel; }
+QTableWidget* FirmwareTab::partitionTable() const { return d->partitionTable; }
+QPushButton* FirmwareTab::partitionsAllButton() const { return d->partitionsAllButton; }
+QPushButton* FirmwareTab::partitionsNoneButton() const { return d->partitionsNoneButton; }
+QLabel* FirmwareTab::partitionsLabel() const { return d->partitionsLabel; }
+
+QString FirmwareTab::flashLayout() const
+{
+    // What the flasher places the partitions in (SocFlasher step 5): the image's own layout when
+    // its env.img carries one, else the board's.
+    return d->usingImageLayout() ? d->imageLayout : d->boardLayout();
+}
+
+QStringList FirmwareTab::selectedPartitions() const
+{
+    QStringList names;
+    for (int row = 0; row < d->partitionTable->rowCount(); ++row) {
+        const QTableWidgetItem* item = d->partitionTable->item(row, ColCheck);
+        if (item && (item->flags() & Qt::ItemIsEnabled) && item->checkState() == Qt::Checked) {
+            names << item->data(Qt::UserRole).toString();
+        }
+    }
+    return names;
+}
+
+void FirmwareTab::setSelectedPartitions(const QStringList& names)
+{
+    QStringList cleaned;
+    for (const QString& name : names) {
+        const QString trimmed = name.trimmed();
+        if (!trimmed.isEmpty() && !cleaned.contains(trimmed)) {
+            cleaned << trimmed;
+        }
+    }
+    d->checkAll = false;
+    d->checkedNames = cleaned;
+    d->renderPartitions();
+    d->pushSelection();
+}
+
 QPushButton* FirmwareTab::flashSocButton() const { return d->flashSocButton; }
 QPushButton* FirmwareTab::cancelButton() const { return d->cancelButton; }
 QLineEdit* FirmwareTab::packageEdit() const { return d->packageEdit; }
@@ -1457,6 +1634,7 @@ void FirmwareTab::Private::refreshImage(bool reread)
     if (image != sfiImage) {
         runFirmwareInfo(image);
     }
+    requestPlan(reread);   // a no-op while image, mtime and layout are what the table shows
     updateControls();
 }
 
@@ -1498,6 +1676,313 @@ void FirmwareTab::Private::runFirmwareInfo(const QString& image)
 void FirmwareTab::Private::renderSocImage()
 {
     socImageLabel->setText(sfiImage.isEmpty() ? FirmwareTab::tr("no image selected") : sfiText);
+}
+
+// =======================================================================================
+// Partitions (v0.5.1): SocFlasher::planPartitions() on image / layout changes, the table
+// =======================================================================================
+
+QString FirmwareTab::Private::imageKey(const QString& image)
+{
+    return image + QLatin1Char('\n') + QString::number(QFileInfo(image).lastModified().toMSecsSinceEpoch());
+}
+
+void FirmwareTab::Private::requestPlan(bool force)
+{
+    const QString image = q->imagePath();
+    if (image.isEmpty()) {
+        requestedPlanKey.clear();
+        planState = PlanState::NoImage;
+        partitionRows.clear();
+        plannedImage.clear();
+        renderPartitions();
+        return;
+    }
+    // The board's layout is what the flasher gets; the image's own (env.img) is its business.
+    const QString layout = boardLayout();
+    const QString key = imageKey(image) + QLatin1Char('\n') + layout;
+    if (!force && key == requestedPlanKey) {
+        return;
+    }
+    requestedPlanKey = key;
+    if (imageKey(image) != selectionImageKey) {
+        selectionImageKey = imageKey(image);   // another image: everything that can be written is checked again
+        checkAll = true;
+        checkedNames.clear();
+    }
+    if (upgradeToolPath.isEmpty()) {
+        planState = PlanState::Failed;
+        planMessage = FirmwareTab::tr("upgrade_tool not found");
+        partitionRows.clear();
+        renderPartitions();
+        return;
+    }
+    if (planInFlight || flasher->isRunning()) {
+        planPending = true;   // asked again when that plan / the flash reports
+        return;
+    }
+    pushToolPaths();
+    flasher->setImagePath(image);
+    flasher->setMtdParts(layout);
+    pushSelection();
+    if (!flasher->planPartitions()) {
+        planPending = true;
+        return;
+    }
+    planPending = false;
+    planInFlight = true;
+    planState = PlanState::Planning;
+    renderPartitions();
+}
+
+void FirmwareTab::Private::onPartitionsPlanned(bool ok, const QList<PartitionImage>& rows, const QString& message)
+{
+    planInFlight = false;
+    planState = ok ? PlanState::Ready : PlanState::Failed;
+    planMessage = message;
+    partitionRows = ok ? rows : QList<PartitionImage>();
+    plannedImage = flasher->imagePath();
+    // The layout the image carries itself, read the way the flasher read it for these rows.
+    imageLayout = ok ? RockchipTool::mtdPartsFromEnvImage(flasher->extractDirectory() + QStringLiteral("/env.img")) : QString();
+    renderPartitions();
+    const QString imageName = QFileInfo(plannedImage).fileName();
+    if (ok) {
+        QStringList list;
+        for (const PartitionImage& row : rows) {
+            list << (row.inLayout ? QStringLiteral("%1@0x%2").arg(row.name).arg(row.offset, 0, 16) : row.name);
+        }
+        q->appendLog(FirmwareTab::tr("Partitions of %1: %2").arg(imageName, list.join(QStringLiteral(", "))));
+        if (!layoutKnown()) {
+            q->appendLog(FirmwareTab::tr("The flash layout is not known yet: the image carries none, and it is read from "
+                                         "the board once it runs (ADB); MASKROM mode needs none"));
+        }
+    } else {
+        q->appendLog(FirmwareTab::tr("Cannot list the partitions of %1: %2").arg(imageName, message));
+    }
+    if (planPending && !flasher->isRunning()) {
+        planPending = false;
+        requestPlan(true);
+    }
+}
+
+QString FirmwareTab::Private::boardLayout() const
+{
+    // The board's own layout when it was read; else the one read last ("*"), which is the best
+    // guess for a board that is already in Loader mode (rockusb tells no ADB serial).
+    const AppSettings& settings = AppSettings::instance();
+    if (!layoutSerial.isEmpty()) {
+        const QString own = settings.firmwareMtdParts(layoutSerial);
+        if (!own.isEmpty()) {
+            return own;
+        }
+    }
+    return settings.firmwareMtdParts(QString());
+}
+
+bool FirmwareTab::Private::usingImageLayout() const
+{
+    return planState == PlanState::Ready && plannedImage == q->imagePath()
+           && !RockchipTool::parseMtdParts(imageLayout).isEmpty();
+}
+
+bool FirmwareTab::Private::layoutKnown() const
+{
+    return !RockchipTool::parseMtdParts(q->flashLayout()).isEmpty();
+}
+
+QString FirmwareTab::Private::rowProblem(const PartitionImage& row, bool layoutIsKnown)
+{
+    if (!layoutIsKnown) {
+        return FirmwareTab::tr("partition layout unknown: connect the board running once");
+    }
+    if (!row.inLayout) {
+        return FirmwareTab::tr("%1 is not in the board's partition layout").arg(row.name);
+    }
+    if (row.fileSize < 0) {
+        return FirmwareTab::tr("the package has no image file for %1").arg(row.name);
+    }
+    if (!row.fits) {
+        return FirmwareTab::tr("%1 (%2 bytes) does not fit the partition (%3 bytes)")
+            .arg(QFileInfo(row.file).fileName())
+            .arg(row.fileSize)
+            .arg(row.size);
+    }
+    return QString();
+}
+
+void FirmwareTab::Private::renderPartitions()
+{
+    {
+        const QSignalBlocker blocker(partitionTable);   // checks set here are no user toggles
+        partitionTable->setRowCount(0);
+        if (planState == PlanState::Ready) {
+            const bool known = layoutKnown();
+            partitionTable->setRowCount(static_cast<int>(partitionRows.size()));
+            for (int i = 0; i < partitionRows.size(); ++i) {
+                const PartitionImage& row = partitionRows.at(i);
+                // Disabled and unchecked, with the reason as the tooltip: not in the layout, no
+                // file, too big (or no layout at all).
+                const QString problem = rowProblem(row, known);
+                const bool enabled = problem.isEmpty();
+                const Qt::ItemFlags flags = enabled ? Qt::ItemFlags(Qt::ItemIsEnabled) : Qt::ItemFlags(Qt::NoItemFlags);
+                auto* check = new QTableWidgetItem;
+                check->setFlags(enabled ? Qt::ItemFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable)
+                                        : Qt::ItemFlags(Qt::NoItemFlags));
+                check->setCheckState(enabled && (checkAll || checkedNames.contains(row.name)) ? Qt::Checked : Qt::Unchecked);
+                check->setData(Qt::UserRole, row.name);
+                const QStringList texts{
+                    row.name,
+                    QFileInfo(row.file).fileName(),
+                    row.inLayout ? QStringLiteral("0x%1").arg(row.offset, 0, 16) : QString(),
+                    row.inLayout ? layoutSizeText(row.size) : QString(),
+                    row.fileSize >= 0 ? QLocale().toString(row.fileSize) : FirmwareTab::tr("missing")};
+                partitionTable->setItem(i, ColCheck, check);
+                for (int column = ColName; column < PartitionColumnCount; ++column) {
+                    auto* item = new QTableWidgetItem(texts.at(column - ColName));
+                    item->setFlags(flags);
+                    if (column >= ColOffset) {
+                        item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                    }
+                    partitionTable->setItem(i, column, item);
+                }
+                const QString tip = problem.isEmpty() ? nativePath(row.file) : problem;
+                for (int column = 0; column < PartitionColumnCount; ++column) {
+                    partitionTable->item(i, column)->setToolTip(tip);
+                }
+            }
+        }
+    }
+
+    const QList<MtdPartition> boardParts = RockchipTool::parseMtdParts(boardLayout());
+    const bool imageDiffersFromBoard =
+        usingImageLayout() && !boardParts.isEmpty() && boardParts != RockchipTool::parseMtdParts(imageLayout);
+    QString text;
+    bool failed = false;
+    switch (planState) {
+    case PlanState::NoImage:
+        text = FirmwareTab::tr("no image selected");
+        break;
+    case PlanState::Planning:
+        text = FirmwareTab::tr("unpacking the image to list its partitions...");
+        break;
+    case PlanState::Failed:
+        text = FirmwareTab::tr("cannot list the partitions: %1").arg(planMessage);
+        failed = true;
+        break;
+    case PlanState::Ready:
+        if (!layoutKnown()) {
+            text = FirmwareTab::tr("partition layout unknown: connect the board running once");
+        } else {
+            const QStringList checked = q->selectedPartitions();
+            qint64 bytes = 0;
+            for (const PartitionImage& row : std::as_const(partitionRows)) {
+                if (checked.contains(row.name) && row.fileSize > 0) {
+                    bytes += row.fileSize;
+                }
+            }
+            // Two plain strings instead of a %n plural: "1 partition" must read right without a translator.
+            text = partitionRows.size() == 1
+                       ? FirmwareTab::tr("1 partition, %1 selected (%2)").arg(checked.size()).arg(formatSize(bytes))
+                       : FirmwareTab::tr("%1 partitions, %2 selected (%3)")
+                             .arg(partitionRows.size())
+                             .arg(checked.size())
+                             .arg(formatSize(bytes));
+            // Where the offsets come from: the image's env.img (the layout it was built for) or the board.
+            text += QStringLiteral(" - ") + (!usingImageLayout() ? FirmwareTab::tr("layout from the board")
+                                             : imageDiffersFromBoard ? FirmwareTab::tr("layout from the image (the board's differs)")
+                                                                     : FirmwareTab::tr("layout from the image"));
+        }
+        break;
+    }
+    partitionsLabel->setText(text);
+    const QString layout = q->flashLayout();
+    QString tip = text;
+    if (usingImageLayout()) {
+        tip = FirmwareTab::tr("Flash layout from the image's env.img: %1").arg(layout);
+        if (imageDiffersFromBoard) {
+            tip += QLatin1Char('\n') + FirmwareTab::tr("The board's layout: %1").arg(boardLayout());
+        }
+    } else if (!layout.isEmpty()) {
+        tip = FirmwareTab::tr("Flash layout from the board: %1").arg(layout);
+    }
+    partitionsLabel->setToolTip(tip);
+    QPalette palette = partitionsLabel->palette();
+    palette.setColor(QPalette::WindowText, failed ? kErrorText : q->palette().color(QPalette::WindowText));
+    partitionsLabel->setPalette(palette);
+    updateControls();
+}
+
+void FirmwareTab::Private::onPartitionItemChanged(QTableWidgetItem* item)
+{
+    if (!item || item->column() != ColCheck) {
+        return;
+    }
+    checkAll = false;
+    checkedNames = q->selectedPartitions();
+    renderPartitions();   // the label's count and size
+    pushSelection();
+}
+
+void FirmwareTab::Private::pushSelection()
+{
+    // "None" has no SocFlasher form (an empty list means every row): Flash SoC refuses it instead.
+    if (checkAll) {
+        flasher->setSelectedPartitions({});
+    } else if (!checkedNames.isEmpty()) {
+        flasher->setSelectedPartitions(checkedNames);
+    }
+}
+
+void FirmwareTab::Private::readBoardLayout(const QString& serial)
+{
+    layoutReadTried.insert(serial);
+    pushToolPaths();
+    AdbTool* tool = flasher->adb();
+    if (tool->adbPath().isEmpty()) {
+        return;
+    }
+    // The board the status line shows, named like every adb command of the flow.
+    ToolInvocation* invocation =
+        tool->serial().isEmpty()
+            ? tool->run({QStringLiteral("-s"), serial, QStringLiteral("shell"), QStringLiteral("cat /proc/cmdline")}, tool->timeoutMs())
+            : tool->shell(QStringLiteral("cat /proc/cmdline"));
+    cmdlineInvocation = invocation;
+    q->appendLog(invocation->commandLine());
+    connect(invocation, &ToolInvocation::finished, q, [this, invocation, serial](const ToolResult& result) {
+        if (cmdlineInvocation != invocation) {
+            return;
+        }
+        cmdlineInvocation = nullptr;
+        if (result.cancelled) {
+            return;
+        }
+        if (!result.started) {
+            q->appendLog(FirmwareTab::tr("Cannot read the flash layout of board %1: %2").arg(serial, result.error));
+            return;
+        }
+        const QString mtdparts = RockchipTool::mtdPartsFromCommandLine(result.outputText());
+        if (mtdparts.isEmpty()) {
+            q->appendLog(FirmwareTab::tr("Board %1 reports no flash layout (no mtdparts in /proc/cmdline)").arg(serial));
+            return;
+        }
+        q->appendLog(FirmwareTab::tr("Flash layout of board %1: %2").arg(serial, mtdparts));
+        storeLayout(serial, mtdparts);
+    });
+}
+
+void FirmwareTab::Private::storeLayout(const QString& serial, const QString& mtdparts)
+{
+    AppSettings& settings = AppSettings::instance();
+    if (!serial.isEmpty() && settings.firmwareMtdParts(serial) != mtdparts) {
+        settings.setFirmwareMtdParts(serial, mtdparts);
+    }
+    if (settings.firmwareMtdParts(QString()) != mtdparts) {
+        settings.setFirmwareMtdParts(QString(), mtdparts);   // "*": the layout for a board met in Loader mode
+    }
+    if (!serial.isEmpty()) {
+        layoutSerial = serial;
+    }
+    requestPlan(false);
 }
 
 // =======================================================================================
@@ -1611,6 +2096,14 @@ void FirmwareTab::Private::updateControls()
     }
     rollbackButton->setEnabled(idle && hasPreviousImage);
     flashSocButton->setEnabled(idle && !q->imagePath().isEmpty());
+    bool checkable = false;
+    for (int row = 0; row < partitionTable->rowCount() && !checkable; ++row) {
+        const QTableWidgetItem* item = partitionTable->item(row, ColCheck);
+        checkable = item && (item->flags() & Qt::ItemIsEnabled);
+    }
+    partitionTable->setEnabled(idle);
+    partitionsAllButton->setEnabled(idle && checkable);
+    partitionsNoneButton->setEnabled(idle && checkable);
     // The role is what the user confirms: never guessed, so no update without one.
     updateMcuButton->setEnabled(idle && mcuPackage.isValid() && confirmedRole != 0);
     setRoleButton->setEnabled(idle && confirmedRole != 0);
@@ -1946,6 +2439,38 @@ void FirmwareTab::Private::startFlash()
     }
     pushToolPaths();
     flasher->setImagePath(image);
+    flasher->setMtdParts(boardLayout());   // a board already in Loader mode cannot tell its layout
+    if (operation == kOpPullFlash) {
+        // Pull & Flash writes every partition: the SocFlasher default, which also stops before
+        // writing anything when one image does not fit.
+        checkAll = true;
+        checkedNames.clear();
+        renderPartitions();
+        flasher->setSelectedPartitions({});
+        q->appendLog(FirmwareTab::tr("Partitions: every partition of the image (Loader mode writes them one by one; "
+                                     "MASKROM mode writes the whole image)"));
+    } else {
+        bool tableShowsImage = planState == PlanState::Ready && plannedImage == image;
+        bool anyCheckable = false;
+        for (int row = 0; row < partitionTable->rowCount() && !anyCheckable; ++row) {
+            const QTableWidgetItem* item = partitionTable->item(row, ColCheck);
+            anyCheckable = item && (item->flags() & Qt::ItemIsEnabled);
+        }
+        tableShowsImage = tableShowsImage && anyCheckable;
+        const QStringList checked = q->selectedPartitions();
+        if (tableShowsImage && checked.isEmpty()) {
+            stepFinished(kOpFlash, false, FirmwareTab::tr("no partition is checked: check the ones to write (All checks every one)"));
+            return;
+        }
+        // Without a table for this image (still unpacking, no layout) the flasher decides: every
+        // partition in Loader mode, the whole image in MASKROM mode.
+        flasher->setSelectedPartitions(tableShowsImage ? checked : QStringList());
+        q->appendLog(tableShowsImage ? FirmwareTab::tr("Partitions checked: %1 (Loader mode writes these one by one; "
+                                                       "MASKROM mode writes the whole image)")
+                                           .arg(checked.join(QStringLiteral(", ")))
+                                     : FirmwareTab::tr("Partitions: every partition of the image (Loader mode writes them "
+                                                       "one by one; MASKROM mode writes the whole image)"));
+    }
     boardInfoText.clear();
     q->appendLog(FirmwareTab::tr("Flashing %1").arg(nativePath(image)));
     const QString text = FirmwareTab::tr("Flashing SoC: starting...");
@@ -2021,6 +2546,10 @@ void FirmwareTab::Private::flashFinished(bool ok, const QString& message)
         socStatusLabel->setToolTip(boardInfoText);
     }
     stepFinished(kOpFlash, ok, message);
+    if (planPending && !flasher->isRunning()) {
+        planPending = false;
+        requestPlan(true);   // a layout read during the flash, or an image changed meanwhile
+    }
 }
 
 void FirmwareTab::Private::askDownloadMode()
@@ -2536,6 +3065,11 @@ void FirmwareTab::refreshStatus()
     d->flasher->queryStatus();
 }
 
+void FirmwareTab::planPartitions()
+{
+    d->requestPlan(true);
+}
+
 void FirmwareTab::installDrivers()
 {
     QString installer = d->driverInstallerPath;
@@ -2656,6 +3190,7 @@ void FirmwareTab::applyPreferences()
         if (changed) {
             d->logToolPaths();
             d->runFirmwareInfo(imagePath());
+            d->requestPlan(true);
         }
     }
     d->flasher->setWaitTimeoutSeconds(s.firmwareLoaderWaitSeconds());

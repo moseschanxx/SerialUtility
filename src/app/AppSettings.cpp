@@ -60,6 +60,7 @@ constexpr auto kFirmwareLoaderWaitSeconds = "firmware/loaderWaitSeconds";
 constexpr auto kFirmwareAdbReturnSeconds = "firmware/adbReturnSeconds";
 constexpr auto kFirmwareGitDescribe = "firmware/gitDescribe";
 constexpr auto kFirmwareExtraFiles = "firmware/extraFiles";
+constexpr auto kFirmwareMtdParts = "firmware/mtdparts";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -804,6 +805,35 @@ void AppSettings::setFirmwareExtraFiles(const QStringList& names)
         }
     }
     SU_WRITE_SETTING(kFirmwareExtraFiles, cleaned.join(QLatin1Char(',')));
+}
+
+namespace {
+
+/// The key of a board in "firmware/mtdparts": its ADB serial, "*" for a board known by no serial
+/// (one that is already in Loader mode, where rockusb reports none).
+QString mtdPartsKey(const QString& serial)
+{
+    const QString key = serial.trimmed();
+    return key.isEmpty() ? QStringLiteral("*") : key;
+}
+
+} // namespace
+
+QString AppSettings::firmwareMtdParts(const QString& serial) const
+{
+    return readValue(kFirmwareMtdParts).toMap().value(mtdPartsKey(serial)).toString().trimmed();
+}
+
+void AppSettings::setFirmwareMtdParts(const QString& serial, const QString& mtdparts)
+{
+    QVariantMap layouts = readValue(kFirmwareMtdParts).toMap();
+    const QString value = mtdparts.trimmed();
+    if (value.isEmpty()) {
+        layouts.remove(mtdPartsKey(serial));
+    } else {
+        layouts.insert(mtdPartsKey(serial), value);
+    }
+    SU_WRITE_SETTING(kFirmwareMtdParts, layouts);
 }
 
 #undef SU_WRITE_SETTING

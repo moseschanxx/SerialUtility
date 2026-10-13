@@ -22,7 +22,9 @@
  * start() (usb_update.sh main flow):
  *  1. Detecting: queryStatus(). Loader / Maskrom -> 4. ADB device -> 2. Nothing -> 3.
  *  2. RebootingToLoader: logLine("board running <kernel> ..., rebooting it into loader mode")
- *     (`adb shell cat /proc/version` first; busybox on the Node board has no uname) then
+ *     (`adb shell cat /proc/version` first; busybox on the Node board has no uname), then
+ *     `adb shell cat /proc/cmdline` whose mtdparts word becomes mtdParts() (mtdPartsRead(); a
+ *     board without one keeps the owner's value), then
  *     `adb reboot loader` (its exit status ignored, like the script) -> 4. Without a serial()
  *     the board found here is the flow's from now on: every later adb command of the flow
  *     carries `-s <its serial>` (a second ADB device appearing meanwhile changes nothing); the
@@ -36,13 +38,33 @@
  *     listed, at most waitTimeoutSeconds (30; usb_update.sh TIMEOUT) ->
  *     finished(false, "board did not enter MASKROM/Loader within 30 s"). cancel() here ->
  *     finished(false, "cancelled").
- *  5. Flashing: logLine("flashing <image> (<mode> mode)"), `UF <image>`; progress(stage, percent)
- *     from RockchipTool::ProgressParser; the output's success line is required:
- *     finished(false, "upgrade_tool did not report success: <tail>") otherwise (tail =
- *     RockchipTool::tailForMessage()). Not cancellable: cancel() is refused with
- *     logLine("cannot cancel while upgrade_tool writes the flash"). No timeout either: after
- *     5 min without output (and after every further 5 min) logLine() says that upgrade_tool is
- *     silent and left running - log only, the flasher never stops it.
+ *  5. Flashing, by one of two methods (flashMethod() after detection, logged):
+ *     - Loader mode (U-Boot rockusb) -> FlashMethod::PartitionWrites, what SocToolKit's Download
+ *       page does: `EXF <image> <extractDirectory>` unpacks the package (progress stage
+ *       "Extracting"), `package-file` names the partition of every image, the layout comes from
+ *       the image itself when its env.img carries one (RockchipTool::mtdPartsFromEnvImage(); the
+ *       layout the images were built for, so a board already in Loader mode can be flashed
+ *       without a prior ADB read), else from mtdParts() - read from the running board's
+ *       /proc/cmdline in step 2 (mtdPartsRead()) or set by the owner; when both are known and
+ *       differ, logLine() shows both and the image's wins (the env being written defines the
+ *       new layout) - and every image whose partition is
+ *       in the layout is written with `WL <offset / 512> <file>` in package-file order (entries
+ *       "package-file" and "bootloader" and names absent from the layout are skipped with a log
+ *       line; an image larger than its partition stops the flow before anything is written:
+ *       finished(false, "<file> (<n> bytes) does not fit partition <name> (<size> bytes)")); a
+ *       `WL` that fails -> finished(false, "writing <name> failed: <tail>"); then `RD` resets
+ *       the board. progress(stage "Writing <name> (k of N)", percent over all bytes to write).
+ *       Without a layout: finished(false, "partition layout unknown: boot the board once so it
+ *       can be read over ADB, or flash it in MASKROM mode"). This path runs no chip check,
+ *       which is why it works with a U-Boot that reports no chip id (the Node board's).
+ *     - Maskrom mode -> FlashMethod::UpgradeFirmware: `UF <image>` as before (the BootROM
+ *       answers the tool's chip check); the success line is required:
+ *       finished(false, "upgrade_tool did not report success: <tail>") otherwise (tail =
+ *       RockchipTool::tailForMessage()).
+ *     Neither method is cancellable: cancel() is refused with logLine("cannot cancel while
+ *     upgrade_tool writes the flash"). No timeout either: after 5 min without output (and after
+ *     every further 5 min) logLine() says that upgrade_tool is silent and left running - log
+ *     only, the flasher never stops it.
  *  6. WaitingForAdb (unless waitForAdb() is off): `adb get-state` every pollIntervalMs until
  *     "device", at most adbReturnTimeoutSeconds (60) -> finished(true, "board flashed, but ADB did
  *     not come back within 60 s; check the serial console") - a success with a warning, as the
@@ -95,12 +117,41 @@ public:
     void setWaitForAdb(bool on);                    ///< default true (usb_update.sh NO_WAIT=0)
     bool waitForAdb() const;
 
+    /// The flash layout for FlashMethod::PartitionWrites (see step 5): the mtdparts string of
+    /// the board, with or without the "mtdparts=" prefix. Step 2 overwrites it with what the
+    /// running board reports; the owner sets a remembered one for a board already in Loader mode.
+    void setMtdParts(const QString& mtdparts);
+    QString mtdParts() const;
+    /// Where `EXF` unpacks the image; empty (default) = "<image folder>/<image base name>.extracted",
+    /// created on demand and reused (the files are overwritten by every flash).
+    void setExtractDirectory(const QString& dir);
+    QString extractDirectory() const;
+
+    enum class FlashMethod { None, PartitionWrites, UpgradeFirmware };
+    Q_ENUM(FlashMethod)
+    FlashMethod flashMethod() const;                ///< decided when the download mode is known; None before
+
+    /// The partition rows of the current image in the current layout (RockchipTool::planPartitions()
+    /// on the extracted image): empty until planPartitions() ran for this image. The flash in
+    /// Loader mode writes the rows whose `selected` is set (setSelectedPartitions()); Maskrom mode
+    /// writes the whole image with UF and ignores the selection (logged).
+    QList<PartitionImage> partitions() const;
+    /// Which rows the next PartitionWrites flash writes: names; an empty list = every row that is
+    /// inLayout and fits (the default). Unknown names are ignored.
+    void setSelectedPartitions(const QStringList& names);
+    QStringList selectedPartitions() const;
+
     bool isRunning() const;
     Phase phase() const;
     DeviceStatus lastStatus() const;
 
 public slots:
     void queryStatus();          ///< asynchronous; statusChanged() follows (dropped while one runs or while flashing)
+    /// Unpack the current image (EXF into extractDirectory()) and compute partitions() from
+    /// mtdParts(); asynchronous: partitionsPlanned(ok, rows, message). False (nothing emitted)
+    /// while a flash or another plan runs or without an image / tool path. A plan is kept per
+    /// (image path, image mtime, layout); start() reuses it when still valid and re-plans otherwise.
+    bool planPartitions();
     bool start();                ///< false while running
     void cancel();               ///< ends the waiting phases; refused while Flashing
 
@@ -112,6 +163,8 @@ signals:
     void toolOutput(const QString& line);               ///< raw tool lines as they arrive
     void logLine(const QString& line);                  ///< the flasher's own narration
     void boardInfo(const QString& text);                ///< /proc/version + uptime after the flash
+    void mtdPartsRead(const QString& mtdparts);         ///< step 2 read the layout from the running board
+    void partitionsPlanned(bool ok, const QList<PartitionImage>& partitions, const QString& message);
     void finished(bool ok, const QString& message);
 
 private:

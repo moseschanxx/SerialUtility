@@ -163,6 +163,11 @@ public:
     void setFirmwareGitDescribe(bool on);
     QStringList firmwareExtraFiles() const;           ///< "firmware/extraFiles": extra remote file names pulled next to update.img; default empty
     void setFirmwareExtraFiles(const QStringList& names);
+    /// "firmware/mtdparts" (QVariantMap serial -> mtdparts): the flash layout last read from a
+    /// board (SocFlasher::mtdPartsRead()), handed back to the flasher for a board that is
+    /// already in Loader mode; "" when unknown. An empty serial keys the entry "*".
+    QString firmwareMtdParts(const QString& serial) const;
+    void setFirmwareMtdParts(const QString& serial, const QString& mtdparts);
 
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()

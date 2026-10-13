@@ -13,6 +13,7 @@
 #include "firmware/SocFlasher.h"
 
 class QComboBox;
+class QTableWidget;
 class QLineEdit;
 class QLabel;
 class QPushButton;
@@ -58,6 +59,19 @@ class McuLink;
  * the connection is closed again after the pull (or kept while a Pull & Flash runs). "Use local
  * image..." picks any *.img file instead (validated with the RKFW magic; shown with its SFI
  * info). Roll back swaps the cache's update.img with update.prev.img.
+ *
+ * SoC, partitions (v0.5.1, like SocToolKit's Download page): once an image is selected the tab
+ * unpacks it (SocFlasher::planPartitions()) and lists its partitions in partitionTable() - a
+ * checkbox, the partition name, the image file, the flash offset, the partition size and the
+ * image size, one row per package-file entry; rows that are not in the layout or do not fit are
+ * unchecked, disabled and say why. The layout (mtdparts) comes from the board: whenever the
+ * status refresh sees an ADB device whose layout is not remembered yet it reads /proc/cmdline
+ * once (AppSettings::firmwareMtdParts(serial)); SocFlasher::mtdPartsRead() stores it too. Without
+ * a layout the table says "partition layout unknown: connect the board running once". "All" /
+ * "None" buttons set the checkboxes. Flash SoC in Loader mode writes the checked rows (SocFlasher
+ * FlashMethod::PartitionWrites, the way SocToolKit does it, no chip check) and says which ones in
+ * the log; in MASKROM mode it writes the whole image with UF and the log says the selection was
+ * ignored. Pull & Flash writes every row. flashLayout() is the mtdparts in use.
  *
  * SoC: the device line is refreshed by SocFlasher::queryStatus() on a timer
  * (statusRefreshIntervalMs, 2000; 0 = off, the tests call refreshStatus()) while the tab is
@@ -156,6 +170,13 @@ public:
     QPushButton* rollbackButton() const;
     QLabel* socStatusLabel() const;
     QLabel* socImageLabel() const;
+    QTableWidget* partitionTable() const;          ///< rows = SocFlasher::partitions(); column 0 = checkbox
+    QPushButton* partitionsAllButton() const;
+    QPushButton* partitionsNoneButton() const;
+    QLabel* partitionsLabel() const;               ///< "7 partitions, 7 selected (11.4 MB)" / the layout-unknown text
+    QString flashLayout() const;                   ///< the mtdparts in use (remembered or just read), "" when unknown
+    QStringList selectedPartitions() const;        ///< checked rows (names)
+    void setSelectedPartitions(const QStringList& names);
     QPushButton* flashSocButton() const;
     QPushButton* cancelButton() const;
     QLineEdit* packageEdit() const;
@@ -187,6 +208,7 @@ public slots:
     void chooseLocalImage();
     void choosePackage();
     void refreshStatus();
+    void planPartitions();                         ///< re-run the plan for the current image and layout
     void installDrivers();
     void appendLog(const QString& line);           ///< time-stamped
     void clearLog();

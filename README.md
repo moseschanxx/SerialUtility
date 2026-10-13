@@ -29,7 +29,8 @@ flashes the BuildAI Node board (Rockchip RV1106 SoC + TI CC1310 RF MCU) over its
   Windows flashing routine for the Node board: **pull** the newest `update.img` from the Linux
   build machine over the SSH stack (size / time / `git describe` shown first, unchanged images
   skipped, one-level history with *Roll back*), **flash the SoC** with Rockchip's `upgrade_tool`
-  (the tab puts the board into Loader mode over ADB by itself), **update the CC1310** with a
+  (the tab puts the board into Loader mode over ADB by itself and writes the image partition by
+  partition like SocToolKit's Download page - all of them, or only the ones you check), **update the CC1310** with a
   native C++ implementation of its UART updater protocol through the SoC, and **Pull & Flash**
   to do all three with one button - everything over the board's single USB-C cable, with
   `upgrade_tool`, `adb` and the Rockchip USB drivers bundled in the package.
@@ -413,14 +414,39 @@ button. The tab has three sections and a log pane:
 - **SoC** - a status line refreshed every 2 s tells what the PC sees: *ADB device <serial>*,
   *Loader mode*, *Maskrom mode*, *no board*, or - when a Rockchip USB device is plugged in but no
   driver claims it - the hint to install the drivers. The image line shows what `upgrade_tool`
-  says about the selected image (chip, build time, entries). **Flash SoC** gets the board into
-  download mode in this order: already Loader / Maskrom (also the recovery path for a board that
-  does not boot) -> ADB device (`adb reboot loader`) -> a connected serial or SSH tab (the tab
-  asks, every time, whether to send `reboot loader` through it) -> otherwise it tells you to hold
-  MASKROM and plug the board in. It then waits (30 s by default) for Loader / Maskrom, runs
-  `upgrade_tool UF` with a progress bar, requires the line `Upgrade firmware ok`, waits for the
-  board to come back on ADB (60 s) and shows its kernel version and uptime. **Cancel** works
-  while waiting, never while `upgrade_tool` writes the flash.
+  says about the selected image (chip, build time, entries).
+
+  *Partitions* (v0.5.1) lists what the image holds, as SocToolKit's Download page does: the tab
+  unpacks it (`upgrade_tool EXF`, into `<image folder>/update.extracted`) and shows one row per
+  partition - a checkbox, the name, the image file, the flash offset, the partition size and the
+  image size. The offsets come from the flash layout (an `mtdparts=` string). First choice is the
+  image's own: its `env.img` (the U-Boot environment written with it) starts with the layout the
+  build was made for, and that is the layout the board uses after the flash. An image without one
+  falls back to the board's: the tab reads `/proc/cmdline` once from a running board it sees on ADB
+  and remembers it per board, and every flash reads it again before `adb reboot loader`. When both
+  are known and differ (a build with a changed partition layout), the image's is used and the log
+  shows both. The label ends with where the layout came from (*layout from the image* / *layout
+  from the board*); its tooltip shows the string. A row the layout does not have, or whose image
+  is larger than its partition, is unchecked and disabled with the reason as its tooltip; with
+  neither layout the label says *partition layout unknown: connect the board running once*.
+  **All** / **None** set the checkboxes; the label counts the checked rows and their size.
+
+  **Flash SoC** gets the board into download mode in this order: already Loader / Maskrom (also
+  the recovery path for a board that does not boot) -> ADB device (`adb reboot loader`) -> a
+  connected serial or SSH tab (the tab asks, every time, whether to send `reboot loader` through
+  it) -> otherwise it tells you to hold MASKROM and plug the board in. It then waits (30 s by
+  default) for Loader / Maskrom and writes:
+  - **Loader mode** (the normal case, after `adb reboot loader`): the checked partitions, one
+    `upgrade_tool WL <offset / 512> <image>` each in the image's order, then `RD` to restart the
+    board - the commands SocToolKit's Download page runs. Every image is checked against its
+    partition before the first byte is written; a write that fails stops the flash with
+    upgrade_tool's last lines. This runs no chip check, so it works with the Node board's U-Boot.
+  - **MASKROM mode**: the whole image with `upgrade_tool UF` as before (the partition checkboxes
+    do not apply; the log says so), requiring the line `Upgrade firmware ok`.
+
+  The progress bar follows the bytes written (or UF's own percentage); afterwards the tab waits
+  for the board to come back on ADB (60 s) and shows its kernel version and uptime. **Cancel**
+  works while waiting, never while `upgrade_tool` writes the flash.
 - **MCU (CC1310)** - pick a firmware package (`firmware-x.y.z.pkg`); the header and both CRC32s
   are checked and target, version and size are shown (a bad file is refused with the reason).
   **Read** asks the running MCU for its version and role through ADB; the role (**rx** or **tx**)
@@ -430,9 +456,10 @@ button. The tab has three sections and a log pane:
   changes only the role. The updater protocol (COBS framing, CRC16, the `fw_update.py` state
   machine and its retries) is implemented natively in C++ - nothing runs Python. The MCU path
   needs `rfmcu` on the SoC, so flash the SoC first.
-- **Pull & Flash** - pull (skipped when unchanged) -> Flash SoC -> wait for ADB -> if a package is
-  selected and its version differs from the running MCU version, Update MCU. It stops at the
-  first failure and says which step it was.
+- **Pull & Flash** - pull (skipped when unchanged) -> Flash SoC with every partition checked (in
+  Loader mode it stops before writing anything when one image does not fit) -> wait for ADB -> if
+  a package is selected and its version differs from the running MCU version, Update MCU. It stops
+  at the first failure and says which step it was.
 - **Log** - every command line that runs, the tools' output and the steps' narration, time
   stamped and without secrets (also in the System Log); *Save...* writes it to a text file.
 
@@ -440,15 +467,15 @@ While a flash runs the tab cannot be closed (the status bar says why) and quitti
 session actions such as Connect or Send File are disabled while the Firmware tab is the current
 tab. The tab is not restored on the next start like a port is.
 
-**One thing the board's U-Boot must have.** `upgrade_tool` (Windows v2.37 and Linux v2.26
+**Why Loader mode writes partitions (0.5.1).** `upgrade_tool UF` (Windows v2.37 and Linux v2.26
 alike) checks the chip id the loader reports against the one in `update.img` ("110E" for the
-RV1106B) before it writes anything. The U-Boot of rockchip-platforms up to `v1.3.0` answers that
-question with zeros in Loader mode, so `UF` stops at `Check Chip Fail` and nothing is written
-(the first real run on 2026-10-13 ended there; the board was reset back to its firmware). The
-one-line U-Boot change is in `docs/firmware-update/uboot-rockusb-chip-info.patch`; a board whose
-U-Boot has it, or a board in MASKROM mode (hold the key while plugging in), flashes through the
-tab as described above. Until then Rockchip's GUI tool (SocToolKit) is the only program that
-flashes this board in Loader mode.
+RV1106B) before it writes anything, and the U-Boot of rockchip-platforms up to `v1.3.0` answers
+that question with zeros in Loader mode: `UF` stops at `Check Chip Fail` (the first real run on
+2026-10-13 ended there). Writing partition by partition with `WL`, as SocToolKit does, has no such
+check, so the tab flashes these boards in Loader mode without any change to them. The one-line
+U-Boot change in `docs/firmware-update/uboot-rockusb-chip-info.patch` (the rockusb chip-info
+answer) is optional now: it only makes `UF` itself, and other tools that check the chip, work in
+Loader mode too.
 
 **Drivers (Windows).** The PC needs the Rockchip USB drivers once: the ADB driver for the running
 board and the rockusb driver for Loader / Maskrom mode. When a 2207:xxxx device is on the bus and
@@ -613,7 +640,7 @@ MainWindow (tabs, menus, status bar, System Log dock)
   │     └── SessionLogger
   └── FirmwareTab (v0.5, one)
         ├── ImagePuller          SshConnection: stat, download, history
-        ├── SocFlasher           RockchipTool (upgrade_tool) + AdbTool, UsbProbe
+        ├── SocFlasher           RockchipTool (upgrade_tool LD / EXF / WL / RD / UF) + AdbTool, UsbProbe
         └── McuLink + McuUpdater adb forward -> rfmcu bridge -> CC1310 (CcProtocol, CcPackage)
 Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender),
          HostKey, AuthPrompt, SshProfiles, RemoteFile (SFTP)
@@ -690,6 +717,8 @@ Windows). Per-user data files (quick commands, history) live in
 | Firmware: the SoC line says a Rockchip device is present but has no driver | Press **Install drivers** (or run `tools\DriverAssistant\DriverInstall.exe`, or tick the installer's driver task), then re-plug the board. |
 | Firmware: "board did not enter MASKROM/Loader within 30 s" | `adb reboot loader` did not take: send `reboot loader` from a serial / SSH tab (the *Node* quick command), or hold MASKROM and replug; the wait time is in *Preferences > Firmware*. |
 | Firmware: "upgrade_tool did not report success" | The message carries the last lines of its output (also in the log pane). Do not unplug during the write; run Flash SoC again - a board in Loader or Maskrom mode is flashed directly. |
+| Firmware: "partition layout unknown" | Loader mode needs a flash layout: the image's `env.img` has none, and no running board told its own yet. Boot the board (replug, or `upgrade_tool RD`), let the SoC line show it as an ADB device once, then flash again - or flash in MASKROM mode, which writes the whole image. |
+| Firmware: "... does not fit partition ..." / "writing <name> failed" | An image of the build is larger than its partition in the layout in use (with the board's layout: the build changed it and its `env.img` carries none - flash the whole image in MASKROM mode), or `upgrade_tool WL` failed (its last lines follow; replug the board and flash again - a board left in Loader mode is flashed directly). |
 | Firmware: the MCU step says "no rfmcu" or "no ADB board attached" | The CC1310 is reached through `rfmcu` on the SoC, so the SoC image must be `rockchip-platforms` `rv1106-bg2-main` v1.2.0 or later and the board must be back on ADB: flash the SoC first. |
 | Firmware (Linux): `upgrade_tool` cannot open the USB device | Install the udev rule: `sudo cp tools/88-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules`, then re-plug. |
 

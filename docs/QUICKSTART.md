@@ -68,10 +68,13 @@ Rockchip USB drivers must be installed once (the installer's optional driver tas
    size, time and `git describe` appear first; an unchanged image is not downloaded again. No
    network? **Use local image...** takes an `update.img` from disk. **Roll back** goes back to the
    previous pulled image.
-3. **SoC**: press **Flash SoC**. The tab reboots the board into Loader mode over ADB, runs
-   `upgrade_tool`, shows the progress, waits for the board to come back and prints its kernel
-   version and uptime. A board that does not boot: hold the MASKROM button while plugging it in -
-   the tab flashes it from Maskrom the same way. If it sees no board at all, it offers to send
+3. **SoC**: the *Partitions* table lists what the image holds (env, idblock, uboot, meta, boot,
+   rootfs, userdata), all checked; uncheck what you do not want to write (**All** / **None**).
+   Press **Flash SoC**. The tab takes the flash layout from the image (or the board), reboots the board into Loader mode over
+   ADB, writes the checked partitions one by one with `upgrade_tool` (as SocToolKit does), shows
+   the progress, waits for the board to come back and prints its kernel version and uptime. A
+   board that does not boot: hold the MASKROM button while plugging it in - the tab writes the
+   whole image from Maskrom. If it sees no board at all, it offers to send
    `reboot loader` through a connected serial / SSH tab (asks first). Do not unplug while the
    progress bar runs; Cancel only works while it is still waiting for the board.
 4. **MCU (CC1310)**: pick the `firmware-x.y.z.pkg` (the tab checks it and shows target, version and

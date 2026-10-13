@@ -505,12 +505,12 @@
 <context>
     <name>FirmwareTab</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+697"/>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+790"/>
         <source>Choose the Local Image Cache</source>
         <translation>Choose the Local Image Cache</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+53"/>
         <source>SSH: %1</source>
         <translation>SSH: %1</translation>
     </message>
@@ -535,7 +535,7 @@
         <translation>Pulling update.img: %1</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+51"/>
         <source>Flashing SoC: %1 %2 %</source>
         <translation>Flashing SoC: %1 %2 %</translation>
     </message>
@@ -631,12 +631,12 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+699"/>
+        <location line="+1067"/>
         <source>Pull</source>
         <translation>Pull</translation>
     </message>
     <message>
-        <location line="-698"/>
+        <location line="-1066"/>
         <source>Copy update.img from the build machine (skipped when it did not change)</source>
         <translation>Copy update.img from the build machine (skipped when it did not change)</translation>
     </message>
@@ -688,17 +688,67 @@
     </message>
     <message>
         <location line="+2"/>
-        <location line="+689"/>
+        <source>Partitions:</source>
+        <translation>Partitions:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>All</source>
+        <translation>All</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check every partition that can be written</source>
+        <translation>Check every partition that can be written</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>None</source>
+        <translation>None</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Uncheck every partition</source>
+        <translation>Uncheck every partition</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Partition</source>
+        <translation>Partition</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Image file</source>
+        <translation>Image file</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Offset</source>
+        <translation>Offset</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Size</source>
+        <translation>Size</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Image size</source>
+        <translation>Image size</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The partitions of the image: in Loader mode Flash SoC writes the checked ones (MASKROM mode writes the whole image)</source>
+        <translation>The partitions of the image: in Loader mode Flash SoC writes the checked ones (MASKROM mode writes the whole image)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+1047"/>
         <source>Flash SoC</source>
         <translation>Flash SoC</translation>
     </message>
     <message>
-        <location line="-688"/>
-        <source>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</source>
-        <translation>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="-1044"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
     </message>
@@ -759,23 +809,23 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+677"/>
+        <location line="+1034"/>
         <source>Update MCU</source>
         <translation>Update MCU</translation>
     </message>
     <message>
-        <location line="-676"/>
+        <location line="-1033"/>
         <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
         <translation>Send the package to the CC1310 through the board (needs a confirmed role)</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+678"/>
+        <location line="+1035"/>
         <source>Set role</source>
         <translation>Set role</translation>
     </message>
     <message>
-        <location line="-677"/>
+        <location line="-1034"/>
         <source>Store the selected role in the CC1310</source>
         <translation>Store the selected role in the CC1310</translation>
     </message>
@@ -820,12 +870,12 @@
         <translation>Ready</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+51"/>
         <source>Firmware</source>
         <translation>Firmware</translation>
     </message>
     <message>
-        <location line="+135"/>
+        <location line="+136"/>
         <source>file not found</source>
         <translation>file not found</translation>
     </message>
@@ -860,7 +910,7 @@
         <translation>Package %1: %2</translation>
     </message>
     <message>
-        <location line="+140"/>
+        <location line="+179"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>the SSH profile of the build machine no longer exists</translation>
     </message>
@@ -896,7 +946,7 @@
         <translation>previous: %1</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>upgrade_tool not found: no image details</source>
         <translation>upgrade_tool not found: no image details</translation>
     </message>
@@ -917,11 +967,88 @@
     </message>
     <message>
         <location line="+10"/>
+        <location line="+185"/>
         <source>no image selected</source>
         <translation>no image selected</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="-148"/>
+        <source>upgrade_tool not found</source>
+        <translation>upgrade_tool not found</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Partitions of %1: %2</source>
+        <translation>Partitions of %1: %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cannot list the partitions of %1: %2</source>
+        <translation>Cannot list the partitions of %1: %2</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <location line="+78"/>
+        <source>partition layout unknown: connect the board running once</source>
+        <translation>partition layout unknown: connect the board running once</translation>
+    </message>
+    <message>
+        <location line="-75"/>
+        <source>%1 is not in the board&apos;s partition layout</source>
+        <translation>%1 is not in the board&apos;s partition layout</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the package has no image file for %1</source>
+        <translation>the package has no image file for %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 (%2 bytes) does not fit the partition (%3 bytes)</source>
+        <translation>%1 (%2 bytes) does not fit the partition (%3 bytes)</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>missing</source>
+        <translation>missing</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>unpacking the image to list its partitions...</source>
+        <translation>unpacking the image to list its partitions...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cannot list the partitions: %1</source>
+        <translation>cannot list the partitions: %1</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>1 partition, %1 selected (%2)</source>
+        <translation>1 partition, %1 selected (%2)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 partitions, %2 selected (%3)</source>
+        <translation>%1 partitions, %2 selected (%3)</translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>Cannot read the flash layout of board %1: %2</source>
+        <translation>Cannot read the flash layout of board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
+        <translation>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash layout of board %1: %2</source>
+        <translation>Flash layout of board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>not checked yet</source>
         <translation>not checked yet</translation>
     </message>
@@ -966,7 +1093,7 @@
         <translation>unknown</translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+79"/>
         <source>upgrade_tool: %1</source>
         <translation>upgrade_tool: %1</translation>
     </message>
@@ -1048,7 +1175,7 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+350"/>
+        <location line="+386"/>
         <location line="+36"/>
         <location line="+210"/>
         <location line="+10"/>
@@ -1057,7 +1184,7 @@
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-618"/>
+        <location line="-654"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -1078,7 +1205,23 @@
         <translation>no image: pull one or choose a local image first</translation>
     </message>
     <message>
+        <location line="+13"/>
+        <location line="+21"/>
+        <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
+        <translation>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</translation>
+    </message>
+    <message>
+        <location line="-9"/>
+        <source>no partition is checked: check the ones to write (All checks every one)</source>
+        <translation>no partition is checked: check the ones to write (All checks every one)</translation>
+    </message>
+    <message>
         <location line="+6"/>
+        <source>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</source>
+        <translation>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Flashing %1</source>
         <translation>Flashing %1</translation>
     </message>
@@ -1123,7 +1266,7 @@
         <translation>Flashing SoC: reading the board information</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+50"/>
         <source>Firmware Update</source>
         <translation>Firmware Update</translation>
     </message>
@@ -1214,12 +1357,57 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>adb could not be started: %1</translation>
     </message>
     <message>
-        <location line="-1835"/>
+        <location line="-2673"/>
+        <source>to the end</source>
+        <translation>to the end</translation>
+    </message>
+    <message>
+        <location line="+373"/>
         <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
         <translation>Role %1 remembered from the last session: click it or press Read to confirm it</translation>
     </message>
     <message>
-        <location line="+1803"/>
+        <location line="+621"/>
+        <source>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</source>
+        <translation>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</translation>
+    </message>
+    <message>
+        <location line="+651"/>
+        <source>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</source>
+        <translation>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</translation>
+    </message>
+    <message>
+        <location line="+135"/>
+        <source>layout from the board</source>
+        <translation>layout from the board</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>layout from the image (the board&apos;s differs)</source>
+        <translation>layout from the image (the board&apos;s differs)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>layout from the image</source>
+        <translation>layout from the image</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Flash layout from the image&apos;s env.img: %1</source>
+        <translation>Flash layout from the image&apos;s env.img: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The board&apos;s layout: %1</source>
+        <translation>The board&apos;s layout: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash layout from the board: %1</source>
+        <translation>Flash layout from the board: %1</translation>
+    </message>
+    <message>
+        <location line="+846"/>
         <location line="+36"/>
         <source>adb did not answer in time</source>
         <translation>adb did not answer in time</translation>
@@ -1335,7 +1523,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>CC1310 firmware packages (*.pkg);;All files (*)</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+27"/>
         <source>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</source>
         <translation>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</translation>
     </message>
@@ -4071,7 +4259,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RkFirmwareInfo</name>
     <message>
-        <location filename="../src/firmware/RockchipTool.cpp" line="+162"/>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+169"/>
         <source>chip %1</source>
         <translation>chip %1</translation>
     </message>
@@ -4099,17 +4287,18 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+163"/>
+        <location line="+194"/>
         <source>no firmware image selected</source>
         <translation>no firmware image selected</translation>
     </message>
     <message>
         <location line="+8"/>
+        <location line="+221"/>
         <source>cannot read %1: %2</source>
         <translation>cannot read %1: %2</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="-219"/>
         <source>no firmware image at %1</source>
         <translation>no firmware image at %1</translation>
     </message>
@@ -4117,6 +4306,11 @@ Nothing is saved until you press OK.</translation>
         <location line="+8"/>
         <source>%1 is not a Rockchip update image (the RKFW magic is missing)</source>
         <translation>%1 is not a Rockchip update image (the RKFW magic is missing)</translation>
+    </message>
+    <message>
+        <location line="+204"/>
+        <source>no package-file in %1: the image was not unpacked</source>
+        <translation>no package-file in %1: the image was not unpacked</translation>
     </message>
 </context>
 <context>
@@ -4921,7 +5115,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+151"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+245"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -4936,7 +5130,7 @@ Nothing is saved until you press OK.</translation>
         <translation>  exit code %1</translation>
     </message>
     <message>
-        <location line="+53"/>
+        <location line="+82"/>
         <source>upgrade_tool could not be run: %1</source>
         <translation>upgrade_tool could not be run: %1</translation>
     </message>
@@ -4956,7 +5150,7 @@ Nothing is saved until you press OK.</translation>
         <translation>adb devices timed out</translation>
     </message>
     <message>
-        <location line="+55"/>
+        <location line="+287"/>
         <source>upgrade_tool not found: set its path in Preferences</source>
         <translation>upgrade_tool not found: set its path in Preferences</translation>
     </message>
@@ -4971,7 +5165,7 @@ Nothing is saved until you press OK.</translation>
         <translation>no tool runner</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+68"/>
         <source>cannot cancel while upgrade_tool writes the flash</source>
         <translation>cannot cancel while upgrade_tool writes the flash</translation>
     </message>
@@ -4981,7 +5175,8 @@ Nothing is saved until you press OK.</translation>
         <translation>stopped waiting for ADB; the image was already written</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="-181"/>
+        <location line="+189"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
@@ -5001,7 +5196,7 @@ Nothing is saved until you press OK.</translation>
         <translation>an unknown kernel</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+69"/>
         <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
         <translation>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</translation>
     </message>
@@ -5032,32 +5227,220 @@ Nothing is saved until you press OK.</translation>
         <translation>flashing %1 (%2 mode)</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+61"/>
         <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
         <translation>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="-461"/>
+        <location line="+489"/>
+        <location line="+229"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>cannot run upgrade_tool: %1</translation>
     </message>
     <message>
+        <location line="-1191"/>
+        <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
+        <translation>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</translation>
+    </message>
+    <message>
+        <location line="+432"/>
+        <source>cannot create the folder %1 to unpack the image in</source>
+        <translation>cannot create the folder %1 to unpack the image in</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Extracting</source>
+        <translation>Extracting</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>unpacking %1 timed out</source>
+        <translation>unpacking %1 timed out</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>unpacking %1 failed: %2</source>
+        <translation>unpacking %1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>exit code %1</source>
+        <translation>exit code %1</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>the image lists no partition images</source>
+        <translation>the image lists no partition images</translation>
+    </message>
+    <message>
         <location line="+7"/>
+        <source>layout from the image&apos;s env.img: %1</source>
+        <translation>layout from the image&apos;s env.img: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used. image: %1; board: %2</source>
+        <translation>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used. image: %1; board: %2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the image&apos;s env.img has an unreadable mtdparts (%1); using the board&apos;s layout</source>
+        <translation>the image&apos;s env.img has an unreadable mtdparts (%1); using the board&apos;s layout</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>%1 partition images, %2 in the layout</source>
+        <translation>%1 partition images, %2 in the layout</translation>
+    </message>
+    <message>
+        <location line="+192"/>
+        <source>partition layout of the board: %1</source>
+        <translation>partition layout of the board: %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>the board&apos;s /proc/cmdline has no mtdparts; using the layout remembered for it: %1</source>
+        <translation>the board&apos;s /proc/cmdline has no mtdparts; using the layout remembered for it: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the board&apos;s /proc/cmdline has no mtdparts</source>
+        <translation>the board&apos;s /proc/cmdline has no mtdparts</translation>
+    </message>
+    <message>
+        <location line="+141"/>
+        <source>MASKROM mode: writing the whole image with upgrade_tool UF</source>
+        <translation>MASKROM mode: writing the whole image with upgrade_tool UF</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the partition selection (%1) is ignored: UF writes every partition</source>
+        <translation>the partition selection (%1) is ignored: UF writes every partition</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Loader mode: writing partition by partition with upgrade_tool WL, as SocToolKit&apos;s Download page does (no chip check)</source>
+        <translation>Loader mode: writing partition by partition with upgrade_tool WL, as SocToolKit&apos;s Download page does (no chip check)</translation>
+    </message>
+    <message>
+        <location line="+79"/>
         <source>upgrade_tool did not report success: %1</source>
         <translation>upgrade_tool did not report success: %1</translation>
     </message>
     <message>
         <location line="+1"/>
+        <location line="+268"/>
         <source>no output</source>
         <translation>no output</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-265"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+28"/>
+        <source>the image changed while it was being unpacked; flash again</source>
+        <translation>the image changed while it was being unpacked; flash again</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>waiting for the image to be unpacked</source>
+        <translation>waiting for the image to be unpacked</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>flash layout in use (from the image&apos;s env.img): %1</source>
+        <translation>flash layout in use (from the image&apos;s env.img): %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>flash layout in use (from the board): %1</source>
+        <translation>flash layout in use (from the board): %1</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>skipping %1: not selected</source>
+        <translation>skipping %1: not selected</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>skipping %1: not in the board&apos;s partition layout</source>
+        <translation>skipping %1: not in the board&apos;s partition layout</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image of partition %1 is missing: %2</source>
+        <translation>the image of partition %1 is missing: %2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>skipping %1: the package has no image file for it</source>
+        <translation>skipping %1: the package has no image file for it</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</source>
+        <translation>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>partition %1 does not start on a 512-byte sector (offset %2)</source>
+        <translation>partition %1 does not start on a 512-byte sector (offset %2)</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>nothing to write: no selected partition image is in the layout</source>
+        <translation>nothing to write: no selected partition image is in the layout</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>writing %1 of %2 partitions (%3 bytes): %4</source>
+        <translation>writing %1 of %2 partitions (%3 bytes): %4</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Writing %1 (%2 of %3)</source>
+        <translation>Writing %1 (%2 of %3)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</source>
+        <translation>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>writing %1 failed: %2</source>
+        <translation>writing %1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output (exit code %1)</source>
+        <translation>no output (exit code %1)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Resetting the board</source>
+        <translation>Resetting the board</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>the partitions were written, but upgrade_tool RD did not reset the board (%1); replug it</source>
+        <translation>the partitions were written, but upgrade_tool RD did not reset the board (%1); replug it</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>partitions written; the board restarts</source>
+        <translation>partitions written; the board restarts</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>partitions written; board reset</source>
+        <translation>partitions written; board reset</translation>
+    </message>
+    <message>
+        <location line="+9"/>
         <source>waiting for the board to come back on ADB (up to %1 s)</source>
         <translation>waiting for the board to come back on ADB (up to %1 s)</translation>
     </message>

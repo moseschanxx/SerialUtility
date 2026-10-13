@@ -504,12 +504,12 @@
 <context>
     <name>FirmwareTab</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+697"/>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+790"/>
         <source>Choose the Local Image Cache</source>
         <translation>选择本地镜像缓存</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+53"/>
         <source>SSH: %1</source>
         <translation>SSH：%1</translation>
     </message>
@@ -534,7 +534,7 @@
         <translation>正在拉取 update.img：%1</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+51"/>
         <source>Flashing SoC: %1 %2 %</source>
         <translation>正在刷写 SoC：%1 %2 %</translation>
     </message>
@@ -630,12 +630,12 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+699"/>
+        <location line="+1067"/>
         <source>Pull</source>
         <translation>拉取</translation>
     </message>
     <message>
-        <location line="-698"/>
+        <location line="-1066"/>
         <source>Copy update.img from the build machine (skipped when it did not change)</source>
         <translation>从构建机复制 update.img（未变化时跳过）</translation>
     </message>
@@ -687,17 +687,67 @@
     </message>
     <message>
         <location line="+2"/>
-        <location line="+689"/>
+        <source>Partitions:</source>
+        <translation>分区：</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>All</source>
+        <translation>全部</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check every partition that can be written</source>
+        <translation>勾选所有可写入的分区</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>None</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Uncheck every partition</source>
+        <translation>取消勾选所有分区</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Partition</source>
+        <translation>分区</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Image file</source>
+        <translation>镜像文件</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Offset</source>
+        <translation>偏移</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Size</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Image size</source>
+        <translation>镜像大小</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The partitions of the image: in Loader mode Flash SoC writes the checked ones (MASKROM mode writes the whole image)</source>
+        <translation>镜像中的分区：Loader 模式下“刷写 SoC”只写入勾选的分区（MASKROM 模式写入整个镜像）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+1047"/>
         <source>Flash SoC</source>
         <translation>刷写 SoC</translation>
     </message>
     <message>
-        <location line="-688"/>
-        <source>Write the image to the Rockchip SoC over the USB-C cable (upgrade_tool UF)</source>
-        <translation>通过 USB-C 线将镜像写入 Rockchip SoC（upgrade_tool UF）</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="-1044"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
@@ -758,23 +808,23 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+677"/>
+        <location line="+1034"/>
         <source>Update MCU</source>
         <translation>更新 MCU</translation>
     </message>
     <message>
-        <location line="-676"/>
+        <location line="-1033"/>
         <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
         <translation>通过开发板将固件包发送到 CC1310（需要已确认的角色）</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+678"/>
+        <location line="+1035"/>
         <source>Set role</source>
         <translation>设置角色</translation>
     </message>
     <message>
-        <location line="-677"/>
+        <location line="-1034"/>
         <source>Store the selected role in the CC1310</source>
         <translation>将所选角色写入 CC1310</translation>
     </message>
@@ -819,12 +869,12 @@
         <translation>就绪</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+51"/>
         <source>Firmware</source>
         <translation>固件</translation>
     </message>
     <message>
-        <location line="+135"/>
+        <location line="+136"/>
         <source>file not found</source>
         <translation>找不到文件</translation>
     </message>
@@ -859,7 +909,7 @@
         <translation>固件包 %1：%2</translation>
     </message>
     <message>
-        <location line="+140"/>
+        <location line="+179"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>构建机的 SSH 配置文件已不存在</translation>
     </message>
@@ -895,7 +945,7 @@
         <translation>上一版：%1</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>upgrade_tool not found: no image details</source>
         <translation>找不到 upgrade_tool：无法显示镜像详情</translation>
     </message>
@@ -916,11 +966,88 @@
     </message>
     <message>
         <location line="+10"/>
+        <location line="+185"/>
         <source>no image selected</source>
         <translation>未选择镜像</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="-148"/>
+        <source>upgrade_tool not found</source>
+        <translation>未找到 upgrade_tool</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Partitions of %1: %2</source>
+        <translation>%1 的分区：%2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cannot list the partitions of %1: %2</source>
+        <translation>无法列出 %1 的分区：%2</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <location line="+78"/>
+        <source>partition layout unknown: connect the board running once</source>
+        <translation>分区布局未知：请先连接正常运行的开发板一次</translation>
+    </message>
+    <message>
+        <location line="-75"/>
+        <source>%1 is not in the board&apos;s partition layout</source>
+        <translation>%1 不在开发板的分区布局中</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the package has no image file for %1</source>
+        <translation>固件包中没有 %1 的镜像文件</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 (%2 bytes) does not fit the partition (%3 bytes)</source>
+        <translation>%1（%2 字节）超出分区大小（%3 字节）</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>missing</source>
+        <translation>缺失</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>unpacking the image to list its partitions...</source>
+        <translation>正在解包镜像以列出分区...</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cannot list the partitions: %1</source>
+        <translation>无法列出分区：%1</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>1 partition, %1 selected (%2)</source>
+        <translation>1 个分区，已选 %1 个（%2）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 partitions, %2 selected (%3)</source>
+        <translation>%1 个分区，已选 %2 个（%3）</translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>Cannot read the flash layout of board %1: %2</source>
+        <translation>无法读取开发板 %1 的闪存布局：%2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
+        <translation>开发板 %1 未提供闪存布局（/proc/cmdline 中没有 mtdparts）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash layout of board %1: %2</source>
+        <translation>开发板 %1 的闪存布局：%2</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>not checked yet</source>
         <translation>尚未检测</translation>
     </message>
@@ -965,7 +1092,7 @@
         <translation>未知</translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+79"/>
         <source>upgrade_tool: %1</source>
         <translation>upgrade_tool：%1</translation>
     </message>
@@ -1047,7 +1174,7 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+350"/>
+        <location line="+386"/>
         <location line="+36"/>
         <location line="+210"/>
         <location line="+10"/>
@@ -1056,7 +1183,7 @@
         <translation>已取消</translation>
     </message>
     <message>
-        <location line="-618"/>
+        <location line="-654"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>与 %1 的连接已关闭</translation>
@@ -1077,7 +1204,23 @@
         <translation>没有镜像：请先拉取或选择本地镜像</translation>
     </message>
     <message>
+        <location line="+13"/>
+        <location line="+21"/>
+        <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
+        <translation>分区：镜像中的全部分区（Loader 模式逐个写入；MASKROM 模式写入整个镜像）</translation>
+    </message>
+    <message>
+        <location line="-9"/>
+        <source>no partition is checked: check the ones to write (All checks every one)</source>
+        <translation>未勾选任何分区：请勾选要写入的分区（“全部”会勾选所有分区）</translation>
+    </message>
+    <message>
         <location line="+6"/>
+        <source>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</source>
+        <translation>已勾选的分区：%1（Loader 模式逐个写入；MASKROM 模式写入整个镜像）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Flashing %1</source>
         <translation>正在刷写 %1</translation>
     </message>
@@ -1122,7 +1265,7 @@
         <translation>正在刷写 SoC：正在读取开发板信息</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+50"/>
         <source>Firmware Update</source>
         <translation>固件更新</translation>
     </message>
@@ -1213,12 +1356,57 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>无法启动 adb：%1</translation>
     </message>
     <message>
-        <location line="-1835"/>
+        <location line="-2673"/>
+        <source>to the end</source>
+        <translation>直到末尾</translation>
+    </message>
+    <message>
+        <location line="+373"/>
         <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
         <translation>已记住上次会话的角色 %1：请点击该角色或按“读取”进行确认</translation>
     </message>
     <message>
-        <location line="+1803"/>
+        <location line="+621"/>
+        <source>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</source>
+        <translation>通过 USB-C 线缆将镜像写入 Rockchip SoC：Loader 模式写入勾选的分区，MASKROM 模式写入整个镜像</translation>
+    </message>
+    <message>
+        <location line="+651"/>
+        <source>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</source>
+        <translation>闪存布局尚未知：镜像中没有布局，开发板正常运行（ADB）时会读取；MASKROM 模式不需要布局</translation>
+    </message>
+    <message>
+        <location line="+135"/>
+        <source>layout from the board</source>
+        <translation>布局来自开发板</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>layout from the image (the board&apos;s differs)</source>
+        <translation>布局来自镜像（与开发板的不同）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>layout from the image</source>
+        <translation>布局来自镜像</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Flash layout from the image&apos;s env.img: %1</source>
+        <translation>闪存布局来自镜像的 env.img：%1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The board&apos;s layout: %1</source>
+        <translation>开发板的布局：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash layout from the board: %1</source>
+        <translation>闪存布局来自开发板：%1</translation>
+    </message>
+    <message>
+        <location line="+846"/>
         <location line="+36"/>
         <source>adb did not answer in time</source>
         <translation>adb 未能及时响应</translation>
@@ -1334,7 +1522,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>CC1310 固件包 (*.pkg);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+27"/>
         <source>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</source>
         <translation>缺少 Rockchip 驱动安装程序（%1）；请手动安装 DriverAssistant</translation>
     </message>
@@ -4060,7 +4248,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>RkFirmwareInfo</name>
     <message>
-        <location filename="../src/firmware/RockchipTool.cpp" line="+162"/>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+169"/>
         <source>chip %1</source>
         <translation>芯片 %1</translation>
     </message>
@@ -4088,17 +4276,18 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+163"/>
+        <location line="+194"/>
         <source>no firmware image selected</source>
         <translation>未选择固件镜像</translation>
     </message>
     <message>
         <location line="+8"/>
+        <location line="+221"/>
         <source>cannot read %1: %2</source>
         <translation>无法读取 %1：%2</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="-219"/>
         <source>no firmware image at %1</source>
         <translation>%1 处没有固件镜像</translation>
     </message>
@@ -4106,6 +4295,11 @@ Nothing is saved until you press OK.</source>
         <location line="+8"/>
         <source>%1 is not a Rockchip update image (the RKFW magic is missing)</source>
         <translation>%1 不是 Rockchip 更新镜像（缺少 RKFW 标识）</translation>
+    </message>
+    <message>
+        <location line="+204"/>
+        <source>no package-file in %1: the image was not unpacked</source>
+        <translation>%1 中没有 package-file：镜像未被解包</translation>
     </message>
 </context>
 <context>
@@ -4910,7 +5104,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+151"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+245"/>
         <source>  could not run: %1</source>
         <translation>  无法运行：%1</translation>
     </message>
@@ -4925,7 +5119,7 @@ Nothing is saved until you press OK.</source>
         <translation>  退出码 %1</translation>
     </message>
     <message>
-        <location line="+53"/>
+        <location line="+82"/>
         <source>upgrade_tool could not be run: %1</source>
         <translation>无法运行 upgrade_tool：%1</translation>
     </message>
@@ -4945,7 +5139,7 @@ Nothing is saved until you press OK.</source>
         <translation>adb devices 超时</translation>
     </message>
     <message>
-        <location line="+55"/>
+        <location line="+287"/>
         <source>upgrade_tool not found: set its path in Preferences</source>
         <translation>找不到 upgrade_tool：请在首选项中设置其路径</translation>
     </message>
@@ -4960,7 +5154,7 @@ Nothing is saved until you press OK.</source>
         <translation>没有工具运行器</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+68"/>
         <source>cannot cancel while upgrade_tool writes the flash</source>
         <translation>upgrade_tool 写入闪存期间无法取消</translation>
     </message>
@@ -4970,7 +5164,8 @@ Nothing is saved until you press OK.</source>
         <translation>已停止等待 ADB；镜像已写入</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="-181"/>
+        <location line="+189"/>
         <source>cancelled</source>
         <translation>已取消</translation>
     </message>
@@ -4990,7 +5185,7 @@ Nothing is saved until you press OK.</source>
         <translation>未知内核</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+69"/>
         <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
         <translation>在 ADB、MASKROM 或 Loader 模式下都找不到开发板：请通过会话发送 &apos;reboot loader&apos;，或按住 MASKROM 并重新插拔数据线</translation>
     </message>
@@ -5021,32 +5216,220 @@ Nothing is saved until you press OK.</source>
         <translation>正在刷写 %1（%2 模式）</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+61"/>
         <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
         <translation>upgrade_tool 已 %1 分钟没有输出；它仍保持运行，因为中途停止需要通过 MASKROM 恢复（如果它确实卡死，请手动结束 upgrade_tool 进程）</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="-461"/>
+        <location line="+489"/>
+        <location line="+229"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>无法运行 upgrade_tool：%1</translation>
     </message>
     <message>
+        <location line="-1191"/>
+        <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
+        <translation>分区布局未知：请先让开发板正常启动一次以便通过 ADB 读取，或在 MASKROM 模式下刷写</translation>
+    </message>
+    <message>
+        <location line="+432"/>
+        <source>cannot create the folder %1 to unpack the image in</source>
+        <translation>无法创建用于解包镜像的文件夹 %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Extracting</source>
+        <translation>正在解包</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>unpacking %1 timed out</source>
+        <translation>解包 %1 超时</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>unpacking %1 failed: %2</source>
+        <translation>解包 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>exit code %1</source>
+        <translation>退出码 %1</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>the image lists no partition images</source>
+        <translation>镜像中没有列出任何分区镜像</translation>
+    </message>
+    <message>
         <location line="+7"/>
+        <source>layout from the image&apos;s env.img: %1</source>
+        <translation>布局来自镜像的 env.img：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used. image: %1; board: %2</source>
+        <translation>警告：镜像的闪存布局与开发板的不同；使用镜像的布局。镜像：%1；开发板：%2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>the image&apos;s env.img has an unreadable mtdparts (%1); using the board&apos;s layout</source>
+        <translation>镜像的 env.img 中的 mtdparts 无法解析（%1）；使用开发板的布局</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>%1 partition images, %2 in the layout</source>
+        <translation>%1 个分区镜像，%2 个在布局中</translation>
+    </message>
+    <message>
+        <location line="+192"/>
+        <source>partition layout of the board: %1</source>
+        <translation>开发板的分区布局：%1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>the board&apos;s /proc/cmdline has no mtdparts; using the layout remembered for it: %1</source>
+        <translation>开发板的 /proc/cmdline 中没有 mtdparts；使用为其记住的布局：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the board&apos;s /proc/cmdline has no mtdparts</source>
+        <translation>开发板的 /proc/cmdline 中没有 mtdparts</translation>
+    </message>
+    <message>
+        <location line="+141"/>
+        <source>MASKROM mode: writing the whole image with upgrade_tool UF</source>
+        <translation>MASKROM 模式：使用 upgrade_tool UF 写入整个镜像</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the partition selection (%1) is ignored: UF writes every partition</source>
+        <translation>已忽略分区选择（%1）：UF 会写入所有分区</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Loader mode: writing partition by partition with upgrade_tool WL, as SocToolKit&apos;s Download page does (no chip check)</source>
+        <translation>Loader 模式：与 SocToolKit 的下载页面一样，使用 upgrade_tool WL 逐个分区写入（不做芯片校验）</translation>
+    </message>
+    <message>
+        <location line="+79"/>
         <source>upgrade_tool did not report success: %1</source>
         <translation>upgrade_tool 未报告成功：%1</translation>
     </message>
     <message>
         <location line="+1"/>
+        <location line="+268"/>
         <source>no output</source>
         <translation>无输出</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-265"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok（固件升级成功）</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+28"/>
+        <source>the image changed while it was being unpacked; flash again</source>
+        <translation>解包期间镜像发生了变化；请重新刷写</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>waiting for the image to be unpacked</source>
+        <translation>正在等待镜像解包完成</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>flash layout in use (from the image&apos;s env.img): %1</source>
+        <translation>使用的闪存布局（来自镜像的 env.img）：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>flash layout in use (from the board): %1</source>
+        <translation>使用的闪存布局（来自开发板）：%1</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>skipping %1: not selected</source>
+        <translation>跳过 %1：未选择</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>skipping %1: not in the board&apos;s partition layout</source>
+        <translation>跳过 %1：不在开发板的分区布局中</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image of partition %1 is missing: %2</source>
+        <translation>分区 %1 的镜像缺失：%2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>skipping %1: the package has no image file for it</source>
+        <translation>跳过 %1：固件包中没有它的镜像文件</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</source>
+        <translation>%1（%2 字节）超出分区 %3 的大小（%4 字节）</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>partition %1 does not start on a 512-byte sector (offset %2)</source>
+        <translation>分区 %1 的起始位置未对齐 512 字节扇区（偏移 %2）</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>nothing to write: no selected partition image is in the layout</source>
+        <translation>没有可写入的内容：所选分区镜像均不在布局中</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>writing %1 of %2 partitions (%3 bytes): %4</source>
+        <translation>正在写入 %2 个分区中的 %1 个（%3 字节）：%4</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Writing %1 (%2 of %3)</source>
+        <translation>正在写入 %1（第 %2 个，共 %3 个）</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>writing %1: %2 (%3 bytes) at sector %4 (offset 0x%5)</source>
+        <translation>正在写入 %1：%2（%3 字节），起始扇区 %4（偏移 0x%5）</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>writing %1 failed: %2</source>
+        <translation>写入 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output (exit code %1)</source>
+        <translation>无输出（退出码 %1）</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Resetting the board</source>
+        <translation>正在复位开发板</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>the partitions were written, but upgrade_tool RD did not reset the board (%1); replug it</source>
+        <translation>分区已写入，但 upgrade_tool RD 未能复位开发板（%1）；请重新插拔开发板</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>partitions written; the board restarts</source>
+        <translation>分区已写入；开发板正在重启</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>partitions written; board reset</source>
+        <translation>分区已写入；开发板已复位</translation>
+    </message>
+    <message>
+        <location line="+9"/>
         <source>waiting for the board to come back on ADB (up to %1 s)</source>
         <translation>正在等待开发板重新出现在 ADB 上（最多 %1 秒）</translation>
     </message>
