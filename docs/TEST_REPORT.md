@@ -333,8 +333,8 @@ Final numbers on the tagged tree:
 
 | Platform | Suites | Result |
 |---|---|---|
-| Windows MSVC 2022 Release (`build\Release`) | 28 | FINAL_MSVC |
-| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`) | 28 | FINAL_GCC |
+| Windows MSVC 2022 Release (`build\Release`, 679b7f2) | 28 | 100 % passed (375 s); 0 compiler warnings in project files at `/W4 /WX` |
+| Ubuntu 22.04 WSL GCC 11 `-Werror`, Qt 6.8.3 (`~/build/su05`, 679b7f2) | 28 | 100 % passed; 0 warnings, 0 errors (16:56 - 17:05) |
 
 Known limitations: a `WL` cannot be cancelled once it writes (like `UF`); the U-Boot chip-info change is only
 needed for `UF` (MASKROM mode) now; the CC1310 package re-flash is still not covered on hardware (no 0.8.2
