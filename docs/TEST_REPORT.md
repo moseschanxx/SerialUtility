@@ -275,10 +275,11 @@ packaging-docs), integration on both compilers, a read-only review, a fix round,
 | GCC 11 `-Werror` (WSL Ubuntu 22.04, Qt 6.8.3) | two GCC-only defects found and fixed before CI (an in-class `= Options()` default argument; stdin written while a `QProcess` is still Starting); full tree 0 warnings; see the final table |
 | Windows MSVC 2022 Release | full tree 0 warnings at `/W4`; see the final table |
 
-After the fix round the two real-board cases were started again on the final build: the board had been
-unplugged from this PC meanwhile (no 2207 device on the bus), so both ended at "no board"; the log of that
-attempt shows the fixed Read path (`killall rfmcu` before `rfmcu cmd version`). The results above are from
-the runs at 12:51-12:58 on the pre-fix tab.
+After the fix round both real-board cases were run again on the released build (the board had been unplugged
+for a while and was plugged back at 14:2x): the tools probe passed (ADB device, bridge, `version=0.8.2 role=rx`),
+the Firmware tab run passed (Read with `killall rfmcu` first, pull from the VM with the host-key and password
+dialogs, Set role rx->rx: power logged, bootloader entry, `COMPLETE`, restart banner, 12 s in all). The loader's
+chip id read `0 0 0 ...` again (the U-Boot change is not on the board yet), so the SoC flash was not retried.
 
 Not re-flashed: the CC1310 runs 0.8.2 and the only 0.8.2 package disappeared from the local CC1310 checkout
 while the run was prepared (a branch switch there), so the real MCU test used Set role instead of Update MCU;
