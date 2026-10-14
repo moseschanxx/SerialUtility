@@ -62,6 +62,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "installdrivers"; Description: "Install the Rockchip USB drivers (DriverAssistant)"; GroupDescription: "Firmware tab (Node board):"; Flags: unchecked; Check: IsAdminInstallMode
 
 [Files]
+; Everything the deploy put into bin\: both executables (BuildAI-SerialUtility.exe and the su-fw.exe
+; console tool, v0.6.0), the Qt DLLs and plugins, libssh, libcrypto and tools\.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\VERSION.txt"; DestDir: "{app}"; Flags: ignoreversion

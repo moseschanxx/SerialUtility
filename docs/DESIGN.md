@@ -680,6 +680,93 @@ table, All / None, the layout read once from a board, the layout from the image,
 ignoring them, Pull & Flash writing every row) and `tst_quickcommand` (the
 Node group and the version-1 migration of 4.3).
 
+### 4.12 Command-line interface: `su-fw` (v0.6.0)
+
+Plan: `docs/firmware-update/CLI_PLAN.md`. Moses, 2026-10-13: users update the Node board by hand
+from the app, and an AI agent must be able to run the same update in the background from a
+command shell. `su-fw <command> [options]` does what the Firmware tab does, with the log on
+stdout and the result as the exit code; `su-fw --help` / `su-fw <command> --help` are the
+reference (written for an agent: every option, the exit codes, two examples) and README
+"Command line (`su-fw`)" the user guide.
+
+**Why a console program of its own.** The GUI executable is linked for the Windows subsystem: it
+has no console, cannot write to the shell that started it, and the shell does not wait for it. A
+GUI that relays to a console child would be two processes for nothing. So `su_fw` is a second
+executable (`OUTPUT_NAME su-fw`, no `WIN32` keyword) that links `su_core` only - `QCoreApplication`,
+no widgets, no platform plugin needed - and is installed next to the GUI (`bin/`, the same
+`tools/`), deployed by its own run of the Qt deploy script, and carried by the installer, the zip
+and the tarball.
+
+**The split.**
+
+| Layer | Where | What |
+|---|---|---|
+| `FirmwareJob` | `src/firmware/FirmwareJob.{h,cpp}` (0.5.1, `su_core`) | The chain: operations, steps, rules, messages, the callbacks for the decisions. Shared with the tab; unchanged by 0.6.0. |
+| `FirmwareCli` | `src/firmware/FirmwareCli.{h,cpp}` (`su_core`, UI-free) | The command line: `int run(arguments, out, err)` parses one command (a `QCommandLineParser` per command), checks every input before anything runs (usage errors exit 2 on `err`), configures a fresh `FirmwareJob` from the options and the app's settings, answers its callbacks, runs one operation on a local event loop until `operationFinished()`, writes the output and maps the result to the exit code. Hooks for the tests and `main.cpp`: the `ToolRunner`, the stdin line reader (and whether it is a terminal), the profile store, fixed tool paths, a job-setup callback; `interrupt()` for Ctrl+C. |
+| `main.cpp` | `src/cli/main.cpp` | The process: `QCoreApplication` with the app's organisation / application names (so `AppSettings`, the SSH profiles and `SecretStore` are the GUI's), stdout / stderr / stdin, the terminal's echo while a password is typed, `SIGINT` / `SIGTERM` (/ `SIGBREAK`) counted by the handler and passed to `interrupt()` by a 100 ms timer, the `buildai.*` logging categories muted (the job mirrors every line to `lcFirmware`; `QT_LOGGING_RULES` turns them back on), UTF-8 console output on Windows. |
+
+**Commands** (`FirmwareCli::commands()`): `status` (the device status query, `Board: <the tab's
+status line>`; a running board's layout is read once and stored like the tab does; `--mcu` adds
+`readMcuInfo()`), `partitions` (the job's plan of an image: the tab's table as text or JSON rows; the
+board is not touched), `pull`, `flash-soc` (`--all` or `--partitions` is required; the plan is made
+first so that an unknown name, a row that cannot be written, or - with `--all` - an image that does
+not fit is refused before the board is touched; `--no-wait` turns the ADB wait off), `mcu-info`,
+`mcu-update` (`--role` required: never guessed), `mcu-set-role`, `pull-flash` (`pullAndFlash()`;
+`--role` only for an MCU that cannot report one). The MCU commands query the board first and exit 3
+unless it is running on ADB. Common: `--tools DIR`, `--log FILE`, `--json`, `--quiet`, `--timeout S`,
+`--yes`.
+
+**Inputs from the app.** Tool paths as the tab (`ToolLocator` with the Preferences overrides; or
+`--tools DIR`), the Loader / ADB waits, the cache folder, `git describe`, the extra files, the SSH
+defaults (known_hosts, identity, terminal type, keep-alive), the tab's last build machine and its
+remote folder as defaults for `--target` / `--remote-folder`, the flash layouts per board
+(`setLayoutProvider()` and `mtdPartsRead()` -> `AppSettings::firmwareMtdParts()`, exactly the tab's
+wiring). The profile store is loaded but never saved, the source target and folders are not written
+back: an agent's run does not change what the tab shows next time, except the layout it learnt.
+
+**Decisions.** Host key: refused, logged with the fingerprint and the way out; `--accept-host-key`
+accepts and remembers an unknown key (`accept-new`), never a changed one. Password / passphrase:
+answered once from `--password-env VAR` or `--password-stdin` (asked again = refused, exit 4);
+without either the job's headless default ("authentication failed: nobody answered ...") after
+SecretStore's saved secret. On a terminal without `--yes` the questions are asked on stderr (the
+password without echo) instead. Download mode: no session to send `reboot loader` through, so the
+job's default - the MASKROM instructions and the flasher's wait; a running board is rebooted into
+Loader mode over ADB by the flasher itself, as in the tab, with no question (CLI_PLAN "Ask Moses":
+decided yes). Secrets never appear in any output: not the password, not the name of the variable,
+not a stray positional argument (usage errors do not echo it).
+
+**Output.** Text: `HH:MM:SS text`, the job's lines split like the tab's pane, upgrade_tool's raw
+lines without its `(nn%)` progress (the job's `progress()` every 10 % instead), the command's own
+lines, last `su-fw: exit <code> (<meaning>): <message>`. `--json`: one object per line, fields in
+the order `time` (ISO 8601 with offset), `step` (the job's step, else the command), `event`
+(`log` / `progress` / `step` / `done`), `text`, `percent`, `ok`, `exit`, then the command's results
+on the `done` line. `--log FILE` appends the same lines (also with `--quiet`). English only:
+the output is read by scripts, and the CLI's help is not translated; `FirmwareCli` has no `tr()`
+strings.
+
+**Exit codes** (`FirmwareCli::ExitCode`): 0 done; 1 failed; 2 usage; 3 no board / wrong mode
+(the flasher's "board did not enter MASKROM/Loader", an MCU step without an ADB board, the MCU
+commands' status check, `status` without a board); 4 SSH (the pull failed and the connection never
+reached Connected); 5 `--timeout` or Ctrl+C.
+
+**Ctrl+C and the write in progress.** `interrupt()` and `--timeout` call `FirmwareJob::cancel()`.
+The job refuses while upgrade_tool writes the flash (logged); su-fw remembers the request and
+cancels when `cancellableChanged(true)` comes (the ADB wait after the write), so the result is 5 and
+the write was never cut. A terminal delivers Ctrl+C to every process attached to it, upgrade_tool
+included, so `main.cpp` starts the tools through `ShieldedToolRunner`: a `ProcessToolRunner` that
+ignores Ctrl+C for the moment a tool is created (Windows `SetConsoleCtrlHandler(nullptr, TRUE)`,
+POSIX `SIG_IGN`), which the child inherits - upgrade_tool and adb never see the keystroke; su-fw
+stops them itself where the job allows it.
+
+**Tests.** `tst_firmwarecli` (57 cases) drives `FirmwareCli::run()` in-process on the fixtures of
+`tst_firmwarejob` (`FakeToolRunner`, `TestSshServer` via `BuildMachine`, `FakeMcuServer`): the help of
+every command (every option explained, the exit codes, two examples), usage errors on stderr (and
+no secret echoed), every command's happy path, `--json` lines that parse and carry their fields,
+no board (3), host key / password / unreachable (4), a failing `WL` with upgrade_tool's tail (1),
+`--timeout` and `interrupt()` (5, also during a write), `--partitions` exactly / `--all`,
+`pull-flash` updating the MCU only when the version differs, `--log` and `--quiet`, and the built
+`su-fw` executable through `QProcess` (`--help`, `--version`, a usage error).
+
 ## 5. Build, run, test
 
 ```powershell

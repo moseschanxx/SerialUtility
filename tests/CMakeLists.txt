@@ -83,7 +83,13 @@ target_link_libraries(tst_imagepuller PRIVATE su_testsupport)
 # in-process SSH server - what the Firmware tab and the su-fw console tool both drive.
 su_add_test(tst_firmwarejob       tst_firmwarejob.cpp)
 target_link_libraries(tst_firmwarejob PRIVATE su_testsupport)
-set_tests_properties(tst_mcuupdater tst_imagepuller tst_firmwarejob PROPERTIES TIMEOUT 600)
+# su-fw (v0.6.0), the console tool on top of FirmwareJob: FirmwareCli in-process on the same fakes,
+# plus the built su-fw executable itself through QProcess (--help, --version, a usage error).
+su_add_test(tst_firmwarecli       tst_firmwarecli.cpp)
+target_link_libraries(tst_firmwarecli PRIVATE su_testsupport)
+add_dependencies(tst_firmwarecli su_fw)
+target_compile_definitions(tst_firmwarecli PRIVATE SU_FW_EXECUTABLE="$<TARGET_FILE:su_fw>")
+set_tests_properties(tst_mcuupdater tst_imagepuller tst_firmwarejob tst_firmwarecli PROPERTIES TIMEOUT 600)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

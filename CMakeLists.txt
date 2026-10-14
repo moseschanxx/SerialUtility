@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "BuildAI Serial Utility - a serial-port terminal for Rockchip Linux boards and MCU shells"
     HOMEPAGE_URL "https://build.ai"
     LANGUAGES CXX)
@@ -227,7 +227,8 @@ set(SU_CORE_SOURCES
     src/ssh/SshWorker.cpp
 
     # Firmware tab core (v0.5): external tools, Rockchip flashing, the CC1310 updater, the image pull,
-    # and (v0.5.1) FirmwareJob, the whole chain without widgets
+    # (v0.5.1) FirmwareJob, the whole chain without widgets, and (v0.6.0) FirmwareCli, the su-fw
+    # command line on top of it
     src/firmware/ToolRunner.h
     src/firmware/ToolRunner.cpp
     src/firmware/AdbTool.h
@@ -250,6 +251,8 @@ set(SU_CORE_SOURCES
     src/firmware/ImagePuller.cpp
     src/firmware/FirmwareJob.h
     src/firmware/FirmwareJob.cpp
+    src/firmware/FirmwareCli.h
+    src/firmware/FirmwareCli.cpp
 
     src/terminal/TerminalTypes.h
     src/terminal/CharWidth.h
@@ -356,6 +359,17 @@ target_link_libraries(SerialUtility PRIVATE su_app)
 su_set_compile_options(SerialUtility)
 su_copy_runtime_dlls(SerialUtility)
 
+# su-fw (v0.6.0): the Firmware tab's operations for a command shell, scripts and AI agents
+# (docs/firmware-update/CLI_PLAN.md). A console program of its own - no WIN32 keyword - because the
+# GUI executable is a Windows-subsystem program that cannot write to the shell that started it. It
+# links su_core only (QCoreApplication, no widgets) and lives next to the GUI executable, so it
+# finds the same tools/ folder; installed and deployed exactly like it (below).
+qt_add_executable(su_fw src/cli/main.cpp)
+set_target_properties(su_fw PROPERTIES OUTPUT_NAME "su-fw")
+target_link_libraries(su_fw PRIVATE su_core)
+su_set_compile_options(su_fw)
+su_copy_runtime_dlls(su_fw)
+
 # ---------------------------------------------------------------------------
 # Bundled flashing tools (Firmware tab): third_party/ -> <executable dir>/tools/
 # ---------------------------------------------------------------------------
@@ -363,6 +377,8 @@ su_copy_runtime_dlls(SerialUtility)
 # tools/ next to the executable (tools/upgrade_tool[.exe], tools/adb.exe,
 # tools/DriverAssistant/DriverInstall.exe). The folder is assembled after every link of SerialUtility, so
 # a build tree runs the tab as it is, and `cmake --install` ships the very same folder as bin/tools.
+# su-fw sits in the same folder and uses the same tools/ (in a build tree: once SerialUtility was built;
+# the copy is not repeated for su_fw, whose link may run in parallel and would race for the same files).
 # The sources are plain files under third_party/ (provenance and licences: third_party/README.md).
 set(SU_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 set(SU_TOOLS_DIR "$<TARGET_FILE_DIR:SerialUtility>/tools")
@@ -500,7 +516,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Install / deploy  (cmake --install <build> --prefix <dist>)
 # ---------------------------------------------------------------------------
-install(TARGETS SerialUtility
+install(TARGETS SerialUtility su_fw
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin)
 install(FILES README.md VERSION.txt DESTINATION .)
@@ -525,6 +541,13 @@ qt_generate_deploy_app_script(
     OUTPUT_SCRIPT su_deploy_script
     NO_UNSUPPORTED_PLATFORM_ERROR
     NO_TRANSLATIONS)
+# su-fw gets its own run of the same deploy tool (windeployqt / the Linux deploy), so the package
+# carries whatever it needs even where the GUI would not (its libraries are a subset of the GUI's).
+qt_generate_deploy_app_script(
+    TARGET su_fw
+    OUTPUT_SCRIPT su_fw_deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+    NO_TRANSLATIONS)
 # `cmake --install <build> --prefix dist` with a RELATIVE prefix (as CI does) keeps
 # CMAKE_INSTALL_PREFIX relative inside the install script; CMake's own file(INSTALL)
 # copes, but Qt's deploy support insists on an absolute prefix ("Given qt.conf path is
@@ -543,6 +566,7 @@ if(WIN32)
     install(CODE "set(QT_DEPLOY_PLUGINS_DIR \"bin\")")
 endif()
 install(SCRIPT "${su_deploy_script}")
+install(SCRIPT "${su_fw_deploy_script}")
 
 # ---------------------------------------------------------------------------
 # Summary

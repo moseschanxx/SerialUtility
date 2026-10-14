@@ -1,5 +1,13 @@
 # Command-line interface for the firmware flows (next after 0.5.1)
 
+**Implemented in 0.6.0**: `su-fw` (`src/cli/main.cpp`, `src/firmware/FirmwareCli.{h,cpp}`, tests
+`tests/tst_firmwarecli.cpp`; README "Command line (`su-fw`)", DESIGN 4.12). The three questions
+below were decided: the name is `su-fw` (the GUI does not take the subcommands), `--json` is in,
+and `reboot loader` goes out over ADB without a question. Differences from this plan: `pull-flash`
+refuses `--partitions` (the chain writes every partition, like the tab's Pull & Flash; pull, then
+`flash-soc --partitions`), and the `tst_firmwarecli` cases run `FirmwareCli` in-process with one
+case starting the real executable.
+
 Moses, 2026-10-13: "the software eventually user will use this to manually update the firmware to our
 device, and the AI agent should also be able to invoke some command, then update the firmware in the
 background, in a command shell." Same flows as the Firmware tab (pull, flash the SoC with a partition

@@ -34,6 +34,10 @@ flashes the BuildAI Node board (Rockchip RV1106 SoC + TI CC1310 RF MCU) over its
   native C++ implementation of its UART updater protocol through the SoC, and **Pull & Flash**
   to do all three with one button - everything over the board's single USB-C cable, with
   `upgrade_tool`, `adb` and the Rockchip USB drivers bundled in the package.
+- **`su-fw` command line** (v0.6) - the Firmware tab's operations for a shell, scripts and AI
+  agents: `su-fw status`, `partitions`, `pull`, `flash-soc`, `mcu-info`, `mcu-update`,
+  `mcu-set-role`, `pull-flash`, the log on stdout (text or one JSON object per line), the result
+  as the exit code; the very same code as the tab.
 - **Real terminal emulation** - VT100 / xterm subset: cursor movement, erase/insert/delete,
   scroll regions, 16 / 256 / true colours, alternate screen (`top`, `vi`, `menuconfig`),
   bracketed paste, DSR / DA replies, window title. Chinese and other CJK text occupies two
@@ -146,8 +150,9 @@ There are two kinds of Qt Test suites under `tests/`:
 - **Unit tests** linked against `su_core` (`tst_hexutils`, `tst_lineending`, `tst_commandhistory`,
   `tst_quickcommand`, `tst_charwidth`, `tst_terminalscreen`, `tst_ansiparser`,
   `tst_serialsettings`, `tst_devicesimulator`, `tst_logreplayer`, and for the Firmware tab
-  `tst_ccprotocol`, `tst_mcuupdater`, `tst_firmwaretools`, `tst_imagepuller`: scripted fake tools
-  and a C++ fake CC1310, no hardware and no Python).
+  `tst_ccprotocol`, `tst_mcuupdater`, `tst_firmwaretools`, `tst_imagepuller`, `tst_firmwarejob`
+  and `tst_firmwarecli` (su-fw): scripted fake tools and a C++ fake CC1310, no hardware and no
+  Python).
 - **GUI tests** linked against `su_app`, which drive the real widgets and dialogs
   (`tst_terminalwidget`, `tst_sessionwidget`, `tst_mainwindow`, `tst_dialogs`, `tst_firmwaretab`). They talk to the
   built-in `SIM:` pseudo-ports, never to a real COM port, and they run **offscreen**: ctest sets
@@ -220,8 +225,9 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 
 ### Deploying
 
-`cmake --install build --prefix dist` (or `build.ps1 -Deploy`) copies the executable to
-`dist/bin` and runs `windeployqt` / the Qt deploy script so the folder is self-contained.
+`cmake --install build --prefix dist` (or `build.ps1 -Deploy`) copies the executables
+(`BuildAI-SerialUtility` and the `su-fw` console tool) to `dist/bin` and runs `windeployqt` / the
+Qt deploy script for each, so the folder is self-contained.
 The Linux tarball published by CI is built the same way (`bin/`, `lib/`, `plugins/`, `qt.conf`)
 and is self-contained except for the system X11/xcb libraries, which users install via apt:
 `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libgl1`.
@@ -500,6 +506,73 @@ and, once inside it, the CC1310 commands - `help`, `version`, `sys`, `stack`, `u
 `bat`, `rx status`, `rx dump on|off`, `tx status`, `bootloader` (reboot the CC1310 into its UART
 updater) - and `~.`, which leaves the `rfmcu console` again. Their tooltips carry the usage.
 
+### Command line (`su-fw`)
+
+`su-fw` (`su-fw.exe`) is the Firmware tab without a window, for a command shell, scripts and AI
+agents that update a board in the background. It is installed next to `BuildAI-SerialUtility` in
+every package (the same `bin/` folder, the same `tools/`) and runs the very same code as the tab
+(`FirmwareJob`): the same steps, tools, rules and messages. The log goes to stdout, the result is
+the exit code. It uses the app's settings - the SSH profiles and remembered passwords,
+*Preferences > Firmware* (tool paths, cache folder, Loader / ADB waits) and the flash layouts
+remembered per board - and writes back only a board's flash layout once it has read one, as the
+tab does.
+
+| Command | What it does |
+|---|---|
+| `su-fw status [--serial S] [--mcu]` | The board the PC sees: *ADB device ...*, *Loader mode*, *Maskrom mode*, *no board* or the driver hint; a running board's flash layout; `--mcu` adds the CC1310's version and role |
+| `su-fw partitions [--image F] [--layout M \| --serial S]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; the board is not touched |
+| `su-fw pull [--target T] [--remote-folder F] [--cache D] [--identity K] [--password-env VAR \| --password-stdin] [--accept-host-key]` | Pull `update.img` from the build machine (skipped when unchanged, the previous one kept) |
+| `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question |
+| `su-fw mcu-info [--serial S]` | The running CC1310's version and role |
+| `su-fw mcu-update --package P --role rx\|tx [--serial S]` | Update the CC1310 (the role is never guessed) |
+| `su-fw mcu-set-role --role rx\|tx [--serial S]` | Set the CC1310's role |
+| `su-fw pull-flash [pull options] [--package P] [--role rx\|tx] [--serial S] [--layout M]` | The tab's Pull & Flash: pull, flash every partition, wait for ADB, update the CC1310 when the package's version differs; stops at the first failure |
+
+Every command also takes `--tools DIR` (default: the app's tool paths, then `tools/` next to
+su-fw), `--log FILE` (append every line, also with `--quiet`), `--json`, `--quiet` (only the
+result line), `--timeout S` and `--yes` (never ask: an unknown host key or a password prompt is
+refused - also what happens when stdin is not a terminal). `su-fw --help` and
+`su-fw <command> --help` explain every option and the exit codes, with examples.
+
+**Exit codes**: `0` done; `1` the operation failed (the last log lines say why); `2` usage (the
+message on stderr); `3` no board, or the board in a mode the command cannot use (`mcu-info` in Loader mode);
+`4` SSH (unreachable, host key refused, authentication failed); `5` `--timeout` or Ctrl+C. Ctrl+C
+ends the waiting phases, never a flash write in progress: su-fw then stops at the next safe point,
+and upgrade_tool itself never sees the Ctrl+C.
+
+**Output**: one line per event, `HH:MM:SS text` - the tab's log lines and progress every 10 % - and
+last `su-fw: exit <code> (<meaning>): <message>`. With `--json` one object per line:
+
+```json
+{"time":"2026-10-13T18:42:01.123+08:00","step":"flash","event":"progress","text":"Flashing SoC: Writing boot (5 of 7) 42 %","percent":42}
+{"time":"2026-10-13T18:42:30.004+08:00","step":"flash-soc","event":"done","text":"Upgrade firmware ok; board is back on ADB","ok":true,"exit":0,"boardInfo":"Linux version ...","image":"...","method":"partition-writes","partitions":["boot","rootfs"]}
+```
+
+`event` is `log`, `progress` (with `percent` when there is one), `step` (a step ended, with `ok`) or
+`done`: the last line, with `ok`, `exit` and the command's results (`board`, `layout`, `mcu`,
+`partitions`, `image`, `boardInfo`).
+
+**Secrets** are never taken from the command line: `--password-env VAR` (the value of the variable),
+`--password-stdin` (the first line of stdin), `--identity FILE`, or the password a profile saved in
+the app (*Remember*); nothing typed as a secret is ever printed. A host key that is not known yet is
+accepted only with `--accept-host-key` (and then remembered in known_hosts); a changed one is
+refused. On a terminal without `--yes` su-fw asks instead (the host key; the password without echo).
+
+**Agent recipe** - check the exit code, read the JSON `done` line:
+
+```powershell
+su-fw status --mcu --json                       # 0: a board (and the CC1310) answered; 3: no board
+su-fw partitions --image update.img --json      # the rows, their offsets, whether they fit
+$env:SU_PASSWORD = '...'
+su-fw pull-flash --target builder@10.0.10.71 --password-env SU_PASSWORD --accept-host-key `
+      --package firmware-0.8.1.pkg --json --timeout 900
+```
+
+`pull-flash` always writes every partition, like the tab's Pull & Flash; for some partitions run
+`su-fw pull ...`, then `su-fw flash-soc --partitions boot,rootfs`. su-fw prints English only (its
+output is read by scripts); `QT_LOGGING_RULES="buildai.*=true"` adds the internal diagnostics on
+stderr.
+
 ### Quick commands
 
 *Edit > Quick Commands...* opens the editor. Each row has a name, the command text, a group
@@ -639,17 +712,21 @@ MainWindow (tabs, menus, status bar, System Log dock)
   │     │                        | SshConnection (libssh on a worker thread, SFTP, forwards)
   │     └── SessionLogger
   └── FirmwareTab (v0.5, one)
-        ├── ImagePuller          SshConnection: stat, download, history
-        ├── SocFlasher           RockchipTool (upgrade_tool LD / EXF / WL / RD / UF) + AdbTool, UsbProbe
-        └── McuLink + McuUpdater adb forward -> rfmcu bridge -> CC1310 (CcProtocol, CcPackage)
+        └── FirmwareJob (v0.5.1, UI-free: the chain)
+              ├── ImagePuller          SshConnection: stat, download, history
+              ├── SocFlasher           RockchipTool (upgrade_tool LD / EXF / WL / RD / UF) + AdbTool, UsbProbe
+              └── McuLink + McuUpdater adb forward -> rfmcu bridge -> CC1310 (CcProtocol, CcPackage)
 Dialogs: About, Version, Preferences, QuickCommands, SendFile (FileSender),
          HostKey, AuthPrompt, SshProfiles, RemoteFile (SFTP)
+
+su-fw (v0.6, console)  FirmwareCli ──► FirmwareJob (the same chain as the tab)
 ```
 
-Three CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/ssh`, `src/firmware`,
+CMake targets: `su_core` (static library: `src/app`, `src/core`, `src/ssh`, `src/firmware`,
 `src/terminal` minus the widget; UI-free, unit-tested), `su_app` (static library: every widget and
-dialog, linked by the GUI test suites) and `SerialUtility` (`main.cpp` + `su_app` + resources),
-plus libssh built from source. Everything runs on the GUI thread except the SSH worker thread
+dialog, linked by the GUI test suites), `SerialUtility` (`main.cpp` + `su_app` + resources) and
+`su_fw` (the `su-fw` console program: `src/cli/main.cpp` + `su_core`), plus libssh built from
+source. Everything runs on the GUI thread except the SSH worker thread
 behind each `SshConnection`; `QSerialPort` is asynchronous, rendering is coalesced to 16 ms, and
 the external flashing tools run as asynchronous `QProcess` children (never waited for on the GUI
 thread).
@@ -672,7 +749,9 @@ SerialUtility/
 │   ├── ssh/            SshConnection (libssh worker), SshProfile(Store), SecretStore
 │   ├── firmware/       Firmware tab core: ToolRunner / ToolLocator, RockchipTool (upgrade_tool),
 │   │                   AdbTool, UsbProbe, SocFlasher, McuLink, McuUpdater, CcProtocol, CcPackage,
-│   │                   ImagePuller (UI-free, unit-tested with fake tools)
+│   │                   ImagePuller, FirmwareJob (the chain), FirmwareCli (su-fw's command line)
+│   │                   (UI-free, unit-tested with fake tools)
+│   ├── cli/            main.cpp of the su-fw console program
 │   ├── terminal/       TerminalScreen, AnsiParser, CharWidth, TerminalTheme, TerminalWidget
 │   ├── ui/             MainWindow, SessionWidget, ConnectionBar, SshConnectionBar, CommandInput,
 │   │                   QuickCommandBar, HexDumpView, SystemLogViewer, FirmwareTab
