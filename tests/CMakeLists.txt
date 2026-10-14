@@ -43,7 +43,9 @@ qt_add_library(su_testsupport STATIC
     support/FakeToolRunner.h
     support/FakeToolRunner.cpp
     support/FakeMcu.h
-    support/FakeMcu.cpp)
+    support/FakeMcu.cpp
+    support/FirmwareFixtures.h
+    support/FirmwareFixtures.cpp)
 target_include_directories(su_testsupport PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(su_testsupport PUBLIC su_core Qt6::Network)
 su_set_compile_options(su_testsupport)
@@ -77,7 +79,11 @@ su_add_test(tst_firmwaretools     tst_firmwaretools.cpp)
 target_link_libraries(tst_firmwaretools PRIVATE su_testsupport)
 su_add_test(tst_imagepuller       tst_imagepuller.cpp)
 target_link_libraries(tst_imagepuller PRIVATE su_testsupport)
-set_tests_properties(tst_mcuupdater tst_imagepuller PROPERTIES TIMEOUT 600)
+# The firmware chain without widgets (v0.5.1): FirmwareJob on fake tools, a fake CC1310 and the
+# in-process SSH server - what the Firmware tab and the su-fw console tool both drive.
+su_add_test(tst_firmwarejob       tst_firmwarejob.cpp)
+target_link_libraries(tst_firmwarejob PRIVATE su_testsupport)
+set_tests_properties(tst_mcuupdater tst_imagepuller tst_firmwarejob PROPERTIES TIMEOUT 600)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

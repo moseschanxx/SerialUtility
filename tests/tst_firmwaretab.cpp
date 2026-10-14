@@ -53,12 +53,14 @@
 #include "core/QuickCommand.h"
 #include "core/Transport.h"
 #include "firmware/CcProtocol.h"
+#include "firmware/FirmwareJob.h"
 #include "firmware/McuLink.h"
 #include "firmware/SocFlasher.h"
 #include "ssh/SshConnection.h"
 #include "ssh/SshProfile.h"
 #include "support/FakeMcu.h"
 #include "support/FakeToolRunner.h"
+#include "support/FirmwareFixtures.h"
 #include "support/TestSshServer.h"
 #include "terminal/TerminalWidget.h"
 #include "ui/FirmwareTab.h"
@@ -71,6 +73,9 @@
 #include <QDialogButtonBox>
 #include <QSet>
 #include <QTextStream>
+
+// The Node board's facts, the scripted tools and the build machine (shared with tst_firmwarejob).
+using namespace FirmwareFixtures;
 
 // =======================================================================================
 // Helpers
@@ -163,24 +168,6 @@ QString dataFile(const char* name)
     return QStringLiteral(SU_TEST_DATA_DIR "/firmware/") + QLatin1String(name);
 }
 
-bool writeFile(const QString& path, const QByteArray& bytes)
-{
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return false;
-    }
-    return file.write(bytes) == bytes.size();
-}
-
-/// A file that starts with the Rockchip RKFW magic, like a real update.img.
-QByteArray rkfwBytes(int size = 4096)
-{
-    QByteArray bytes("RKFW");
-    bytes.append(QByteArray(size - 4, '\x5A'));
-    return bytes;
-}
-
 template <typename T>
 T* child(const QObject* parent, const char* objectName)
 {
@@ -245,122 +232,6 @@ QString lastLogLine(const FirmwareTab& tab)
     return lines.isEmpty() ? QString() : lines.last();
 }
 
-const QByteArray kAdbBoard = "List of devices attached\r\n0225ce3c8d8d6e44\tdevice\r\n\r\n";
-const QByteArray kLdLoader = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
-                             "List of rockusb connected(1)\r\n"
-                             "DevNo=1\tVid=0x2207,Pid=0x110e,LocationID=104\tMode=Loader\tSerialNo=\r\n";
-/// MASKROM mode: the board is written with UF, the whole image (Loader mode writes partitions).
-const QByteArray kLdMaskrom = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
-                              "List of rockusb connected(1)\r\n"
-                              "DevNo=1\tVid=0x2207,Pid=0x110c,LocationID=104\tMode=Maskrom\tSerialNo=\r\n";
-const QByteArray kProcVersion = "Linux version 5.10.209+ (builder@rk) #1 Tue Oct 13 21:40:00 CST 2026\n"
-                                " 10:42:01 up 0 min,  load average: 0.10, 0.03, 0.01\n";
-
-// ---- the Node board's flash (facts of 2026-10-13) ----------------------------------------------
-const QString kNodeMtdParts =
-    QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)");
-const QByteArray kNodeCmdline = "console=ttyFIQ0 root=/dev/mtdblock5 rootfstype=squashfs rootwait "
-                                "mtdparts=sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),"
-                                "3M(userdata) rk_dma_heap_cma=72M\n";
-const char* const kNodeNames[] = {"env", "idblock", "uboot", "meta", "boot", "rootfs", "userdata"};
-const qint64 kNodeImageBytes[] = {65536, 174080, 196608, 393216, 3043840, 3830272, 3145728};
-const int kNodeSectors[] = {0, 128, 640, 1152, 1920, 8064, 18304};
-const int kNodeSizeSectors[] = {128, 512, 512, 768, 6144, 10240, 6144};   // partition sizes / 512: WL's count
-
-QStringList nodeNames()
-{
-    QStringList names;
-    for (const char* name : kNodeNames) {
-        names << QLatin1String(name);
-    }
-    return names;
-}
-
-/// The Node image's env.img: a CRC, then "mtdparts=<layout>", "sys_bootargs=...", "sd_parts=..."
-/// (NUL separated), padded to its 64 KiB.
-QByteArray nodeEnvImage(const QString& layout)
-{
-    QByteArray env = QByteArray::fromHex("6a6798f8") + "mtdparts=" + layout.toLatin1() + '\0'
-                     + "sys_bootargs= rootfstype=erofs mtdparts=" + layout.toLatin1() + " rk_dma_heap_cma=72M" + '\0'
-                     + "sd_parts=mmcblk0:16K@512(env),512K@32K(idblock),4M(uboot),32M(boot),2G(rootfs),-(userdata)" + '\0' + '\0';
-    env.append(QByteArray(kNodeImageBytes[0] - env.size(), '\0'));
-    return env;
-}
-
-/// A FakeToolRunner handler for `upgrade_tool EXF <image> <dir>`: writes what upgrade_tool v2.37
-/// unpacks from the Node image into <dir>. An image whose file name contains "big" gets a boot.img
-/// one byte larger than its partition; an image under a folder named "withenv..." gets a real
-/// env.img carrying the Node layout (the real image's), the others an env.img without one.
-void nodeExtractor(FakeToolInvocation* i)
-{
-    const QStringList args = i->arguments();
-    const QString dir = args.size() >= 3 ? QDir::fromNativeSeparators(args.at(2)) : QString();
-    const bool big = args.size() >= 2 && QFileInfo(args.at(1)).fileName().contains(QLatin1String("big"));
-    const bool withEnv = args.size() >= 2 && QDir::fromNativeSeparators(args.at(1)).contains(QLatin1String("/withenv"));
-    QByteArray list;
-    bool ok = !dir.isEmpty();
-    for (int k = 0; k < 7 && ok; ++k) {
-        const qint64 size = (big && k == 4) ? 3 * 1024 * 1024 + 1 : kNodeImageBytes[k];
-        const QByteArray bytes = (withEnv && k == 0) ? nodeEnvImage(kNodeMtdParts) : QByteArray(size, 'n');
-        ok = writeFile(dir + QLatin1Char('/') + QLatin1String(kNodeNames[k]) + QStringLiteral(".img"), bytes);
-        list += QByteArray(kNodeNames[k]) + '\t' + kNodeNames[k] + ".img\n";
-    }
-    list += "package-file\tpackage-file\nbootloader\tdownload.bin\n";
-    ok = ok && writeFile(dir + QStringLiteral("/package-file"), list) && writeFile(dir + QStringLiteral("/download.bin"), "LDR ");
-    if (!ok) {
-        i->emitOutput("Extract failed\r\n");
-        i->finish(1);
-        return;
-    }
-    i->emitOutput("start to extract boot.img...(100%)\r\nExtract ok.\r\n");
-    i->finish(0);
-}
-
-/// The commands of a Loader-mode flash (the partition method) and of a MASKROM one (UF), SFI, the
-/// ADB wait and the board info; `ld` is what `upgrade_tool LD` lists.
-void scriptSocFlash(FakeToolRunner& runner, const QByteArray& ld)
-{
-    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), ld);
-    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool EXF ")), &nodeExtractor);
-    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool WL ")), "Write LBA from file (50%)\rWrite LBA from file (100%)\r\n");
-    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), "Reset Device OK.\r\n");
-    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool UF ")), "Download Image... (100%)\r\nUpgrade firmware ok.\r\n");
-    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool SFI ")), "Type:Update Firmware\r\nChip Tag:110E\r\n");
-    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? get-state$")), "device\n");
-    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/version")), kProcVersion);
-    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), kNodeCmdline);
-}
-
-/// The WL command lines a flash ran, in order.
-QStringList wlCommands(const FakeToolRunner& runner)
-{
-    return runner.invocations().filter(QRegularExpression(QStringLiteral("^upgrade_tool WL ")));
-}
-
-QString expectedWl(int k, const QString& extractDir)
-{
-    return ToolRunner::formatCommandLine(
-        QStringLiteral("upgrade_tool"),
-        {QStringLiteral("WL"), QString::number(kNodeSectors[k]), QString::number(kNodeSizeSectors[k]),
-         QDir::toNativeSeparators(extractDir + QLatin1Char('/') + QLatin1String(kNodeNames[k]) + QStringLiteral(".img"))});
-}
-
-/// The board side of an MCU update as adb_link.py drives it: `adb devices`, the rfmcu probe,
-/// `killall`, a forward that points at a FakeMcuServer (the stand-in for `rfmcu bridge`), the
-/// bridge itself (prints "bridging", then runs until cancelled) and the forward removal.
-void scriptMcuBridge(FakeToolRunner& runner, quint16 bridgePort)
-{
-    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
-    runner.addScript(QRegularExpression(QStringLiteral("command -v rfmcu")), "/usr/bin/rfmcu\n");
-    runner.addScript(QRegularExpression(QStringLiteral("killall rfmcu")), QByteArray());
-    runner.addScript(QRegularExpression(QStringLiteral("forward tcp:0 tcp:7000$")), QByteArray::number(bridgePort) + "\n");
-    runner.addHandler(QRegularExpression(QStringLiteral("shell rfmcu bridge 7000$")), [](FakeToolInvocation* i) {
-        i->emitOutput("rfmcu: bridging /dev/ttyS1 (115200 baud) to 127.0.0.1:7000\n");
-        i->hang();
-    });
-    runner.addScript(QRegularExpression(QStringLiteral("forward --remove tcp:\\d+$")), QByteArray());
-}
-
 /// A stand-in upgrade_tool for a tab that MainWindow created (its runner starts real processes):
 /// a script in `dir` whose `LD` lists one board in MASKROM mode (written with UF), `SFI` describes
 /// an image and `UF` prints a progress line, then waits until a file "release" appears next to it,
@@ -411,62 +282,6 @@ QString writeFakeUpgradeTool(const QString& dir)
 #endif
     return path;
 }
-
-/// The in-process build machine: TestSshServer serving `<root>/image/update.img`, a stored profile
-/// with a test key (never the developer's ~/.ssh keys) and a known_hosts file holding the server.
-struct BuildMachine
-{
-    QTemporaryDir root;
-    std::unique_ptr<TestSshServer> server;
-    SshProfile profile;
-    QString imageFolder;
-    QByteArray image = rkfwBytes(256 * 1024);
-
-    bool start(SshProfileStore* store, const QString& workDir)
-    {
-        if (!root.isValid()) {
-            return false;
-        }
-        imageFolder = root.path() + QStringLiteral("/image");
-        if (!writeFile(imageFolder + QStringLiteral("/update.img"), image)) {
-            return false;
-        }
-        if (!QDir().mkpath(workDir)) {
-            return false;
-        }
-        const QString keyPath = workDir + QStringLiteral("/client_ed25519");
-        QFile::remove(keyPath);
-        QString publicKey;
-        if (!TestSshServer::generateClientKeyPair(keyPath, &publicKey)) {
-            return false;
-        }
-        TestSshServer::Options options;
-        options.rootDir = root.path();
-        options.authorizedPublicKey = publicKey;
-        options.allowPassword = false;
-        server = std::make_unique<TestSshServer>(options);
-        QString error;
-        if (!server->start(&error)) {
-            qWarning() << "TestSshServer:" << error;
-            return false;
-        }
-        const QString knownHosts = workDir + QStringLiteral("/known_hosts");
-        if (!writeFile(knownHosts, (server->knownHostsLine() + QLatin1Char('\n')).toUtf8())) {
-            return false;
-        }
-        SshProfile p;
-        p.name = QStringLiteral("Build machine");
-        p.host = QStringLiteral("127.0.0.1");
-        p.port = server->port();
-        p.user = options.user;
-        p.auth = SshProfile::Auth::PublicKey;
-        p.identityFile = keyPath;
-        p.knownHostsFile = knownHosts;
-        p.connectTimeoutSeconds = 5;
-        profile = store->upsert(p);
-        return !profile.id.isEmpty();
-    }
-};
 
 } // namespace
 
@@ -687,9 +502,12 @@ void Tst_firmwaretab::widgetsExistWithObjectNames()
     QCOMPARE(plain.statusRefreshIntervalMs(), 2000);
     QVERIFY(qobject_cast<ProcessToolRunner*>(plain.toolRunner()) != nullptr);
     // The own runner goes after the collaborators (QObject deletes children in creation order):
-    // McuLink's destructor still sends the board cleanup through it.
-    const QObjectList kids = plain.children();
-    QCOMPARE(plain.toolRunner()->parent(), static_cast<QObject*>(&plain));
+    // McuLink's destructor still sends the board cleanup through it. Since 0.5.1 they are the
+    // children of the tab's FirmwareJob, itself a child of the tab.
+    QVERIFY(plain.firmwareJob() != nullptr);
+    QCOMPARE(plain.firmwareJob()->parent(), static_cast<QObject*>(&plain));
+    const QObjectList kids = plain.firmwareJob()->children();
+    QCOMPARE(plain.toolRunner()->parent(), static_cast<QObject*>(plain.firmwareJob()));
     QVERIFY(kids.indexOf(plain.mcuLink()) >= 0);
     QVERIFY(kids.indexOf(plain.toolRunner()) > kids.indexOf(plain.mcuLink()));
     QVERIFY(kids.indexOf(plain.toolRunner()) > kids.indexOf(plain.socFlasher()));
@@ -1807,18 +1625,6 @@ void Tst_firmwaretab::languageChangeRetranslates()
 // =======================================================================================
 
 namespace {
-
-QString extractDirOf(const QString& image)
-{
-    const QFileInfo info(image);
-    return info.absolutePath() + QLatin1Char('/') + info.completeBaseName() + QStringLiteral(".extracted");
-}
-
-const QRegularExpression& exfPattern()
-{
-    static const QRegularExpression pattern(QStringLiteral("^upgrade_tool EXF "));
-    return pattern;
-}
 
 /// The tab showing the seven rows of a freshly selected image (the label says so).
 bool waitForTable(const FirmwareTab& tab, const QString& labelStart = QStringLiteral("7 partitions"))

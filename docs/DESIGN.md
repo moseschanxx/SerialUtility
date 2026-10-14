@@ -496,10 +496,11 @@ a tab of its own and touches no behaviour of the serial and SSH tabs.
 **Layers.**
 
 ```
-FirmwareTab (su_app, one instance in MainWindow's QTabWidget)
-  ├── ImagePuller  ─────► SshConnection (runCommand, statRemote, startTransfer: the SSH stack of 4.8)
-  ├── SocFlasher   ─────► RockchipTool (upgrade_tool LD / SFI / EXF / WL / RD / UF) + AdbTool + UsbProbe ─► ToolRunner
-  ├── McuLink      ─────► AdbTool + QTcpSocket ──► McuUpdater ──► CcProtocol / CcPackage
+FirmwareTab (su_app, one instance in MainWindow's QTabWidget; widgets, dialogs, settings)
+  ├── FirmwareJob (su_core, since 0.5.1: the chain, also driven by the su-fw console tool)
+  │     ├── ImagePuller  ─────► SshConnection (runCommand, statRemote, startTransfer: the SSH stack of 4.8)
+  │     ├── SocFlasher   ─────► RockchipTool (upgrade_tool LD / SFI / EXF / WL / RD / UF) + AdbTool + UsbProbe ─► ToolRunner
+  │     └── McuLink      ─────► AdbTool + QTcpSocket ──► McuUpdater ──► CcProtocol / CcPackage
   └── SessionProvider ──► SessionWidget::sendBytes()     (`reboot loader`, only after a Yes)
 ```
 
@@ -520,7 +521,8 @@ All of `src/firmware/` is part of `su_core` (UI-free, Qt Core + Network); only `
 | `McuUpdater` | The `fw_update.py` state machine over a `QIODevice` (Info, Flash, SetRole), every wait a `QTimer` deadline: HELLO, else the application CLI probe, `bootloader`, BEGIN / READY, 128-byte DATA / ACK / NACK with resume, END / COMPLETE, the restart banner; the Python timeouts and retry counts are the defaults. |
 | `McuLink` | The road to the CC1310 through the SoC (`McuUpdater -- QTcpSocket -- adb forward -- USB-C -- rfmcu bridge -- /dev/ttyS1 -- CC1310`): select the board, check `rfmcu`, `killall rfmcu`, `forward tcp:0 tcp:7000`, start `rfmcu bridge 7000`, wait for "bridging", connect; `close()` undoes it all; `cliCommand()` runs `rfmcu cmd` without a bridge. |
 | `ImagePuller` | Over an `SshConnection` the owner connected: stat the remote `update.img`, optional `git describe`, the skip rule, download, RKFW check, one-level history (`update.prev.img`), optional extra files, `rollBack()`. |
-| `FirmwareTab` | The widget: the Source / SoC / MCU sections (SoC with the partition table since 0.5.1), Pull & Flash, the log pane; owns the collaborators above and an `SshConnection` of its own. |
+| `FirmwareJob` | (0.5.1) The chain without widgets: every operation of the tab (`pull`, `flash`, `mcu`, `set-role`, `info`, `pull-flash`) with its steps, rules, log lines and messages; owns the collaborators above and an `SshConnection` of its own. |
+| `FirmwareTab` | The widget: the Source / SoC / MCU sections (SoC with the partition table since 0.5.1), Pull & Flash, the log pane; owns a `FirmwareJob` and renders it. |
 
 **SoC flow** (`SocFlasher::start()`, as `usb_update.sh`): *Detecting* (`LD`, then `adb devices`;
 Loader / Maskrom wins) -> an ADB device is told `adb reboot loader` (*RebootingToLoader*, after
@@ -582,6 +584,35 @@ package is selected whose version differs from the running MCU version (read aft
 back), Update MCU. SoC first because the MCU path needs `rfmcu` on the SoC; it stops at the first
 failure.
 
+**FirmwareJob** (0.5.1, `src/firmware/FirmwareJob.h`, `su_core`; step 2 of
+`docs/firmware-update/CLI_PLAN.md`). The chain above lives in a UI-free `QObject` so that the tab and
+the console tool `su-fw` run the very same code: the tab is the view, the job the chain. The job owns
+the collaborators (`SocFlasher`, `McuLink`, `McuUpdater`, `ImagePuller`, its `SshConnection`, and a
+`ProcessToolRunner` when it is given no runner) and runs the operations as slots (`pull()`,
+`flashSoc()`, `updateMcu()`, `setMcuRole()`, `readMcuInfo()`, `pullAndFlash()`, `cancel()`, each
+refused while another runs with "Busy: <title> is still running"). It reports plain log lines (the
+tab adds the time; the job mirrors them to `lcFirmware`, never a secret), the raw upgrade_tool lines
+(`toolOutput()`, collapsed by the tab), `progress(stage, percent)` (a percentage, "busy" or "text
+only"), the lasting status, `stepFinished()` for every step and `operationFinished()` at the end
+(the op names `pull` ... `pull-flash` are public constants), and the state the tab shows (device,
+image, package, running MCU version and role, the partition plan and selection, the layout in use).
+It reads no settings: the tab hands the fields and the Preferences in when an operation starts
+(target, folders, SSH defaults, `git describe`, extra files, tool paths, timeouts), answers
+`setLayoutProvider()` from `AppSettings::firmwareMtdParts()` and stores what the job reports
+(`pullSourceAccepted()`, `mtdPartsRead(serial, mtdparts)`, the cache image after a pull, the role
+it pre-selected). The three decisions the tab asks with dialogs are callbacks: the host key
+(`HostKeyDecision{accept, remember}`), the authentication prompt (an answer with "remember", or none
+= cancelled) and the download mode (`DownloadModeAnswer`: whether a question was asked, and a
+function that sends `reboot loader\r` through a session - called only when the flasher still waits
+for Loader mode afterwards). Without a callback (su-fw without a terminal to ask) the job takes the
+headless defaults: an unknown or changed host key is refused, so the pull fails with the message
+the tab shows on a refusal ("Host key rejected for <target>"); a prompt is cancelled and the pull
+fails with "authentication failed: nobody answered "<prompt>"" (a secret saved in SecretStore is
+still tried by `SshConnection` first); download mode shows the MASKROM instructions
+(`maskromInstructions()`) and ends with the flasher's own "board did not enter MASKROM/Loader within
+<n> s" unless the board appears. `tst_firmwarejob` runs the chain on `FakeToolRunner`,
+`TestSshServer` and `FakeMcuServer` (58 cases); `tst_firmwaretab` checks the view on top.
+
 **SSH stack additions** (no behaviour change for session tabs): `SshConnection::runCommand()`
 (an exec channel without PTY, `commandFinished(id, exitStatus, output, errorText)`) and
 `statRemote()` (SFTP stat, falling back to `stat -L -c '%s %Y %F'`, which follows a symlinked image like
@@ -640,7 +671,9 @@ command-line / `package-file` parsers, `planPartitions()`, and the Loader-mode f
 a selection, an image too big, a failing `WL` / `RD`, the layout unknown, the plan signal and its
 staleness, the `env.img` reader and the image's layout winning over a different board layout),
 `tst_imagepuller` (against
-`TestSshServer`: stat, skip, `.part`, magic, history, `git describe`), `tst_firmwaretab` (the GUI:
+`TestSshServer`: stat, skip, `.part`, magic, history, `git describe`), `tst_firmwarejob` (0.5.1: the
+chain without widgets, every operation, the callbacks and their headless defaults; the Node board's
+fixtures shared with the tab's suite live in `tests/support/FirmwareFixtures`), `tst_firmwaretab` (the GUI:
 the action, single instance, enable states, a pull, a flash and an MCU update with the fakes, the
 main window's actions while the tab is current, close and restore; since 0.5.1 the partition
 table, All / None, the layout read once from a board, the layout from the image, Flash SoC writing the checked rows, MASKROM

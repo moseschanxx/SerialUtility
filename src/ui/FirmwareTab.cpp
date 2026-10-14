@@ -24,12 +24,10 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QSaveFile>
-#include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
-#include <QTcpSocket>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -45,6 +43,7 @@
 #include "dialogs/AuthPromptDialog.h"
 #include "dialogs/HostKeyDialog.h"
 #include "firmware/CcProtocol.h"
+#include "firmware/FirmwareJob.h"
 #include "firmware/McuLink.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/ToolRunner.h"
@@ -59,22 +58,7 @@ constexpr int kStatusLongMs = 5000;
 constexpr int kDefaultRefreshMs = 2000;
 constexpr int kFirstRefreshDelayMs = 500;   ///< the first status query after the tab became visible
 constexpr int kLogMaxBlocks = 20000;
-/// A collaborator whose start() refused gets this long to report the reason through its own
-/// finished()/failed() (they report "from the event loop") before the tab ends the step itself.
-constexpr int kSilentRefusalMs = 100;
-/// McuLink::close() reports closed() when adb is done; never wait longer than this for it.
-constexpr int kLinkCloseTimeoutMs = 10000;
-/// A cancelled download ends once the connection removed its ".part"; never wait longer than this.
-constexpr int kPullCancelGraceMs = 5000;
 constexpr int kTargetComboMinWidth = 220;
-
-// Operation / step names (currentOperation(), operationFinished()).
-const QLatin1String kOpPull("pull");
-const QLatin1String kOpFlash("flash");
-const QLatin1String kOpMcu("mcu");
-const QLatin1String kOpSetRole("set-role");
-const QLatin1String kOpInfo("info");
-const QLatin1String kOpPullFlash("pull-flash");
 
 // The restore-key prefixes of SessionWidget::restoreKey(), accepted by setSourceTarget().
 const QLatin1String kProfileKeyPrefix("ssh:profile:");
@@ -84,15 +68,6 @@ const QLatin1String kTargetKeyPrefix("ssh:target:");
 /// firmware keys in plain QSettings ("rx" / "tx"; empty = none confirmed). The next session shows
 /// it in the radios without confirming it (loadSettings()).
 const QLatin1String kRoleSettingsKey("firmware/role");
-
-/// What McuLink::open() runs before its bridge (adb_link.py): an rfmcu left by an earlier session
-/// (an open `rfmcu console`, a bridge of a killed task) holds the UART's flock, and `rfmcu cmd`
-/// would exit 2 "port busy". Its exit status is ignored; nothing to kill is the usual case.
-const QString kStopRfmcuCommand = QStringLiteral("killall rfmcu 2>/dev/null; true");
-
-/// `rfmcu cmd` exit codes (rockchip-platforms project/app/rfmcu/README.md).
-constexpr int kRfmcuPortBusy = 2;
-constexpr int kRfmcuNoReply = 3;
 
 const QColor kErrorText(0xC0, 0x39, 0x2B);
 
@@ -148,7 +123,7 @@ int findRecentItem(const QComboBox* combo, const QString& text)
 }
 
 /// Decimal units in the C locale, exactly as ImagePuller words its log lines ("11.4 MB"), so the
-/// pull log never shows one image in two units.
+/// labels never show one image in two units.
 QString formatSize(qint64 bytes)
 {
     return QLocale::c().formattedDataSize(qMax<qint64>(0, bytes), 1, QLocale::DataSizeSIFormat);
@@ -162,30 +137,6 @@ QString formatTime(const QDateTime& time)
 QString nativePath(const QString& path)
 {
     return QDir::toNativeSeparators(path);
-}
-
-QString roleText(quint32 role)
-{
-    switch (role) {
-    case CcProtocol::RoleRx:
-        return QStringLiteral("rx");
-    case CcProtocol::RoleTx:
-        return QStringLiteral("tx");
-    default:
-        return QString();
-    }
-}
-
-quint32 roleFromText(const QString& text)
-{
-    const QString t = text.trimmed().toLower();
-    if (t == QLatin1String("rx")) {
-        return CcProtocol::RoleRx;
-    }
-    if (t == QLatin1String("tx")) {
-        return CcProtocol::RoleTx;
-    }
-    return 0;
 }
 
 /// The monospace log font of the System Log dock, so both panes read alike.
@@ -210,25 +161,15 @@ struct FirmwareTab::Private
 {
     explicit Private(FirmwareTab* owner) : q(owner) {}
 
-    enum class PullPhase { Idle, Connecting, Pulling };
-
     FirmwareTab* q;
 
     // ---- Collaborators ---------------------------------------------------------------------
     SshProfileStore* profiles = nullptr;
-    ToolRunner* runner = nullptr;
-    SocFlasher* flasher = nullptr;
-    McuLink* link = nullptr;
-    McuUpdater* updater = nullptr;
-    ImagePuller* puller = nullptr;
-    SshConnection* ssh = nullptr;
+    FirmwareJob* job = nullptr;     ///< the chain: every operation, its collaborators and their state
     SessionProvider sessionProvider;
-    QString upgradeToolPath;
-    QString adbPath;
     QString driverInstallerPath;
     bool toolPathsPinned = false;   ///< setToolPaths() was called: applyPreferences() leaves the paths alone
     QTimer statusTimer;
-    QTimer linkCloseTimer;
     int refreshMs = kDefaultRefreshMs;
 
     // ---- Widgets (object names = the accessors) --------------------------------------------
@@ -285,74 +226,25 @@ struct FirmwareTab::Private
     QPushButton* clearLogButton = nullptr;
     QPushButton* saveLogButton = nullptr;
 
-    // ---- Selection state ---------------------------------------------------------------------
+    // ---- View state ------------------------------------------------------------------------------
     QString lastTargetKey;          ///< targetKey() the remote folder was last loaded for
-    QString localImage;             ///< "Use local image..." pick; empty = the cache's update.img
     QString sfiImage;               ///< the image the SoC image line describes
     QString sfiText;                ///< its SFI summary (or why there is none)
     QPointer<ToolInvocation> sfiInvocation;
     bool hasPreviousImage = false;
-    CcPackage mcuPackage;
-    QString mcuPackagePath;
     QString packageProblem;         ///< why the last package was refused (shown while none is loaded)
-    quint32 confirmedRole = 0;      ///< the role radios: 0 none, 1 rx, 2 tx
     quint32 rememberedRole = 0;     ///< last session's role, shown in the radios but not confirmed
-    QString runningVersion;
-    QString runningRole;
-    SocFlasher::DeviceStatus deviceStatus;
-    bool hasDeviceStatus = false;
-    QString boardInfoText;
     bool restoring = false;         ///< loading the remembered values: nothing is written back
     bool progressShowsReady = true; ///< the progress label still says "Ready" (retranslated with the rest)
-
-    // ---- Partitions (v0.5.1) -------------------------------------------------------------------
-    enum class PlanState { NoImage, Planning, Ready, Failed };
-    PlanState planState = PlanState::NoImage;
-    QString planMessage;            ///< SocFlasher::partitionsPlanned()'s message (the reason when it failed)
-    QList<PartitionImage> partitionRows;   ///< what the table shows: the rows of plannedImage
-    QString plannedImage;
-    QString requestedPlanKey;       ///< image, mtime and layout of the last plan asked for
-    QString selectionImageKey;      ///< image and mtime the checkboxes belong to (a new image checks everything)
-    bool planInFlight = false;      ///< the tab's own SocFlasher::planPartitions() has not reported yet
-    bool planPending = false;       ///< a plan could not start (another one, a flash): asked again afterwards
-    bool checkAll = true;           ///< every enabled row is checked
-    QStringList checkedNames;       ///< the checked rows while !checkAll
-    QString imageLayout;            ///< the mtdparts of plannedImage's env.img ("" = it carries none)
-    QString layoutSerial;           ///< the ADB board boardLayout() belongs to (the last one seen)
-    QSet<QString> layoutReadTried;  ///< boards whose /proc/cmdline was read in this session
-    QPointer<ToolInvocation> cmdlineInvocation;
-
-    // ---- Operation state ---------------------------------------------------------------------
-    QString operation;              ///< currentOperation(): the top-level operation
-    QString step;                   ///< the step running right now (== operation unless Pull & Flash)
-    QString persistent;             ///< persistentStatusMessage()
-    bool cancelRequested = false;
-    bool keepSsh = false;           ///< Pull & Flash keeps the build-machine connection until it ends
-    PullPhase pullPhase = PullPhase::Idle;
-    bool pullerActive = false;
-    QString pullTarget;             ///< user@host:port of the running pull
-    QString sshError;               ///< the connection's last errorOccurred() text
-    bool flasherActive = false;
-    bool flashCancellable = false;
-    bool linkActive = false;
-    bool updaterActive = false;
-    bool mcuResultPending = false;  ///< waiting for McuLink::closed() before the step ends
-    bool mcuOk = false;
-    QString mcuMessage;
-    QString linkLostMessage;
-    quint32 mcuRole = 0;
-    QPointer<ToolInvocation> cliInvocation;   ///< the stale-rfmcu stop or the `rfmcu cmd` under way
-    QString pendingVersion;         ///< "version" answered without a role: "help" decides it
-    int lastCliExit = -1;           ///< exit code of the last `rfmcu cmd` that ran to its end, else -1
-    std::function<void(bool, const QString&)> cliDone;
+    bool settingRole = false;       ///< setSelectedRole() is handing the role to the job
     QPointer<QMessageBox> downloadBox;   ///< the open "send reboot loader through <tab>" question
     bool lastLogWasProgress = false;
     QString lastProgressStage;
 
     // ---- Construction ------------------------------------------------------------------------
     void setupUi();
-    void wireCollaborators();
     void wireWidgets();
+    void wireJob();
     void retranslate();
     void loadSettings();
 
@@ -360,71 +252,32 @@ struct FirmwareTab::Private
     void rebuildTargets();
     QString selectedProfileId() const;
     QString targetKey() const;
-    bool resolveProfile(SshProfile* profile, QString* error) const;
     void onTargetChanged(bool persist);
-    void refreshImage(bool reread = false);   ///< reread: the file changed in place (pull, roll back)
+    void syncJob();                 ///< the inputs an operation starts with: the fields and Preferences
+    void renderImage(bool reread);  ///< the image line (imageChanged()); reread: describe the same path again
     void runFirmwareInfo(const QString& image);
     void renderSocImage();
 
-    // ---- Partitions -----------------------------------------------------------------------------
-    static QString imageKey(const QString& image);
-    void requestPlan(bool force);
-    void onPartitionsPlanned(bool ok, const QList<PartitionImage>& rows, const QString& message);
-    QString boardLayout() const;    ///< remembered for the board (or "*"): what the flasher gets as mtdParts()
-    bool usingImageLayout() const;  ///< flashLayout() is the image's own (its env.img)
-    bool layoutKnown() const;
-    static QString rowProblem(const PartitionImage& row, bool layoutIsKnown);   ///< empty = the row can be checked
+    // ---- Status / rendering ------------------------------------------------------------------
     void renderPartitions();
     void onPartitionItemChanged(QTableWidgetItem* item);
-    void pushSelection();
-    void readBoardLayout(const QString& serial);
-    void storeLayout(const QString& serial, const QString& mtdparts);
-
-    // ---- Status / rendering ------------------------------------------------------------------
     void renderDeviceStatus();
     void renderPackage();
     void renderMcuStatus();
-    void showRole(quint32 role);    ///< the radios only; confirmedRole is the caller's business
+    void showRole(quint32 role);    ///< the radios only; the job's role is the caller's business
     void updateControls();
-    bool cancellable() const;
     void updateStatusTimer();
-    void pushToolPaths();
     void logToolPaths();
 
-    // ---- Operations ----------------------------------------------------------------------------
-    static QString operationTitle(const QString& op);
-    bool refuseIfBusy();
-    void beginOperation(const QString& op);
-    void stepFinished(const QString& stepName, bool ok, const QString& message);
-    void endOperation(const QString& stepName, bool ok, const QString& message);
-    void setPersistent(const QString& text);
-    void setProgressBusy(const QString& text);
-    void setProgressPercent(int percent, const QString& text);
+    // ---- The job's reports and questions -----------------------------------------------------
+    void onProgress(const QString& stage, int percent);
+    void onStepFinished(const QString& step, bool ok, const QString& message);
+    void onOperationFinished(const QString& op, bool ok, const QString& message);
+    FirmwareJob::HostKeyDecision askHostKey(const SshConnection::HostKeyInfo& info);
+    std::optional<FirmwareJob::AuthAnswer> askAuthPrompt(const SshConnection::AuthPrompt& prompt);
+    FirmwareJob::DownloadModeAnswer askDownloadMode();
 
-    void startPull();
-    void startPuller();
-    void pullFinished(bool ok, const QString& message);
-    void onSshStateChanged(Transport::State state);
-    void closeSsh();
-
-    void startFlash();
-    void flashFinished(bool ok, const QString& message);
-    void onFlasherPhase(SocFlasher::Phase phase);
-    void askDownloadMode();
-    void showMaskromInstructions();
-
-    void startMcuUpdate(const QString& stepName);
-    void onLinkOpened();
-    void mcuDone(bool ok, const QString& message);
-    void completeMcu();
-
-    void startMcuRead(std::function<void(bool, const QString&)> done);
-    void onStaleRfmcuStopped(const ToolResult& result);
-    void runCli(const QString& command);
-    void onCliFinished(const QString& command, const ToolResult& result);
-    void finishCli(bool ok, const QString& message);
-    void startChainMcu();
-
+    void appendLines(const QString& line, bool mirror);
     void appendToolLine(const QString& line);
 };
 
@@ -437,42 +290,20 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
     , d(std::make_unique<Private>(this))
 {
     d->profiles = profiles;
-    // An own runner becomes a child only after the collaborators that use it: QObject deletes
-    // children in creation order, and McuLink's destructor still sends the board's cleanup
-    // (`killall rfmcu`, the forward removal) through the runner when the tab goes away.
-    auto* ownRunner = runner ? nullptr : new ProcessToolRunner;
-    d->runner = runner ? runner : ownRunner;
-    d->flasher = new SocFlasher(d->runner, this);
-    d->link = new McuLink(d->runner, this);
-    d->updater = new McuUpdater(this);
-    d->puller = new ImagePuller(this);
-    d->ssh = new SshConnection(this);
-    if (ownRunner) {
-        ownRunner->setParent(this);
-    }
-    // The pull connection is short-lived and on demand: a dropped link ends the pull, it is not
-    // re-established behind the user's back.
-    d->ssh->setAutoReconnect(false);
-    d->puller->setConnection(d->ssh);
-    d->updater->setThroughSoc(true);   // the CLI "power" reply is logged before "bootloader"
+    d->job = new FirmwareJob(runner, this);   // `runner` null: the job owns a ProcessToolRunner
+    d->job->setProfileStore(profiles);
 
     d->statusTimer.setInterval(d->refreshMs);
     connect(&d->statusTimer, &QTimer::timeout, this, &FirmwareTab::refreshStatus);
-    d->linkCloseTimer.setSingleShot(true);
-    connect(&d->linkCloseTimer, &QTimer::timeout, this, [this]() {
-        if (d->mcuResultPending) {
-            qCWarning(lcFirmware) << "MCU link did not report closed() in time";
-            d->completeMcu();
-        }
-    });
 
     d->setupUi();
     d->wireWidgets();
-    d->wireCollaborators();
+    d->wireJob();
     if (d->profiles) {
         connect(d->profiles, &SshProfileStore::changed, this, [this]() { d->rebuildTargets(); });
         connect(d->profiles, &QObject::destroyed, this, [this]() {
             d->profiles = nullptr;
+            d->job->setProfileStore(nullptr);
             d->rebuildTargets();
         });
     }
@@ -482,7 +313,7 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
     applyPreferences();
     if (d->rememberedRole != 0) {
         appendLog(tr("Role %1 remembered from the last session: click it or press Read to confirm it")
-                      .arg(roleText(d->rememberedRole)));
+                      .arg(FirmwareJob::roleText(d->rememberedRole)));
     }
     d->updateControls();
 }
@@ -490,10 +321,9 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
 FirmwareTab::~FirmwareTab()
 {
     // Children are destroyed after `d`: the line edits emit editingFinished when they lose the
-    // focus on the way out and the collaborators may still report, so every connection into this
-    // object is cut before anything is stopped.
+    // focus on the way out and the job may still report, so every connection into this object is
+    // cut before anything is stopped.
     d->statusTimer.stop();
-    d->linkCloseTimer.stop();
     const QList<QObject*> children = findChildren<QObject*>();
     for (QObject* child : children) {
         disconnect(child, nullptr, this, nullptr);
@@ -501,25 +331,15 @@ FirmwareTab::~FirmwareTab()
     if (d->profiles) {
         disconnect(d->profiles, nullptr, this, nullptr);
     }
-    for (ToolInvocation* invocation : {d->sfiInvocation.data(), d->cliInvocation.data(), d->cmdlineInvocation.data()}) {
-        if (invocation) {
-            disconnect(invocation, nullptr, this, nullptr);
-            invocation->cancel();
-        }
+    if (d->sfiInvocation) {
+        disconnect(d->sfiInvocation, nullptr, this, nullptr);
+        d->sfiInvocation->cancel();
     }
-    if (d->puller->isRunning()) {
-        d->puller->cancel();
-    }
-    if (d->updater->isRunning()) {
-        d->updater->cancel();
-    }
-    if (d->flasher->isRunning()) {
-        // Refused while upgrade_tool writes; MainWindow never closes a busy tab and refuses to quit
-        // while it writes, because the runner kills its processes when it is destroyed.
-        d->flasher->cancel();
-    }
-    d->link->close();   // McuLink's destructor (below, before the runner's) sends the cleanup detached
-    d->ssh->close();
+    // The job stops what still runs (a pull, an MCU update, a flash that is only waiting), closes
+    // the MCU link - its board cleanup goes out detached - and the build-machine connection; now,
+    // while the tab is whole, as before the split. MainWindow never closes a tab that writes.
+    delete d->job;
+    d->job = nullptr;
 }
 
 void FirmwareTab::Private::setupUi()
@@ -779,6 +599,7 @@ void FirmwareTab::Private::wireWidgets()
         if (!folder.isEmpty() && folder != AppSettings::instance().firmwareRemoteFolder(targetKey())) {
             AppSettings::instance().setFirmwareRemoteFolder(targetKey(), folder);
         }
+        job->setRemoteFolder(folder);
     });
     connect(cacheDirEdit, &QLineEdit::editingFinished, q, [this]() {
         const QString dir = QDir::fromNativeSeparators(cacheDirEdit->text().trimmed());
@@ -801,23 +622,15 @@ void FirmwareTab::Private::wireWidgets()
     connect(flashSocButton, &QPushButton::clicked, q, &FirmwareTab::flashSoc);
     connect(cancelButton, &QPushButton::clicked, q, &FirmwareTab::cancel);
     connect(installDriversButton, &QPushButton::clicked, q, &FirmwareTab::installDrivers);
-    connect(partitionsAllButton, &QPushButton::clicked, q, [this]() {
-        checkAll = true;
-        checkedNames.clear();
-        renderPartitions();
-        pushSelection();
-    });
-    connect(partitionsNoneButton, &QPushButton::clicked, q, [this]() {
-        checkAll = false;
-        checkedNames.clear();
-        renderPartitions();
-    });
+    connect(partitionsAllButton, &QPushButton::clicked, q, [this]() { job->selectAllPartitions(); });
+    // "None" has no SocFlasher form: the job keeps it and Flash SoC refuses it.
+    connect(partitionsNoneButton, &QPushButton::clicked, q, [this]() { job->setSelectedPartitions({}); });
     connect(partitionTable, &QTableWidget::itemChanged, q, [this](QTableWidgetItem* item) { onPartitionItemChanged(item); });
 
     // ---- MCU ----
     connect(packageEdit, &QLineEdit::editingFinished, q, [this]() {
         const QString typed = QDir::fromNativeSeparators(packageEdit->text().trimmed());
-        if (typed != mcuPackagePath) {
+        if (typed != job->packagePath()) {
             q->setPackagePath(typed);
         }
     });
@@ -834,233 +647,76 @@ void FirmwareTab::Private::wireWidgets()
     connect(saveLogButton, &QPushButton::clicked, q, &FirmwareTab::saveLog);
 }
 
-void FirmwareTab::Private::wireCollaborators()
+void FirmwareTab::Private::wireJob()
 {
-    // ---- Build machine connection (the same prompts as a session tab) ----
-    connect(ssh, &Transport::stateChanged, q, [this](Transport::State state) { onSshStateChanged(state); });
-    connect(ssh, &Transport::errorOccurred, q, [this](const QString& message) {
-        sshError = message;
-        q->appendLog(FirmwareTab::tr("SSH: %1").arg(message));
+    // ---- The log, the progress row, the status bar ----
+    connect(job, &FirmwareJob::logLine, q, [this](const QString& line) { appendLines(line, /*mirror=*/false); });   // the job mirrors its own
+    connect(job, &FirmwareJob::toolOutput, q, [this](const QString& line) { appendToolLine(line); });
+    connect(job, &FirmwareJob::progress, q, [this](const QString& stage, int percent) { onProgress(stage, percent); });
+    connect(job, &FirmwareJob::persistentStatusChanged, q, [this](const QString& text) {
+        emit q->statusMessage(text, 0);   // lasting while busy; MainWindow keeps it under transient messages
     });
-    connect(ssh, &SshConnection::authenticated, q, [this](const QString& method) {
-        q->appendLog(FirmwareTab::tr("Authenticated to %1 (%2)").arg(pullTarget, method));
-    });
-    connect(ssh, &SshConnection::hostKeyVerificationRequired, q, [this](const SshConnection::HostKeyInfo& info) {
-        // As SessionWidget::onHostKeyVerificationRequired(): the dialog lives on the heap and the
-        // tab is tracked, because either may go away during the nested event loop.
-        QPointer<FirmwareTab> self(q);
-        QPointer<HostKeyDialog> dialog(new HostKeyDialog(info, q->window()));
-        const int result = dialog->exec();
-        if (!self || !dialog) {
-            delete dialog;
-            return;
+    connect(job, &FirmwareJob::busyRefused, q, [this](const QString& message) { emit q->statusMessage(message, kStatusShortMs); });
+    connect(job, &FirmwareJob::cancelRefused, q, [this](const QString& message) { emit q->statusMessage(message, kStatusLongMs); });
+    connect(job, &FirmwareJob::busyChanged, q, [this](bool busy) {
+        if (busy) {
+            statusTimer.stop();   // no status queries while tools run
         }
-        const bool accepted = (result == QDialog::Accepted);
-        const bool remember = accepted && dialog->remember();
-        delete dialog;
-        qCInfo(lcFirmware) << "host key" << info.keyType << info.fingerprintSha256
-                           << (accepted ? "accepted" : "rejected") << (remember ? "(remembered)" : "");
-        ssh->answerHostKey(accepted, remember);
-    });
-    connect(ssh, &SshConnection::authPromptRequired, q, [this](const SshConnection::AuthPrompt& prompt) {
-        QPointer<FirmwareTab> self(q);
-        QPointer<AuthPromptDialog> dialog(new AuthPromptDialog(prompt, q->window()));
-        const int result = dialog->exec();
-        if (!self || !dialog) {
-            delete dialog;
-            return;
+        updateControls();
+        if (!busy) {
+            updateStatusTimer();
         }
-        if (result == QDialog::Accepted) {
-            const QString response = dialog->response();
-            const bool remember = dialog->remember();
-            delete dialog;
-            ssh->answerPrompt(response, remember);
-        } else {
-            delete dialog;
-            qCInfo(lcFirmware) << "authentication prompt cancelled";
-            ssh->cancelPrompt();
+        emit q->busyChanged(busy);
+    });
+    connect(job, &FirmwareJob::cancellableChanged, q, [this](bool cancellable) { cancelButton->setEnabled(cancellable); });
+    connect(job, &FirmwareJob::stepFinished, q,
+            [this](const QString& step, bool ok, const QString& message) { onStepFinished(step, ok, message); });
+    connect(job, &FirmwareJob::operationFinished, q,
+            [this](const QString& op, bool ok, const QString& message) { onOperationFinished(op, ok, message); });
+
+    // ---- What the sections show ----
+    connect(job, &FirmwareJob::statusChanged, q, [this](const SocFlasher::DeviceStatus&) { renderDeviceStatus(); });
+    connect(job, &FirmwareJob::boardInfoReceived, q, [this](const QString& text) { socStatusLabel->setToolTip(text); });
+    connect(job, &FirmwareJob::imageChanged, q, [this](bool reread) { renderImage(reread); });
+    connect(job, &FirmwareJob::packageChanged, q, [this]() {
+        renderPackage();
+        updateControls();
+    });
+    connect(job, &FirmwareJob::roleChanged, q, [this](quint32 role) {
+        if (!settingRole) {
+            q->setSelectedRole(role);   // Read pre-selected the reported role: the radios show what the user confirms
+        }
+    });
+    connect(job, &FirmwareJob::mcuInfoChanged, q, [this]() { renderMcuStatus(); });
+    connect(job, &FirmwareJob::partitionsChanged, q, [this]() { renderPartitions(); });
+    connect(job->socFlasher(), &SocFlasher::phaseChanged, q, [this](SocFlasher::Phase phase) {
+        if (downloadBox && phase != SocFlasher::Phase::WaitingForLoader) {
+            downloadBox->reject();   // the question is moot: the job sends nothing
         }
     });
 
-    // ---- Image pull ----
-    connect(puller, &ImagePuller::remoteInfo, q,
-            [this](const QString& name, qint64 size, const QDateTime& modified, const QString& describe) {
-                QString text = FirmwareTab::tr("Remote %1: %2, built %3").arg(name, formatSize(size), formatTime(modified));
-                if (!describe.isEmpty()) {
-                    text += QStringLiteral(" (%1)").arg(describe);
-                }
-                q->appendLog(text);
-                progressLabel->setText(text);
-            });
-    connect(puller, &ImagePuller::progress, q, [this](qint64 done, qint64 total) {
-        if (!pullerActive) {
-            return;
-        }
-        const int percent = total > 0 ? static_cast<int>(done * 100 / total) : -1;
-        const QString text = total > 0 ? FirmwareTab::tr("Pulling update.img: %1 / %2 (%3 %)")
-                                             .arg(formatSize(done), formatSize(total))
-                                             .arg(percent)
-                                       : FirmwareTab::tr("Pulling update.img: %1").arg(formatSize(done));
-        if (percent >= 0) {
-            setProgressPercent(percent, text);
-        } else {
-            setProgressBusy(text);
-        }
-        setPersistent(text);
+    // ---- What the settings remember ----
+    connect(job, &FirmwareJob::pullSourceAccepted, q, [](const QString& target, const QString& folder, const QString& cache) {
+        AppSettings& settings = AppSettings::instance();
+        settings.setFirmwareSourceTarget(target);
+        settings.setFirmwareRemoteFolder(target, folder);
+        settings.setFirmwareCacheDirectory(cache);
     });
-    connect(puller, &ImagePuller::skipped, q, [this](const QString& reason) { q->appendLog(reason); });
-    connect(puller, &ImagePuller::logLine, q, [this](const QString& line) { q->appendLog(line); });
-    connect(puller, &ImagePuller::finished, q, [this](bool ok, const QString& message) {
-        if (pullerActive) {
-            pullFinished(ok, message);
+    connect(job, &FirmwareJob::mtdPartsRead, q, [](const QString& serial, const QString& mtdparts) {
+        AppSettings& settings = AppSettings::instance();
+        if (!serial.isEmpty() && settings.firmwareMtdParts(serial) != mtdparts) {
+            settings.setFirmwareMtdParts(serial, mtdparts);
+        }
+        if (settings.firmwareMtdParts(QString()) != mtdparts) {
+            settings.setFirmwareMtdParts(QString(), mtdparts);   // "*": the layout for a board met in Loader mode
         }
     });
+    job->setLayoutProvider([](const QString& serial) { return AppSettings::instance().firmwareMtdParts(serial); });
 
-    // ---- SoC flasher ----
-    connect(flasher, &SocFlasher::statusChanged, q, [this](const SocFlasher::DeviceStatus& status) {
-        deviceStatus = status;
-        hasDeviceStatus = true;
-        renderDeviceStatus();
-        if (status.mode == SocFlasher::DeviceStatus::Mode::Adb && !status.serial.isEmpty()) {
-            // A running board can tell its flash layout; Loader mode later cannot. Read it once
-            // per board and session, only while nothing else uses adb.
-            const bool otherBoard = status.serial != layoutSerial;
-            layoutSerial = status.serial;
-            if (operation.isEmpty() && !cmdlineInvocation && !layoutReadTried.contains(status.serial)
-                && AppSettings::instance().firmwareMtdParts(status.serial).isEmpty()) {
-                readBoardLayout(status.serial);
-            }
-            if (otherBoard) {
-                requestPlan(false);   // flashLayout() follows the board
-            }
-        }
-    });
-    connect(flasher, &SocFlasher::mtdPartsRead, q, [this](const QString& mtdparts) {
-        // Step 2 of a flash read it from the board the flow found on ADB.
-        const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : layoutSerial;
-        storeLayout(serial, mtdparts);
-    });
-    connect(flasher, &SocFlasher::partitionsPlanned, q,
-            [this](bool ok, const QList<PartitionImage>& rows, const QString& message) { onPartitionsPlanned(ok, rows, message); });
-    connect(flasher, &SocFlasher::phaseChanged, q, [this](SocFlasher::Phase phase) { onFlasherPhase(phase); });
-    connect(flasher, &SocFlasher::downloadModeNeeded, q, [this]() {
-        // Not inside the flasher's emit: the question runs a nested event loop.
-        QMetaObject::invokeMethod(q, [this]() { askDownloadMode(); }, Qt::QueuedConnection);
-    });
-    connect(flasher, &SocFlasher::progress, q, [this](const QString& stage, int percent) {
-        if (!flasherActive) {
-            return;
-        }
-        const QString text = percent >= 0 ? FirmwareTab::tr("Flashing SoC: %1 %2 %").arg(stage).arg(percent)
-                                          : FirmwareTab::tr("Flashing SoC: %1").arg(stage);
-        if (percent >= 0) {
-            setProgressPercent(percent, text);
-        } else {
-            progressLabel->setText(text);
-        }
-        setPersistent(text);
-    });
-    connect(flasher, &SocFlasher::toolOutput, q, [this](const QString& line) { appendToolLine(line); });
-    connect(flasher, &SocFlasher::logLine, q, [this](const QString& line) { q->appendLog(line); });
-    connect(flasher, &SocFlasher::boardInfo, q, [this](const QString& text) {
-        boardInfoText = text.trimmed();
-        q->appendLog(FirmwareTab::tr("Board information:"));
-        q->appendLog(boardInfoText);
-        socStatusLabel->setToolTip(boardInfoText);
-    });
-    connect(flasher, &SocFlasher::finished, q, [this](bool ok, const QString& message) {
-        if (flasherActive) {
-            flashFinished(ok, message);
-        } else {
-            q->appendLog(FirmwareTab::tr("SoC flasher: %1").arg(message));   // a late report of a step already ended
-        }
-    });
-
-    // ---- MCU link / updater ----
-    connect(link, &McuLink::serialSelected, q,
-            [this](const QString& serial) { q->appendLog(FirmwareTab::tr("MCU link: board %1").arg(serial)); });
-    connect(link, &McuLink::opened, q, [this](const QString&, quint16) { onLinkOpened(); });
-    connect(link, &McuLink::failed, q, [this](const QString& message) {
-        if (linkActive && !updaterActive && !mcuResultPending) {
-            linkActive = false;
-            stepFinished(step, false, message);
-        }
-    });
-    connect(link, &McuLink::linkLost, q, [this](const QString& message) {
-        linkLostMessage = message;
-        q->appendLog(message);
-        if (updaterActive && !updater->isRunning()) {
-            updaterActive = false;
-            mcuDone(false, message);
-        }
-    });
-    connect(link, &McuLink::closed, q, [this]() {
-        if (mcuResultPending) {
-            completeMcu();
-        }
-    });
-    connect(link, &McuLink::logLine, q, [this](const QString& line) { q->appendLog(line); });
-
-    connect(updater, &McuUpdater::logLine, q, [this](const QString& line) { q->appendLog(line); });
-    connect(updater, &McuUpdater::phaseChanged, q, [this](McuUpdater::Phase phase) {
-        if (!updaterActive) {
-            return;
-        }
-        QString text;
-        switch (phase) {
-        case McuUpdater::Phase::ProbeBootloader:
-        case McuUpdater::Phase::ProbeApplication:
-            text = FirmwareTab::tr("MCU: probing the bootloader and the application");
-            break;
-        case McuUpdater::Phase::EnterBootloader:
-        case McuUpdater::Phase::SettleAfterReset:
-        case McuUpdater::Phase::RebootProbe:
-            text = FirmwareTab::tr("MCU: rebooting into the UART updater");
-            break;
-        case McuUpdater::Phase::Banner:
-            text = FirmwareTab::tr("MCU: waiting for the application to restart");
-            break;
-        default:
-            break;
-        }
-        if (!text.isEmpty()) {
-            progressLabel->setText(text);
-        }
-    });
-    connect(updater, &McuUpdater::progress, q, [this](qint64 done, qint64 total) {
-        if (!updaterActive) {
-            return;
-        }
-        const int percent = total > 0 ? static_cast<int>(done * 100 / total) : 0;
-        const QString text = FirmwareTab::tr("Updating MCU: %1 / %2 bytes (%3 %)")
-                                 .arg(QLocale().toString(done), QLocale().toString(total))
-                                 .arg(percent);
-        setProgressPercent(percent, text);
-        setPersistent(text);
-    });
-    connect(updater, &McuUpdater::applicationInfo, q, [this](const McuUpdater::CliFields& fields) {
-        if (!fields.value(QStringLiteral("version")).isEmpty()) {
-            runningVersion = fields.value(QStringLiteral("version"));
-            runningRole = fields.value(QStringLiteral("role"));
-            renderMcuStatus();
-        }
-    });
-    connect(updater, &McuUpdater::applicationRestarted, q, [this](const McuUpdater::CliFields& fields) {
-        if (!fields.value(QStringLiteral("version")).isEmpty()) {
-            runningVersion = fields.value(QStringLiteral("version"));
-        }
-        if (!fields.value(QStringLiteral("role")).isEmpty()) {
-            runningRole = fields.value(QStringLiteral("role"));
-        }
-        renderMcuStatus();
-    });
-    connect(updater, &McuUpdater::finished, q, [this](bool ok, const QString& message) {
-        if (!updaterActive) {
-            return;
-        }
-        updaterActive = false;
-        mcuDone(ok, (!ok && !linkLostMessage.isEmpty()) ? linkLostMessage : message);
-    });
+    // ---- The questions: the same dialogs as a session tab ----
+    job->setHostKeyHandler([this](const SshConnection::HostKeyInfo& info) { return askHostKey(info); });
+    job->setAuthPromptHandler([this](const SshConnection::AuthPrompt& prompt) { return askAuthPrompt(prompt); });
+    job->setDownloadModeHandler([this]() { return askDownloadMode(); });
 }
 
 void FirmwareTab::Private::retranslate()
@@ -1131,10 +787,10 @@ void FirmwareTab::Private::retranslate()
     saveLogButton->setText(FirmwareTab::tr("Save..."));
     saveLogButton->setToolTip(FirmwareTab::tr("Save the log pane to a text file"));
 
-    if (operation.isEmpty() && progressShowsReady) {
+    if (!job->isBusy() && progressShowsReady) {
         progressLabel->setText(FirmwareTab::tr("Ready"));
     }
-    refreshImage();
+    job->refreshImage();
     renderSocImage();
     renderPartitions();
     renderDeviceStatus();
@@ -1147,33 +803,33 @@ void FirmwareTab::Private::loadSettings()
     const AppSettings& s = AppSettings::instance();
     restoring = true;
     cacheDirEdit->setText(nativePath(s.firmwareCacheDirectory()));
+    job->setCacheDirectory(s.firmwareCacheDirectory());
     q->setSourceTarget(s.firmwareSourceTarget());   // also loads that target's remote folder
 
     const QString local = s.firmwareLocalImage();
     if (!local.isEmpty() && QFileInfo(local).isFile() && RockchipTool::isRkfwImage(local)) {
-        localImage = local;
+        job->useLocalImage(local);
     }
     const QString packageFile = s.firmwarePackagePath();
     if (!packageFile.isEmpty() && QFileInfo(packageFile).isFile()) {
         CcPackage loaded;
         QString error;
         if (CcPackage::load(packageFile, &loaded, &error)) {
-            mcuPackage = loaded;
-            mcuPackagePath = packageFile;
+            job->setPackage(loaded);
         } else {
             qCInfo(lcFirmware) << "remembered package" << packageFile << "not loaded:" << error;
         }
     }
-    packageEdit->setText(nativePath(mcuPackagePath));
+    packageEdit->setText(nativePath(job->packagePath()));
     // Last session's role is shown, never confirmed: the board plugged in now may be another one
     // (REQUIREMENTS: "the user confirms, never guess silently"). Update MCU / Set role wait for a
     // Read (which pre-selects the reported role) or a click on a radio in this session.
-    rememberedRole = roleFromText(QSettings().value(kRoleSettingsKey).toString());
-    confirmedRole = 0;
+    rememberedRole = FirmwareJob::roleFromText(QSettings().value(kRoleSettingsKey).toString());
+    job->setRole(0);
     showRole(rememberedRole);   // logged by the constructor, after the tool paths
     restoring = false;
 
-    refreshImage();
+    job->refreshImage();
     renderPackage();
 }
 
@@ -1188,36 +844,35 @@ QString FirmwareTab::title() const
 
 bool FirmwareTab::isBusy() const
 {
-    return !d->operation.isEmpty();
+    return d->job->isBusy();
 }
 
 QString FirmwareTab::persistentStatusMessage() const
 {
-    return isBusy() ? d->persistent : QString();
+    return d->job->persistentStatusMessage();
 }
 
 QString FirmwareTab::currentOperation() const
 {
-    return d->operation;
+    return d->job->currentOperation();
 }
 
-ToolRunner* FirmwareTab::toolRunner() const { return d->runner; }
-SocFlasher* FirmwareTab::socFlasher() const { return d->flasher; }
-McuLink* FirmwareTab::mcuLink() const { return d->link; }
-McuUpdater* FirmwareTab::mcuUpdater() const { return d->updater; }
-ImagePuller* FirmwareTab::imagePuller() const { return d->puller; }
-SshConnection* FirmwareTab::sshConnection() const { return d->ssh; }
+FirmwareJob* FirmwareTab::firmwareJob() const { return d->job; }
+ToolRunner* FirmwareTab::toolRunner() const { return d->job->toolRunner(); }
+SocFlasher* FirmwareTab::socFlasher() const { return d->job->socFlasher(); }
+McuLink* FirmwareTab::mcuLink() const { return d->job->mcuLink(); }
+McuUpdater* FirmwareTab::mcuUpdater() const { return d->job->mcuUpdater(); }
+ImagePuller* FirmwareTab::imagePuller() const { return d->job->imagePuller(); }
+SshConnection* FirmwareTab::sshConnection() const { return d->job->sshConnection(); }
 
 void FirmwareTab::setToolPaths(const QString& upgradeTool, const QString& adb, const QString& driverInstaller)
 {
-    d->upgradeToolPath = upgradeTool;
-    d->adbPath = adb;
+    d->job->setToolPaths(upgradeTool, adb);
     d->driverInstallerPath = driverInstaller;
     d->toolPathsPinned = true;
-    d->pushToolPaths();
     qCInfo(lcFirmware) << "tool paths set: upgrade_tool" << upgradeTool << "adb" << adb;
     d->runFirmwareInfo(imagePath());   // the image line and the partitions depend on upgrade_tool
-    d->requestPlan(true);
+    d->job->planPartitions();
 }
 
 void FirmwareTab::setSessionProvider(SessionProvider provider)
@@ -1275,6 +930,7 @@ void FirmwareTab::setRemoteFolder(const QString& folder)
 {
     const QString trimmed = folder.trimmed();
     d->remoteFolderEdit->setText(trimmed);
+    d->job->setRemoteFolder(trimmed);
     if (!d->restoring && !trimmed.isEmpty()) {
         AppSettings::instance().setFirmwareRemoteFolder(d->targetKey(), trimmed);
     }
@@ -1292,91 +948,54 @@ void FirmwareTab::setCacheDirectory(const QString& dir)
     if (!d->restoring) {
         AppSettings::instance().setFirmwareCacheDirectory(clean);
     }
-    d->refreshImage();
+    d->job->setCacheDirectory(clean);
+    d->job->refreshImage();
 }
 
 QString FirmwareTab::imagePath() const
 {
-    if (!d->localImage.isEmpty()) {
-        return d->localImage;
-    }
-    const QString cache = cacheDirectory();
-    if (cache.isEmpty()) {
-        return QString();
-    }
-    const QString cached = ImagePuller::imagePath(cache);
-    return QFileInfo(cached).isFile() ? cached : QString();
+    return d->job->imagePath();
 }
 
 void FirmwareTab::setImagePath(const QString& path)
 {
     const QString clean = QDir::fromNativeSeparators(path.trimmed());
-    if (clean.isEmpty()) {
-        d->localImage.clear();
-        AppSettings::instance().setFirmwareLocalImage(QString());
-        d->refreshImage();
+    QString message;
+    if (!d->job->setImagePath(clean, &message)) {
+        emit statusMessage(message, kStatusLongMs);   // the job logged it
         return;
     }
-    QString error;
-    if (!QFileInfo(clean).isFile()) {
-        error = tr("file not found");
-    } else if (!RockchipTool::isRkfwImage(clean, &error)) {
-        if (error.isEmpty()) {
-            error = tr("not a Rockchip RKFW image");
-        }
-    }
-    if (!error.isEmpty()) {
-        const QString message = tr("Image %1 refused: %2").arg(nativePath(clean), error);
-        appendLog(message);
-        emit statusMessage(message, kStatusLongMs);
-        return;
-    }
-    d->localImage = clean;
-    AppSettings::instance().setFirmwareLocalImage(clean);
-    appendLog(tr("Using the local image %1").arg(nativePath(clean)));
-    d->refreshImage();
+    AppSettings::instance().setFirmwareLocalImage(clean);   // "" = back to the cache's image
 }
 
 QString FirmwareTab::packagePath() const
 {
-    return d->mcuPackagePath;
+    return d->job->packagePath();
 }
 
 bool FirmwareTab::setPackagePath(const QString& path)
 {
     const QString clean = QDir::fromNativeSeparators(path.trimmed());
     if (clean.isEmpty()) {
-        d->mcuPackage = CcPackage();
-        d->mcuPackagePath.clear();
         d->packageProblem.clear();
+        d->job->setPackagePath(QString());
         AppSettings::instance().setFirmwarePackagePath(QString());
         d->packageEdit->clear();
         d->renderPackage();
         d->updateControls();
         return false;
     }
-    CcPackage loaded;
-    QString error;
-    if (!CcPackage::load(clean, &loaded, &error)) {
-        if (error.isEmpty()) {
-            error = tr("unreadable file");
-        }
-        const QString message = tr("Package %1 refused: %2").arg(QFileInfo(clean).fileName(), error);
-        appendLog(message);
-        emit statusMessage(message, kStatusLongMs);
+    QString message;
+    if (!d->job->setPackagePath(clean, &message)) {
+        emit statusMessage(message, kStatusLongMs);   // the job logged it
         d->packageProblem = message;
-        d->packageEdit->setText(nativePath(d->mcuPackagePath));   // back to the accepted one
+        d->packageEdit->setText(nativePath(d->job->packagePath()));   // back to the accepted one
         d->renderPackage();
         return false;
     }
-    d->mcuPackage = loaded;
-    d->mcuPackagePath = clean;
     d->packageProblem.clear();
     AppSettings::instance().setFirmwarePackagePath(clean);
     d->packageEdit->setText(nativePath(clean));
-    const QString summary = loaded.summary();
-    appendLog(tr("Package %1: %2").arg(QFileInfo(clean).fileName(),
-                                        summary.isEmpty() ? d->packageInfoLabel->text() : summary));
     d->renderPackage();
     d->updateControls();
     return true;
@@ -1384,33 +1003,35 @@ bool FirmwareTab::setPackagePath(const QString& path)
 
 CcPackage FirmwareTab::package() const
 {
-    return d->mcuPackage;
+    return d->job->package();
 }
 
 quint32 FirmwareTab::selectedRole() const
 {
-    return d->confirmedRole;
+    return d->job->role();
 }
 
 void FirmwareTab::setSelectedRole(quint32 role)
 {
     const quint32 valid = (role == CcProtocol::RoleRx || role == CcProtocol::RoleTx) ? role : 0;
-    d->confirmedRole = valid;
+    d->settingRole = true;
+    d->job->setRole(valid);
+    d->settingRole = false;
     d->showRole(valid);
     if (!d->restoring) {
-        QSettings().setValue(kRoleSettingsKey, roleText(valid));
+        QSettings().setValue(kRoleSettingsKey, FirmwareJob::roleText(valid));
     }
     d->updateControls();
 }
 
 QString FirmwareTab::runningMcuVersion() const
 {
-    return d->runningVersion;
+    return d->job->runningMcuVersion();
 }
 
 QString FirmwareTab::runningMcuRole() const
 {
-    return d->runningRole;
+    return d->job->runningMcuRole();
 }
 
 QComboBox* FirmwareTab::sourceCombo() const { return d->sourceCombo; }
@@ -1429,9 +1050,7 @@ QLabel* FirmwareTab::partitionsLabel() const { return d->partitionsLabel; }
 
 QString FirmwareTab::flashLayout() const
 {
-    // What the flasher places the partitions in (SocFlasher step 5): the image's own layout when
-    // its env.img carries one, else the board's.
-    return d->usingImageLayout() ? d->imageLayout : d->boardLayout();
+    return d->job->flashLayout();
 }
 
 QStringList FirmwareTab::selectedPartitions() const
@@ -1448,17 +1067,7 @@ QStringList FirmwareTab::selectedPartitions() const
 
 void FirmwareTab::setSelectedPartitions(const QStringList& names)
 {
-    QStringList cleaned;
-    for (const QString& name : names) {
-        const QString trimmed = name.trimmed();
-        if (!trimmed.isEmpty() && !cleaned.contains(trimmed)) {
-            cleaned << trimmed;
-        }
-    }
-    d->checkAll = false;
-    d->checkedNames = cleaned;
-    d->renderPartitions();
-    d->pushSelection();
+    d->job->setSelectedPartitions(names);   // the table follows partitionsChanged()
 }
 
 QPushButton* FirmwareTab::flashSocButton() const { return d->flashSocButton; }
@@ -1541,44 +1150,6 @@ QString FirmwareTab::Private::targetKey() const
     return id.isEmpty() ? sourceCombo->currentText().trimmed() : QString(kProfileKeyPrefix) + id;
 }
 
-bool FirmwareTab::Private::resolveProfile(SshProfile* profile, QString* error) const
-{
-    QString text = sourceCombo->currentText().trimmed();
-    QString id = selectedProfileId();
-    if (id.isEmpty() && text.startsWith(kProfileKeyPrefix)) {
-        id = text.mid(kProfileKeyPrefix.size());
-    }
-    if (!id.isEmpty()) {
-        const std::optional<SshProfile> stored = profiles ? profiles->profile(id) : std::nullopt;
-        if (stored) {
-            *profile = *stored;
-            return true;
-        }
-        *error = FirmwareTab::tr("the SSH profile of the build machine no longer exists");
-        return false;
-    }
-    if (text.isEmpty()) {
-        *error = FirmwareTab::tr("enter the build machine (an SSH profile or user@host)");
-        return false;
-    }
-    if (text.startsWith(kTargetKeyPrefix)) {
-        text = text.mid(kTargetKeyPrefix.size());
-    }
-    if (profiles) {
-        if (const std::optional<SshProfile> byName = profiles->profileByName(text)) {
-            *profile = *byName;
-            return true;
-        }
-    }
-    SshProfile adHoc;
-    if (!SshProfile::parseTarget(text, adHoc)) {
-        *error = FirmwareTab::tr("\"%1\" is not an SSH target such as user@host[:port]").arg(text);
-        return false;
-    }
-    *profile = adHoc;
-    return true;
-}
-
 void FirmwareTab::Private::onTargetChanged(bool persist)
 {
     const QString key = targetKey();
@@ -1590,24 +1161,44 @@ void FirmwareTab::Private::onTargetChanged(bool persist)
     if (persist && key != AppSettings::instance().firmwareSourceTarget()) {
         AppSettings::instance().setFirmwareSourceTarget(key);
     }
-    if (operation.isEmpty() && ssh->state() != Transport::State::Disconnected) {
-        closeSsh();   // a connection to the previous target is of no use any more
+    job->setSourceTarget(key);
+    job->setRemoteFolder(q->remoteFolder());
+    if (!job->isBusy() && job->sshConnection()->state() != Transport::State::Disconnected) {
+        job->disconnectSource();   // a connection to the previous target is of no use any more
     }
 }
 
-void FirmwareTab::Private::refreshImage(bool reread)
+void FirmwareTab::Private::syncJob()
+{
+    // The fields as they are now (the job takes the profile key, not the combo's text) and the
+    // Preferences an operation reads when it starts; the job reads no settings itself.
+    job->setSourceTarget(targetKey());
+    job->setRemoteFolder(q->remoteFolder());
+    job->setCacheDirectory(q->cacheDirectory());
+    const AppSettings& settings = AppSettings::instance();
+    FirmwareJob::SshDefaults defaults;
+    defaults.knownHostsFile = settings.sshKnownHostsFile();
+    defaults.identityFile = settings.sshDefaultIdentityFile();
+    defaults.terminalType = settings.sshDefaultTerminalType();
+    defaults.keepAliveSeconds = settings.sshDefaultKeepAliveSeconds();
+    job->setSshDefaults(defaults);
+    job->setGitDescribe(settings.firmwareGitDescribe());
+    job->setExtraFiles(settings.firmwareExtraFiles());
+}
+
+void FirmwareTab::Private::renderImage(bool reread)
 {
     if (reread) {
         sfiImage.clear();   // same path, new content: describe it again
     }
-    const QString image = q->imagePath();
+    const QString image = job->imagePath();
     const QString cache = q->cacheDirectory();
     QString text;
     if (image.isEmpty()) {
         text = FirmwareTab::tr("no image yet: pull one from the build machine or use a local image");
     } else {
         const QFileInfo info(image);
-        if (!localImage.isEmpty()) {
+        if (!job->localImage().isEmpty()) {
             text = FirmwareTab::tr("%1, %2, modified %3 (local file)")
                        .arg(nativePath(image), formatSize(info.size()), formatTime(info.lastModified()));
         } else {
@@ -1634,8 +1225,7 @@ void FirmwareTab::Private::refreshImage(bool reread)
     if (image != sfiImage) {
         runFirmwareInfo(image);
     }
-    requestPlan(reread);   // a no-op while image, mtime and layout are what the table shows
-    updateControls();
+    updateControls();   // the job plans the image right after (partitionsChanged())
 }
 
 void FirmwareTab::Private::runFirmwareInfo(const QString& image)
@@ -1648,11 +1238,11 @@ void FirmwareTab::Private::runFirmwareInfo(const QString& image)
     }
     if (image.isEmpty()) {
         sfiText.clear();
-    } else if (upgradeToolPath.isEmpty()) {
+    } else if (job->upgradeToolPath().isEmpty()) {
         sfiText = FirmwareTab::tr("upgrade_tool not found: no image details");
     } else {
         sfiText = FirmwareTab::tr("reading the image details...");
-        ToolInvocation* invocation = flasher->upgradeTool()->firmwareInfo(image);
+        ToolInvocation* invocation = job->socFlasher()->upgradeTool()->firmwareInfo(image);
         sfiInvocation = invocation;
         connect(invocation, &ToolInvocation::finished, q, [this, invocation](const ToolResult& result) {
             if (sfiInvocation != invocation) {
@@ -1679,156 +1269,31 @@ void FirmwareTab::Private::renderSocImage()
 }
 
 // =======================================================================================
-// Partitions (v0.5.1): SocFlasher::planPartitions() on image / layout changes, the table
+// Partitions (v0.5.1): the table renders FirmwareJob's plan and selection
 // =======================================================================================
-
-QString FirmwareTab::Private::imageKey(const QString& image)
-{
-    return image + QLatin1Char('\n') + QString::number(QFileInfo(image).lastModified().toMSecsSinceEpoch());
-}
-
-void FirmwareTab::Private::requestPlan(bool force)
-{
-    const QString image = q->imagePath();
-    if (image.isEmpty()) {
-        requestedPlanKey.clear();
-        planState = PlanState::NoImage;
-        partitionRows.clear();
-        plannedImage.clear();
-        renderPartitions();
-        return;
-    }
-    // The board's layout is what the flasher gets; the image's own (env.img) is its business.
-    const QString layout = boardLayout();
-    const QString key = imageKey(image) + QLatin1Char('\n') + layout;
-    if (!force && key == requestedPlanKey) {
-        return;
-    }
-    requestedPlanKey = key;
-    if (imageKey(image) != selectionImageKey) {
-        selectionImageKey = imageKey(image);   // another image: everything that can be written is checked again
-        checkAll = true;
-        checkedNames.clear();
-    }
-    if (upgradeToolPath.isEmpty()) {
-        planState = PlanState::Failed;
-        planMessage = FirmwareTab::tr("upgrade_tool not found");
-        partitionRows.clear();
-        renderPartitions();
-        return;
-    }
-    if (planInFlight || flasher->isRunning()) {
-        planPending = true;   // asked again when that plan / the flash reports
-        return;
-    }
-    pushToolPaths();
-    flasher->setImagePath(image);
-    flasher->setMtdParts(layout);
-    pushSelection();
-    if (!flasher->planPartitions()) {
-        planPending = true;
-        return;
-    }
-    planPending = false;
-    planInFlight = true;
-    planState = PlanState::Planning;
-    renderPartitions();
-}
-
-void FirmwareTab::Private::onPartitionsPlanned(bool ok, const QList<PartitionImage>& rows, const QString& message)
-{
-    planInFlight = false;
-    planState = ok ? PlanState::Ready : PlanState::Failed;
-    planMessage = message;
-    partitionRows = ok ? rows : QList<PartitionImage>();
-    plannedImage = flasher->imagePath();
-    // The layout the image carries itself, read the way the flasher read it for these rows.
-    imageLayout = ok ? RockchipTool::mtdPartsFromEnvImage(flasher->extractDirectory() + QStringLiteral("/env.img")) : QString();
-    renderPartitions();
-    const QString imageName = QFileInfo(plannedImage).fileName();
-    if (ok) {
-        QStringList list;
-        for (const PartitionImage& row : rows) {
-            list << (row.inLayout ? QStringLiteral("%1@0x%2").arg(row.name).arg(row.offset, 0, 16) : row.name);
-        }
-        q->appendLog(FirmwareTab::tr("Partitions of %1: %2").arg(imageName, list.join(QStringLiteral(", "))));
-        if (!layoutKnown()) {
-            q->appendLog(FirmwareTab::tr("The flash layout is not known yet: the image carries none, and it is read from "
-                                         "the board once it runs (ADB); MASKROM mode needs none"));
-        }
-    } else {
-        q->appendLog(FirmwareTab::tr("Cannot list the partitions of %1: %2").arg(imageName, message));
-    }
-    if (planPending && !flasher->isRunning()) {
-        planPending = false;
-        requestPlan(true);
-    }
-}
-
-QString FirmwareTab::Private::boardLayout() const
-{
-    // The board's own layout when it was read; else the one read last ("*"), which is the best
-    // guess for a board that is already in Loader mode (rockusb tells no ADB serial).
-    const AppSettings& settings = AppSettings::instance();
-    if (!layoutSerial.isEmpty()) {
-        const QString own = settings.firmwareMtdParts(layoutSerial);
-        if (!own.isEmpty()) {
-            return own;
-        }
-    }
-    return settings.firmwareMtdParts(QString());
-}
-
-bool FirmwareTab::Private::usingImageLayout() const
-{
-    return planState == PlanState::Ready && plannedImage == q->imagePath()
-           && !RockchipTool::parseMtdParts(imageLayout).isEmpty();
-}
-
-bool FirmwareTab::Private::layoutKnown() const
-{
-    return !RockchipTool::parseMtdParts(q->flashLayout()).isEmpty();
-}
-
-QString FirmwareTab::Private::rowProblem(const PartitionImage& row, bool layoutIsKnown)
-{
-    if (!layoutIsKnown) {
-        return FirmwareTab::tr("partition layout unknown: connect the board running once");
-    }
-    if (!row.inLayout) {
-        return FirmwareTab::tr("%1 is not in the board's partition layout").arg(row.name);
-    }
-    if (row.fileSize < 0) {
-        return FirmwareTab::tr("the package has no image file for %1").arg(row.name);
-    }
-    if (!row.fits) {
-        return FirmwareTab::tr("%1 (%2 bytes) does not fit the partition (%3 bytes)")
-            .arg(QFileInfo(row.file).fileName())
-            .arg(row.fileSize)
-            .arg(row.size);
-    }
-    return QString();
-}
 
 void FirmwareTab::Private::renderPartitions()
 {
+    const FirmwareJob::PlanState planState = job->planState();
+    const QList<PartitionImage> rows = job->partitions();
     {
         const QSignalBlocker blocker(partitionTable);   // checks set here are no user toggles
         partitionTable->setRowCount(0);
-        if (planState == PlanState::Ready) {
-            const bool known = layoutKnown();
-            partitionTable->setRowCount(static_cast<int>(partitionRows.size()));
-            for (int i = 0; i < partitionRows.size(); ++i) {
-                const PartitionImage& row = partitionRows.at(i);
+        if (planState == FirmwareJob::PlanState::Ready) {
+            const bool known = job->layoutKnown();
+            const QStringList selected = job->selectedPartitions();
+            partitionTable->setRowCount(static_cast<int>(rows.size()));
+            for (int i = 0; i < rows.size(); ++i) {
+                const PartitionImage& row = rows.at(i);
                 // Disabled and unchecked, with the reason as the tooltip: not in the layout, no
                 // file, too big (or no layout at all).
-                const QString problem = rowProblem(row, known);
+                const QString problem = FirmwareJob::partitionProblem(row, known);
                 const bool enabled = problem.isEmpty();
                 const Qt::ItemFlags flags = enabled ? Qt::ItemFlags(Qt::ItemIsEnabled) : Qt::ItemFlags(Qt::NoItemFlags);
                 auto* check = new QTableWidgetItem;
                 check->setFlags(enabled ? Qt::ItemFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable)
                                         : Qt::ItemFlags(Qt::NoItemFlags));
-                check->setCheckState(enabled && (checkAll || checkedNames.contains(row.name)) ? Qt::Checked : Qt::Unchecked);
+                check->setCheckState(enabled && selected.contains(row.name) ? Qt::Checked : Qt::Unchecked);
                 check->setData(Qt::UserRole, row.name);
                 const QStringList texts{
                     row.name,
@@ -1853,54 +1318,56 @@ void FirmwareTab::Private::renderPartitions()
         }
     }
 
-    const QList<MtdPartition> boardParts = RockchipTool::parseMtdParts(boardLayout());
+    const QString boardLayout = job->boardLayout();
+    const QList<MtdPartition> boardParts = RockchipTool::parseMtdParts(boardLayout);
+    const bool usingImageLayout = job->usingImageLayout();
     const bool imageDiffersFromBoard =
-        usingImageLayout() && !boardParts.isEmpty() && boardParts != RockchipTool::parseMtdParts(imageLayout);
+        usingImageLayout && !boardParts.isEmpty() && boardParts != RockchipTool::parseMtdParts(job->imageLayout());
     QString text;
     bool failed = false;
     switch (planState) {
-    case PlanState::NoImage:
+    case FirmwareJob::PlanState::NoImage:
         text = FirmwareTab::tr("no image selected");
         break;
-    case PlanState::Planning:
+    case FirmwareJob::PlanState::Planning:
         text = FirmwareTab::tr("unpacking the image to list its partitions...");
         break;
-    case PlanState::Failed:
-        text = FirmwareTab::tr("cannot list the partitions: %1").arg(planMessage);
+    case FirmwareJob::PlanState::Failed:
+        text = FirmwareTab::tr("cannot list the partitions: %1").arg(job->planMessage());
         failed = true;
         break;
-    case PlanState::Ready:
-        if (!layoutKnown()) {
+    case FirmwareJob::PlanState::Ready:
+        if (!job->layoutKnown()) {
             text = FirmwareTab::tr("partition layout unknown: connect the board running once");
         } else {
             const QStringList checked = q->selectedPartitions();
             qint64 bytes = 0;
-            for (const PartitionImage& row : std::as_const(partitionRows)) {
+            for (const PartitionImage& row : rows) {
                 if (checked.contains(row.name) && row.fileSize > 0) {
                     bytes += row.fileSize;
                 }
             }
             // Two plain strings instead of a %n plural: "1 partition" must read right without a translator.
-            text = partitionRows.size() == 1
+            text = rows.size() == 1
                        ? FirmwareTab::tr("1 partition, %1 selected (%2)").arg(checked.size()).arg(formatSize(bytes))
                        : FirmwareTab::tr("%1 partitions, %2 selected (%3)")
-                             .arg(partitionRows.size())
+                             .arg(rows.size())
                              .arg(checked.size())
                              .arg(formatSize(bytes));
             // Where the offsets come from: the image's env.img (the layout it was built for) or the board.
-            text += QStringLiteral(" - ") + (!usingImageLayout() ? FirmwareTab::tr("layout from the board")
+            text += QStringLiteral(" - ") + (!usingImageLayout ? FirmwareTab::tr("layout from the board")
                                              : imageDiffersFromBoard ? FirmwareTab::tr("layout from the image (the board's differs)")
                                                                      : FirmwareTab::tr("layout from the image"));
         }
         break;
     }
     partitionsLabel->setText(text);
-    const QString layout = q->flashLayout();
+    const QString layout = job->flashLayout();
     QString tip = text;
-    if (usingImageLayout()) {
+    if (usingImageLayout) {
         tip = FirmwareTab::tr("Flash layout from the image's env.img: %1").arg(layout);
         if (imageDiffersFromBoard) {
-            tip += QLatin1Char('\n') + FirmwareTab::tr("The board's layout: %1").arg(boardLayout());
+            tip += QLatin1Char('\n') + FirmwareTab::tr("The board's layout: %1").arg(boardLayout);
         }
     } else if (!layout.isEmpty()) {
         tip = FirmwareTab::tr("Flash layout from the board: %1").arg(layout);
@@ -1917,72 +1384,7 @@ void FirmwareTab::Private::onPartitionItemChanged(QTableWidgetItem* item)
     if (!item || item->column() != ColCheck) {
         return;
     }
-    checkAll = false;
-    checkedNames = q->selectedPartitions();
-    renderPartitions();   // the label's count and size
-    pushSelection();
-}
-
-void FirmwareTab::Private::pushSelection()
-{
-    // "None" has no SocFlasher form (an empty list means every row): Flash SoC refuses it instead.
-    if (checkAll) {
-        flasher->setSelectedPartitions({});
-    } else if (!checkedNames.isEmpty()) {
-        flasher->setSelectedPartitions(checkedNames);
-    }
-}
-
-void FirmwareTab::Private::readBoardLayout(const QString& serial)
-{
-    layoutReadTried.insert(serial);
-    pushToolPaths();
-    AdbTool* tool = flasher->adb();
-    if (tool->adbPath().isEmpty()) {
-        return;
-    }
-    // The board the status line shows, named like every adb command of the flow.
-    ToolInvocation* invocation =
-        tool->serial().isEmpty()
-            ? tool->run({QStringLiteral("-s"), serial, QStringLiteral("shell"), QStringLiteral("cat /proc/cmdline")}, tool->timeoutMs())
-            : tool->shell(QStringLiteral("cat /proc/cmdline"));
-    cmdlineInvocation = invocation;
-    q->appendLog(invocation->commandLine());
-    connect(invocation, &ToolInvocation::finished, q, [this, invocation, serial](const ToolResult& result) {
-        if (cmdlineInvocation != invocation) {
-            return;
-        }
-        cmdlineInvocation = nullptr;
-        if (result.cancelled) {
-            return;
-        }
-        if (!result.started) {
-            q->appendLog(FirmwareTab::tr("Cannot read the flash layout of board %1: %2").arg(serial, result.error));
-            return;
-        }
-        const QString mtdparts = RockchipTool::mtdPartsFromCommandLine(result.outputText());
-        if (mtdparts.isEmpty()) {
-            q->appendLog(FirmwareTab::tr("Board %1 reports no flash layout (no mtdparts in /proc/cmdline)").arg(serial));
-            return;
-        }
-        q->appendLog(FirmwareTab::tr("Flash layout of board %1: %2").arg(serial, mtdparts));
-        storeLayout(serial, mtdparts);
-    });
-}
-
-void FirmwareTab::Private::storeLayout(const QString& serial, const QString& mtdparts)
-{
-    AppSettings& settings = AppSettings::instance();
-    if (!serial.isEmpty() && settings.firmwareMtdParts(serial) != mtdparts) {
-        settings.setFirmwareMtdParts(serial, mtdparts);
-    }
-    if (settings.firmwareMtdParts(QString()) != mtdparts) {
-        settings.setFirmwareMtdParts(QString(), mtdparts);   // "*": the layout for a board met in Loader mode
-    }
-    if (!serial.isEmpty()) {
-        layoutSerial = serial;
-    }
-    requestPlan(false);
+    job->setSelectedPartitions(q->selectedPartitions());   // re-renders the label's count and size
 }
 
 // =======================================================================================
@@ -1991,11 +1393,12 @@ void FirmwareTab::Private::storeLayout(const QString& serial, const QString& mtd
 
 void FirmwareTab::Private::renderDeviceStatus()
 {
-    if (!hasDeviceStatus) {
+    if (!job->hasStatus()) {
         socStatusLabel->setText(FirmwareTab::tr("not checked yet"));
         installDriversButton->setVisible(false);
         return;
     }
+    const SocFlasher::DeviceStatus deviceStatus = job->lastStatus();
     QString text = deviceStatus.text();
     if (text.isEmpty()) {
         switch (deviceStatus.mode) {
@@ -2022,7 +1425,7 @@ void FirmwareTab::Private::renderDeviceStatus()
     palette.setColor(QPalette::WindowText, noDriver ? kErrorText : q->palette().color(QPalette::WindowText));
     socStatusLabel->setPalette(palette);
     socStatusLabel->setText(text);
-    if (boardInfoText.isEmpty()) {
+    if (job->boardInfo().isEmpty()) {
         socStatusLabel->setToolTip(deviceStatus.detail);
     }
     installDriversButton->setVisible(noDriver);
@@ -2031,6 +1434,7 @@ void FirmwareTab::Private::renderDeviceStatus()
 void FirmwareTab::Private::renderPackage()
 {
     QPalette palette = packageInfoLabel->palette();
+    const CcPackage mcuPackage = job->package();
     if (mcuPackage.isValid()) {
         QString target = CcProtocol::targetName(mcuPackage.target);
         if (target.isEmpty() || target == QLatin1String("unknown")) {
@@ -2054,10 +1458,11 @@ void FirmwareTab::Private::renderPackage()
 
 void FirmwareTab::Private::renderMcuStatus()
 {
-    if (runningVersion.isEmpty()) {
+    const QString version = job->runningMcuVersion();
+    if (version.isEmpty()) {
         mcuStatusLabel->setText(FirmwareTab::tr("unknown"));
     } else {
-        mcuStatusLabel->setText(QStringLiteral("%1 %2").arg(runningVersion, runningRole).trimmed());
+        mcuStatusLabel->setText(QStringLiteral("%1 %2").arg(version, job->runningMcuRole()).trimmed());
     }
 }
 
@@ -2071,20 +1476,9 @@ void FirmwareTab::Private::showRole(quint32 role)
     roleGroup->setExclusive(true);
 }
 
-bool FirmwareTab::Private::cancellable() const
-{
-    if (operation.isEmpty()) {
-        return false;
-    }
-    if (step == kOpFlash) {
-        return flashCancellable;   // never while upgrade_tool writes the flash
-    }
-    return step == kOpPull || step == kOpMcu || step == kOpSetRole || step == kOpInfo || cliInvocation;
-}
-
 void FirmwareTab::Private::updateControls()
 {
-    const bool idle = operation.isEmpty();
+    const bool idle = !job->isBusy();
     for (QWidget* widget : {static_cast<QWidget*>(sourceCombo), static_cast<QWidget*>(profilesButton),
                             static_cast<QWidget*>(remoteFolderEdit), static_cast<QWidget*>(cacheDirEdit),
                             static_cast<QWidget*>(cacheDirButton), static_cast<QWidget*>(pullButton),
@@ -2095,7 +1489,7 @@ void FirmwareTab::Private::updateControls()
         widget->setEnabled(idle);
     }
     rollbackButton->setEnabled(idle && hasPreviousImage);
-    flashSocButton->setEnabled(idle && !q->imagePath().isEmpty());
+    flashSocButton->setEnabled(idle && !job->imagePath().isEmpty());
     bool checkable = false;
     for (int row = 0; row < partitionTable->rowCount() && !checkable; ++row) {
         const QTableWidgetItem* item = partitionTable->item(row, ColCheck);
@@ -2105,14 +1499,14 @@ void FirmwareTab::Private::updateControls()
     partitionsAllButton->setEnabled(idle && checkable);
     partitionsNoneButton->setEnabled(idle && checkable);
     // The role is what the user confirms: never guessed, so no update without one.
-    updateMcuButton->setEnabled(idle && mcuPackage.isValid() && confirmedRole != 0);
-    setRoleButton->setEnabled(idle && confirmedRole != 0);
-    cancelButton->setEnabled(cancellable());
+    updateMcuButton->setEnabled(idle && job->package().isValid() && job->role() != 0);
+    setRoleButton->setEnabled(idle && job->role() != 0);
+    cancelButton->setEnabled(job->isCancellable());
 }
 
 void FirmwareTab::Private::updateStatusTimer()
 {
-    if (refreshMs > 0 && q->isVisible() && operation.isEmpty()) {
+    if (refreshMs > 0 && q->isVisible() && !job->isBusy()) {
         if (statusTimer.interval() != refreshMs) {
             statusTimer.setInterval(refreshMs);
         }
@@ -2124,13 +1518,6 @@ void FirmwareTab::Private::updateStatusTimer()
     }
 }
 
-void FirmwareTab::Private::pushToolPaths()
-{
-    flasher->upgradeTool()->setToolPath(upgradeToolPath);
-    flasher->adb()->setAdbPath(adbPath);
-    link->adb()->setAdbPath(adbPath);
-}
-
 void FirmwareTab::Private::logToolPaths()
 {
     const AppSettings& s = AppSettings::instance();
@@ -2139,424 +1526,92 @@ void FirmwareTab::Private::logToolPaths()
 }
 
 // =======================================================================================
-// Operations: framework
+// The job's reports and questions
 // =======================================================================================
 
-QString FirmwareTab::Private::operationTitle(const QString& op)
+void FirmwareTab::Private::onProgress(const QString& stage, int percent)
 {
-    if (op == kOpPull) {
-        return FirmwareTab::tr("Pull");
-    }
-    if (op == kOpFlash) {
-        return FirmwareTab::tr("Flash SoC");
-    }
-    if (op == kOpMcu) {
-        return FirmwareTab::tr("Update MCU");
-    }
-    if (op == kOpSetRole) {
-        return FirmwareTab::tr("Set role");
-    }
-    if (op == kOpInfo) {
-        return FirmwareTab::tr("Read MCU");
-    }
-    if (op == kOpPullFlash) {
-        return FirmwareTab::tr("Pull & Flash");
-    }
-    return op;
-}
-
-bool FirmwareTab::Private::refuseIfBusy()
-{
-    if (operation.isEmpty()) {
-        return false;
-    }
-    emit q->statusMessage(FirmwareTab::tr("Busy: %1 is still running").arg(operationTitle(operation)), kStatusShortMs);
-    return true;
-}
-
-void FirmwareTab::Private::beginOperation(const QString& op)
-{
-    operation = op;
-    step.clear();
-    cancelRequested = false;
-    statusTimer.stop();   // no status queries while tools run
-    q->appendLog(FirmwareTab::tr("--- %1 ---").arg(operationTitle(op)));
-    setProgressBusy(operationTitle(op));
-    setPersistent(QStringLiteral("%1...").arg(operationTitle(op)));
-    updateControls();
-    qCInfo(lcFirmware) << "operation" << op << "started";
-    emit q->busyChanged(true);
-}
-
-void FirmwareTab::Private::stepFinished(const QString& stepName, bool ok, const QString& message)
-{
-    if (operation.isEmpty()) {
-        return;   // a late report of an operation that already ended
-    }
-    step.clear();
-    if (operation != kOpPullFlash) {
-        endOperation(stepName, ok, message);
+    if (percent == FirmwareJob::kProgressTextOnly) {
+        progressLabel->setText(stage);
         return;
     }
-    // Pull & Flash: report the step, then go on or stop at the first failure.
-    q->appendLog(ok ? FirmwareTab::tr("%1: %2").arg(operationTitle(stepName), message)
-                    : FirmwareTab::tr("%1 failed: %2").arg(operationTitle(stepName), message));
-    emit q->operationFinished(stepName, ok, message);
-    if (!ok) {
-        keepSsh = false;
-        closeSsh();
-        endOperation(kOpPullFlash, false, FirmwareTab::tr("stopped at %1: %2").arg(operationTitle(stepName), message));
-        return;
-    }
-    if (stepName == kOpPull) {
-        startFlash();
-    } else if (stepName == kOpFlash) {
-        startChainMcu();
+    progressShowsReady = false;
+    if (percent == FirmwareJob::kProgressBusy) {
+        progressBar->setRange(0, 0);   // indeterminate
     } else {
-        keepSsh = false;
-        closeSsh();
-        endOperation(kOpPullFlash, true, message);
+        if (progressBar->maximum() != 100) {
+            progressBar->setRange(0, 100);
+        }
+        progressBar->setValue(qBound(0, percent, 100));
+    }
+    progressLabel->setText(stage);
+}
+
+void FirmwareTab::Private::onStepFinished(const QString& step, bool ok, const QString& message)
+{
+    if (step == FirmwareJob::kOpPull && ok) {
+        // The freshly pulled (or unchanged) cache image is what Flash SoC uses from now on.
+        AppSettings::instance().setFirmwareLocalImage(QString());
+    }
+    if (step == FirmwareJob::kOpFlash && ok && !job->boardInfo().isEmpty()) {
+        socStatusLabel->setToolTip(job->boardInfo());
+    }
+    if (job->currentOperation() == FirmwareJob::kOpPullFlash) {
+        emit q->operationFinished(step, ok, message);   // one per step of a Pull & Flash, then the final one
     }
 }
 
-void FirmwareTab::Private::endOperation(const QString& stepName, bool ok, const QString& message)
+void FirmwareTab::Private::onOperationFinished(const QString& op, bool ok, const QString& message)
 {
-    const QString op = operation;
-    operation.clear();
-    step.clear();
-    persistent.clear();   // the result message below replaces the hint (MainWindow re-reads it)
-    cancelRequested = false;
-    flashCancellable = false;
     if (progressBar->maximum() == 0) {
         progressBar->setRange(0, 100);
         progressBar->setValue(ok ? 100 : 0);
     } else if (ok) {
         progressBar->setValue(100);
     }
-    const QString text = ok ? FirmwareTab::tr("%1 done: %2").arg(operationTitle(op), message)
-                            : FirmwareTab::tr("%1 failed: %2").arg(operationTitle(op), message);
+    const QString text = FirmwareJob::resultText(op, ok, message);   // logged by the job
     progressLabel->setText(text);
-    q->appendLog(text);
-    qCInfo(lcFirmware) << "operation" << op << (ok ? "succeeded" : "failed");
-    updateControls();
-    updateStatusTimer();
-    emit q->busyChanged(false);
     emit q->statusMessage(text, kStatusLongMs);
-    emit q->operationFinished(stepName, ok, message);
-    if (ok && (stepName == kOpFlash || op == kOpPullFlash)) {
-        q->refreshStatus();   // show the board as it came back
-    }
+    emit q->operationFinished(op, ok, message);
 }
 
-void FirmwareTab::Private::setPersistent(const QString& text)
+FirmwareJob::HostKeyDecision FirmwareTab::Private::askHostKey(const SshConnection::HostKeyInfo& info)
 {
-    if (text == persistent) {
-        return;
+    // As SessionWidget::onHostKeyVerificationRequired(): the dialog lives on the heap and the tab
+    // is tracked, because either may go away during the nested event loop.
+    QPointer<FirmwareTab> self(q);
+    QPointer<HostKeyDialog> dialog(new HostKeyDialog(info, q->window()));
+    const int result = dialog->exec();
+    FirmwareJob::HostKeyDecision decision;
+    if (!self || !dialog) {
+        delete dialog;
+        return decision;
     }
-    persistent = text;
-    emit q->statusMessage(text, 0);   // lasting while busy; MainWindow keeps it under transient messages
+    decision.accept = (result == QDialog::Accepted);
+    decision.remember = decision.accept && dialog->remember();
+    delete dialog;
+    return decision;
 }
 
-void FirmwareTab::Private::setProgressBusy(const QString& text)
+std::optional<FirmwareJob::AuthAnswer> FirmwareTab::Private::askAuthPrompt(const SshConnection::AuthPrompt& prompt)
 {
-    progressShowsReady = false;
-    progressBar->setRange(0, 0);   // indeterminate
-    progressLabel->setText(text);
+    QPointer<FirmwareTab> self(q);
+    QPointer<AuthPromptDialog> dialog(new AuthPromptDialog(prompt, q->window()));
+    const int result = dialog->exec();
+    if (!self || !dialog || result != QDialog::Accepted) {
+        delete dialog;
+        return std::nullopt;
+    }
+    FirmwareJob::AuthAnswer answer;
+    answer.response = dialog->response();
+    answer.remember = dialog->remember();
+    delete dialog;
+    return answer;
 }
 
-void FirmwareTab::Private::setProgressPercent(int percent, const QString& text)
+FirmwareJob::DownloadModeAnswer FirmwareTab::Private::askDownloadMode()
 {
-    progressShowsReady = false;
-    if (progressBar->maximum() != 100) {
-        progressBar->setRange(0, 100);
-    }
-    progressBar->setValue(qBound(0, percent, 100));
-    progressLabel->setText(text);
-}
-
-// =======================================================================================
-// Pull
-// =======================================================================================
-
-void FirmwareTab::Private::startPull()
-{
-    step = kOpPull;
-    SshProfile profile;
-    QString error;
-    if (!resolveProfile(&profile, &error)) {
-        stepFinished(kOpPull, false, error);
-        return;
-    }
-    const QString folder = q->remoteFolder();
-    if (folder.isEmpty()) {
-        stepFinished(kOpPull, false, FirmwareTab::tr("enter the remote folder that holds update.img"));
-        return;
-    }
-    const QString cache = q->cacheDirectory();
-    if (cache.isEmpty() || !QDir().mkpath(cache)) {
-        stepFinished(kOpPull, false, FirmwareTab::tr("cannot create the cache folder %1").arg(nativePath(cache)));
-        return;
-    }
-    AppSettings& settings = AppSettings::instance();
-    settings.setFirmwareSourceTarget(targetKey());
-    settings.setFirmwareRemoteFolder(targetKey(), folder);
-    settings.setFirmwareCacheDirectory(cache);
-
-    // As SessionWidget::connectSsh(): the store first (its changed() rebuilds the combo, which keeps
-    // the text), then the Preferences > SSH defaults fill what the profile leaves open.
-    if (profiles) {
-        if (!profile.id.isEmpty()) {
-            profiles->touch(profile.id);
-        } else {
-            profiles->addRecentTarget(profile.displayTarget());
-        }
-    }
-    if (profile.knownHostsFile.trimmed().isEmpty()) {
-        profile.knownHostsFile = settings.sshKnownHostsFile();
-    }
-    if (profile.id.isEmpty()) {
-        if (profile.identityFile.trimmed().isEmpty()) {
-            profile.identityFile = settings.sshDefaultIdentityFile();
-        }
-        profile.terminalType = settings.sshDefaultTerminalType();
-        profile.keepAliveSeconds = settings.sshDefaultKeepAliveSeconds();
-    }
-    profile.remoteCommand.clear();    // a plain session: the pull runs its own exec / SFTP channels
-    profile.startupCommand.clear();
-    profile.localForwards.clear();
-
-    pullTarget = profile.displayTarget();
-    if (ssh->state() == Transport::State::Connected && ssh->profile().displayTarget() == pullTarget) {
-        startPuller();   // still open (a Pull & Flash, or a pull right after a cancelled one)
-        return;
-    }
-    closeSsh();
-    sshError.clear();
-    ssh->setProfile(profile);
-    pullPhase = PullPhase::Connecting;
-    const QString text = FirmwareTab::tr("Pull: connecting to %1...").arg(pullTarget);
-    setProgressBusy(text);
-    setPersistent(text);
-    updateControls();
-    q->appendLog(FirmwareTab::tr("Connecting to %1").arg(pullTarget));
-    qCInfo(lcFirmware) << "pull: connecting to" << pullTarget;
-    if (!ssh->open()) {
-        pullPhase = PullPhase::Idle;
-        const QString reason = ssh->errorString();
-        stepFinished(kOpPull, false, reason.isEmpty() ? FirmwareTab::tr("cannot connect to %1").arg(pullTarget) : reason);
-    }
-}
-
-void FirmwareTab::Private::onSshStateChanged(Transport::State state)
-{
-    if (pullPhase == PullPhase::Connecting) {
-        if (state == Transport::State::Connected) {
-            q->appendLog(FirmwareTab::tr("Connected to %1 (%2)").arg(pullTarget, ssh->summary()));
-            startPuller();
-        } else if (state == Transport::State::Disconnected) {
-            pullPhase = PullPhase::Idle;
-            const QString reason = cancelRequested ? FirmwareTab::tr("cancelled")
-                                   : sshError.isEmpty() ? FirmwareTab::tr("the connection to %1 closed").arg(pullTarget)
-                                                        : sshError;
-            stepFinished(kOpPull, false, reason);
-        }
-        return;
-    }
-    if (pullPhase == PullPhase::Pulling && state == Transport::State::Disconnected) {
-        // The puller reports the dropped connection itself; make sure the step ends regardless.
-        QTimer::singleShot(kSilentRefusalMs, q, [this]() {
-            if (pullerActive && ssh->state() == Transport::State::Disconnected) {
-                puller->cancel();
-                pullFinished(false, sshError.isEmpty() ? FirmwareTab::tr("the connection to %1 closed").arg(pullTarget) : sshError);
-            }
-        });
-    }
-}
-
-void FirmwareTab::Private::startPuller()
-{
-    pullPhase = PullPhase::Pulling;
-    const AppSettings& settings = AppSettings::instance();
-    puller->setConnection(ssh);
-    puller->setRemoteFolder(q->remoteFolder());
-    puller->setCacheDirectory(q->cacheDirectory());
-    puller->setSdkDirectory(QString());   // derived from the remote folder
-    puller->setGitDescribe(settings.firmwareGitDescribe());
-    puller->setExtraFiles(settings.firmwareExtraFiles());
-    puller->setForceDownload(false);
-    const QString text = FirmwareTab::tr("Pull: checking update.img on %1...").arg(pullTarget);
-    setProgressBusy(text);
-    setPersistent(text);
-    pullerActive = true;
-    if (!puller->start()) {
-        QTimer::singleShot(kSilentRefusalMs, q, [this]() {
-            if (pullerActive && !puller->isRunning()) {
-                pullFinished(false, FirmwareTab::tr("the image pull did not start"));
-            }
-        });
-    }
-}
-
-void FirmwareTab::Private::pullFinished(bool ok, const QString& message)
-{
-    pullerActive = false;
-    pullPhase = PullPhase::Idle;
-    if (!keepSsh) {
-        closeSsh();   // the connection is only needed while pulling
-    }
-    if (ok) {
-        // The freshly pulled (or unchanged) cache image is what Flash SoC uses from now on.
-        localImage.clear();
-        AppSettings::instance().setFirmwareLocalImage(QString());
-    }
-    refreshImage(/*reread=*/ok);
-    stepFinished(kOpPull, ok, message);
-}
-
-void FirmwareTab::Private::closeSsh()
-{
-    if (ssh->state() == Transport::State::Disconnected) {
-        return;
-    }
-    if (pullPhase == PullPhase::Connecting) {
-        pullPhase = PullPhase::Idle;   // the Disconnected that close() reports is no pull result
-    }
-    ssh->close();
-    qCInfo(lcFirmware) << "build machine connection closed";
-}
-
-// =======================================================================================
-// SoC
-// =======================================================================================
-
-void FirmwareTab::Private::startFlash()
-{
-    step = kOpFlash;
-    const QString image = q->imagePath();
-    if (image.isEmpty()) {
-        stepFinished(kOpFlash, false, FirmwareTab::tr("no image: pull one or choose a local image first"));
-        return;
-    }
-    pushToolPaths();
-    flasher->setImagePath(image);
-    flasher->setMtdParts(boardLayout());   // a board already in Loader mode cannot tell its layout
-    if (operation == kOpPullFlash) {
-        // Pull & Flash writes every partition: the SocFlasher default, which also stops before
-        // writing anything when one image does not fit.
-        checkAll = true;
-        checkedNames.clear();
-        renderPartitions();
-        flasher->setSelectedPartitions({});
-        q->appendLog(FirmwareTab::tr("Partitions: every partition of the image (Loader mode writes them one by one; "
-                                     "MASKROM mode writes the whole image)"));
-    } else {
-        bool tableShowsImage = planState == PlanState::Ready && plannedImage == image;
-        bool anyCheckable = false;
-        for (int row = 0; row < partitionTable->rowCount() && !anyCheckable; ++row) {
-            const QTableWidgetItem* item = partitionTable->item(row, ColCheck);
-            anyCheckable = item && (item->flags() & Qt::ItemIsEnabled);
-        }
-        tableShowsImage = tableShowsImage && anyCheckable;
-        const QStringList checked = q->selectedPartitions();
-        if (tableShowsImage && checked.isEmpty()) {
-            stepFinished(kOpFlash, false, FirmwareTab::tr("no partition is checked: check the ones to write (All checks every one)"));
-            return;
-        }
-        // Without a table for this image (still unpacking, no layout) the flasher decides: every
-        // partition in Loader mode, the whole image in MASKROM mode.
-        flasher->setSelectedPartitions(tableShowsImage ? checked : QStringList());
-        q->appendLog(tableShowsImage ? FirmwareTab::tr("Partitions checked: %1 (Loader mode writes these one by one; "
-                                                       "MASKROM mode writes the whole image)")
-                                           .arg(checked.join(QStringLiteral(", ")))
-                                     : FirmwareTab::tr("Partitions: every partition of the image (Loader mode writes them "
-                                                       "one by one; MASKROM mode writes the whole image)"));
-    }
-    boardInfoText.clear();
-    q->appendLog(FirmwareTab::tr("Flashing %1").arg(nativePath(image)));
-    const QString text = FirmwareTab::tr("Flashing SoC: starting...");
-    setProgressBusy(text);
-    setPersistent(text);
-    flasherActive = true;
-    flashCancellable = true;   // detecting the board is a waiting phase
-    updateControls();
-    if (!flasher->start()) {
-        // A refusal reports its reason through finished() from the event loop (handled above);
-        // one that stays silent (already running) ends the step here.
-        QTimer::singleShot(kSilentRefusalMs, q, [this]() {
-            if (flasherActive && !flasher->isRunning()) {
-                flashFinished(false, FirmwareTab::tr("the SoC flasher did not start"));
-            }
-        });
-    }
-}
-
-void FirmwareTab::Private::onFlasherPhase(SocFlasher::Phase phase)
-{
-    if (downloadBox && phase != SocFlasher::Phase::WaitingForLoader) {
-        downloadBox->reject();   // the question is moot: askDownloadMode() sends nothing
-    }
-    if (!flasherActive) {
-        return;
-    }
-    QString text;
-    bool waiting = false;
-    switch (phase) {
-    case SocFlasher::Phase::Detecting:
-        text = FirmwareTab::tr("Flashing SoC: looking for the board");
-        waiting = true;
-        break;
-    case SocFlasher::Phase::RebootingToLoader:
-        text = FirmwareTab::tr("Flashing SoC: rebooting the board into Loader mode");
-        waiting = true;
-        break;
-    case SocFlasher::Phase::WaitingForLoader:
-        text = FirmwareTab::tr("Flashing SoC: waiting for the board in Loader / Maskrom mode");
-        waiting = true;
-        break;
-    case SocFlasher::Phase::Flashing:
-        text = FirmwareTab::tr("Flashing SoC: writing the flash - do not unplug the board");
-        break;
-    case SocFlasher::Phase::WaitingForAdb:
-        text = FirmwareTab::tr("Flashing SoC: waiting for the board to come back on ADB");
-        waiting = true;
-        break;
-    case SocFlasher::Phase::ReadingBoardInfo:
-        text = FirmwareTab::tr("Flashing SoC: reading the board information");
-        break;
-    default:
-        break;
-    }
-    flashCancellable = waiting;
-    cancelButton->setEnabled(cancellable());
-    if (!text.isEmpty()) {
-        if (phase == SocFlasher::Phase::Flashing) {
-            setProgressPercent(0, text);
-        } else {
-            setProgressBusy(text);
-        }
-        setPersistent(text);
-    }
-}
-
-void FirmwareTab::Private::flashFinished(bool ok, const QString& message)
-{
-    flasherActive = false;
-    flashCancellable = false;
-    if (ok && !boardInfoText.isEmpty()) {
-        socStatusLabel->setToolTip(boardInfoText);
-    }
-    stepFinished(kOpFlash, ok, message);
-    if (planPending && !flasher->isRunning()) {
-        planPending = false;
-        requestPlan(true);   // a layout read during the flash, or an image changed meanwhile
-    }
-}
-
-void FirmwareTab::Private::askDownloadMode()
-{
-    if (!flasherActive) {
-        return;
-    }
+    FirmwareJob::DownloadModeAnswer answer;
     QList<QPointer<SessionWidget>> connected;
     if (sessionProvider) {
         const QList<SessionWidget*> list = sessionProvider();
@@ -2567,8 +1622,7 @@ void FirmwareTab::Private::askDownloadMode()
         }
     }
     if (connected.isEmpty()) {
-        showMaskromInstructions();
-        return;
+        return answer;   // nothing to ask: the job shows the MASKROM instructions
     }
     // One question naming the tab(s): Yes sends through the first, one more button per other tab.
     QMessageBox box(QMessageBox::Question, FirmwareTab::tr("Firmware Update"),
@@ -2585,24 +1639,15 @@ void FirmwareTab::Private::askDownloadMode()
         extra.append(box.addButton(FirmwareTab::tr("Send through %1").arg(connected.at(i)->title()), QMessageBox::AcceptRole));
     }
     QPointer<FirmwareTab> self(q);
-    downloadBox = &box;   // onFlasherPhase() closes it once the flasher stops waiting for Loader mode
-    const int answer = box.exec();
+    downloadBox = &box;   // the flasher leaving WaitingForLoader closes it (wireJob())
+    const int result = box.exec();
+    answer.asked = true;   // the job checks whether the flasher still waits before anything is sent
     if (!self) {
-        return;   // the tab went away meanwhile
+        return answer;   // the tab (and its job) went away meanwhile
     }
     downloadBox = nullptr;
-    const SocFlasher::Phase now = flasher->phase();
-    if (!flasherActive || now != SocFlasher::Phase::WaitingForLoader) {
-        // The flasher stopped waiting meanwhile: the board appeared (the user held MASKROM and
-        // replugged; the flash may even be done - "reboot loader" now would take a freshly flashed
-        // board back into Loader mode and the ADB wait would time out), or the wait ended.
-        if (now != SocFlasher::Phase::Failed && now != SocFlasher::Phase::Cancelled) {
-            q->appendLog(FirmwareTab::tr("The board appeared meanwhile; nothing sent"));
-        }
-        return;
-    }
     QPointer<SessionWidget> chosen;
-    if (answer == QMessageBox::Yes) {
+    if (result == QMessageBox::Yes) {
         chosen = connected.first();
     } else {
         const qsizetype index = extra.indexOf(box.clickedButton());
@@ -2610,299 +1655,16 @@ void FirmwareTab::Private::askDownloadMode()
             chosen = connected.at(index + 1);
         }
     }
-    if (chosen && chosen->isConnected()) {
-        chosen->sendBytes(QByteArrayLiteral("reboot loader\r"));
-        q->appendLog(FirmwareTab::tr("Sent \"reboot loader\" through %1").arg(chosen->title()));
-        return;
-    }
-    showMaskromInstructions();
-}
-
-void FirmwareTab::Private::showMaskromInstructions()
-{
-    const QString text = FirmwareTab::tr("No board found: hold the MASKROM button while plugging in the USB-C cable "
-                            "(or while power-cycling the board); waiting up to %1 s")
-                             .arg(flasher->waitTimeoutSeconds());
-    q->appendLog(text);
-    progressLabel->setText(text);
-    setPersistent(text);
-}
-
-// =======================================================================================
-// MCU
-// =======================================================================================
-
-void FirmwareTab::Private::startMcuUpdate(const QString& stepName)
-{
-    step = stepName;
-    if (stepName == kOpMcu && !mcuPackage.isValid()) {
-        stepFinished(stepName, false, FirmwareTab::tr("choose a valid .pkg package first"));
-        return;
-    }
-    if (confirmedRole == 0) {
-        stepFinished(stepName, false, FirmwareTab::tr("choose the MCU role (rx or tx) first: it is never guessed"));
-        return;
-    }
-    mcuRole = confirmedRole;
-    mcuResultPending = false;
-    linkLostMessage.clear();
-    if (stepName == kOpMcu) {
-        updater->setPackage(mcuPackage);
-        q->appendLog(FirmwareTab::tr("Updating the MCU with %1 (role %2)").arg(QFileInfo(mcuPackagePath).fileName(), roleText(mcuRole)));
-    } else {
-        q->appendLog(FirmwareTab::tr("Setting the MCU role to %1").arg(roleText(mcuRole)));
-    }
-    updater->setThroughSoc(true);
-    pushToolPaths();
-    const QString text = FirmwareTab::tr("%1: opening the link through the board...").arg(operationTitle(stepName));
-    setProgressBusy(text);
-    setPersistent(text);
-    linkActive = true;
-    updateControls();
-    if (!link->open()) {
-        QTimer::singleShot(kSilentRefusalMs, q, [this, stepName]() {
-            if (linkActive && !updaterActive && !link->isOpening() && !link->isOpen() && step == stepName) {
-                linkActive = false;
-                stepFinished(stepName, false, FirmwareTab::tr("the MCU link could not be opened"));
+    if (chosen) {
+        answer.send = [chosen]() -> QString {
+            if (!chosen || !chosen->isConnected()) {
+                return QString();   // gone meanwhile: the MASKROM instructions instead
             }
-        });
+            chosen->sendBytes(QByteArrayLiteral("reboot loader\r"));
+            return chosen->title();
+        };
     }
-}
-
-void FirmwareTab::Private::onLinkOpened()
-{
-    if (!linkActive || updaterActive || mcuResultPending) {
-        return;
-    }
-    updater->setDevice(link->socket());
-    updaterActive = true;
-    const bool started = (step == kOpMcu) ? updater->flash(mcuRole) : updater->setRole(mcuRole);
-    if (!started) {
-        updaterActive = false;
-        mcuDone(false, FirmwareTab::tr("the MCU updater did not start"));
-    }
-}
-
-void FirmwareTab::Private::mcuDone(bool ok, const QString& message)
-{
-    mcuOk = ok;
-    mcuMessage = message;
-    mcuResultPending = true;   // before close(): closed() may come from inside it
-    if (link->isOpen() || link->isOpening()) {
-        linkCloseTimer.start(kLinkCloseTimeoutMs);
-        link->close();
-    } else {
-        completeMcu();
-    }
-}
-
-void FirmwareTab::Private::completeMcu()
-{
-    if (!mcuResultPending) {
-        return;
-    }
-    linkCloseTimer.stop();
-    mcuResultPending = false;
-    linkActive = false;
-    const QString stepName = step;
-    if (mcuOk && stepName == kOpSetRole) {
-        runningRole = roleText(mcuRole);
-        renderMcuStatus();
-    }
-    stepFinished(stepName, mcuOk, mcuMessage);
-}
-
-void FirmwareTab::Private::startMcuRead(std::function<void(bool, const QString&)> done)
-{
-    cliDone = std::move(done);
-    pendingVersion.clear();
-    lastCliExit = -1;
-    pushToolPaths();
-    const QString text = FirmwareTab::tr("Reading the MCU version through ADB...");
-    setProgressBusy(text);
-    setPersistent(text);
-    // First the stale rfmcu, exactly as McuLink::open() does before its bridge (same board: the
-    // serial cliCommand() uses); `rfmcu cmd version` follows when it is done.
-    link->adb()->setSerial(link->serial());
-    ToolInvocation* invocation = link->adb()->shell(kStopRfmcuCommand);
-    cliInvocation = invocation;   // cancellable like the command itself
-    q->appendLog(invocation->commandLine());
-    connect(invocation, &ToolInvocation::finished, q, [this, invocation](const ToolResult& result) {
-        if (cliInvocation != invocation) {
-            return;
-        }
-        cliInvocation = nullptr;
-        onStaleRfmcuStopped(result);
-    });
-    updateControls();
-}
-
-void FirmwareTab::Private::onStaleRfmcuStopped(const ToolResult& result)
-{
-    // Its exit status is ignored (nothing to kill is the usual case); a dead adb is not.
-    if (result.cancelled || cancelRequested) {
-        finishCli(false, FirmwareTab::tr("cancelled"));
-        return;
-    }
-    if (!result.started) {
-        finishCli(false, FirmwareTab::tr("adb could not be started: %1").arg(result.error));
-        return;
-    }
-    if (result.timedOut) {
-        finishCli(false, FirmwareTab::tr("adb did not answer in time"));
-        return;
-    }
-    runCli(QStringLiteral("version"));
-}
-
-void FirmwareTab::Private::runCli(const QString& command)
-{
-    ToolInvocation* invocation = link->cliCommand(command);
-    cliInvocation = invocation;
-    q->appendLog(invocation->commandLine().isEmpty() ? FirmwareTab::tr("rfmcu cmd %1").arg(command) : invocation->commandLine());
-    connect(invocation, &ToolInvocation::finished, q, [this, invocation, command](const ToolResult& result) {
-        if (cliInvocation != invocation) {
-            return;
-        }
-        cliInvocation = nullptr;
-        onCliFinished(command, result);
-    });
-    updateControls();
-}
-
-void FirmwareTab::Private::onCliFinished(const QString& command, const ToolResult& result)
-{
-    const QString output = result.outputText().trimmed();
-    if (!output.isEmpty()) {
-        q->appendLog(output);
-    }
-    if (result.cancelled || cancelRequested) {
-        finishCli(false, FirmwareTab::tr("cancelled"));
-        return;
-    }
-    if (!result.started) {
-        finishCli(false, FirmwareTab::tr("adb could not be started: %1").arg(result.error));
-        return;
-    }
-    if (result.timedOut) {
-        finishCli(false, FirmwareTab::tr("adb did not answer in time"));
-        return;
-    }
-    // rfmcu cmd: 0 OK, 1 ERR, 2 port busy, 3 no reply (project/app/rfmcu/README.md). The chain
-    // tells "the MCU is there but not talking" (2, 3) from adb-level failures by lastCliExit.
-    lastCliExit = result.exitCode;
-    switch (result.exitCode) {
-    case 0:
-        break;
-    case kRfmcuPortBusy:
-        finishCli(false, FirmwareTab::tr("the MCU port is busy (another rfmcu holds /dev/ttyS1): %1").arg(output));
-        return;
-    case kRfmcuNoReply:
-        finishCli(false, FirmwareTab::tr("the MCU did not answer \"%1\"").arg(command));
-        return;
-    default:
-        finishCli(false, FirmwareTab::tr("rfmcu cmd %1 failed (exit code %2): %3").arg(command).arg(result.exitCode).arg(output));
-        return;
-    }
-    QString okLine;
-    const QStringList lines = output.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-    for (const QString& line : lines) {
-        if (line.trimmed().startsWith(QLatin1String("OK"))) {
-            okLine = line.trimmed();
-            break;
-        }
-    }
-    if (command == QLatin1String("version")) {
-        const McuUpdater::CliFields fields = McuUpdater::parseCliFields(okLine);
-        const QString version = fields.value(QStringLiteral("version"));
-        if (version.isEmpty()) {
-            finishCli(false, FirmwareTab::tr("unexpected reply to \"version\": %1").arg(output.isEmpty() ? FirmwareTab::tr("nothing") : output));
-            return;
-        }
-        const QString role = fields.value(QStringLiteral("role"));
-        if (role.isEmpty()) {
-            pendingVersion = version;   // an older application: its "help" lists the role
-            runCli(QStringLiteral("help"));
-            return;
-        }
-        runningVersion = version;
-        runningRole = role;
-    } else {
-        // fw_update.py probe_application(): the command words are the second word of every
-        // "OK <name> <usage>" row of "help" (the real firmware prints one row per command, the
-        // first one "OK commands:"); "tx" among them -> tx, "rx" -> rx, else unknown.
-        // (Seen on the board 2026-10-13: 0.8.2 answers "OK version=0.8.2 baud=115200" without a
-        // role, and its help lists "OK rx rx status | ...".)
-        QStringList commands;
-        for (const QString& line : lines) {
-            const QStringList tokens = line.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            if (tokens.size() > 1 && tokens.first() == QLatin1String("OK")) {
-                commands << tokens.at(1);
-            }
-        }
-        runningVersion = pendingVersion;
-        runningRole = commands.contains(QLatin1String("tx"))   ? QStringLiteral("tx")
-                      : commands.contains(QLatin1String("rx")) ? QStringLiteral("rx")
-                                                               : QStringLiteral("unknown");
-    }
-    renderMcuStatus();
-    const quint32 reported = roleFromText(runningRole);
-    if (reported != 0) {
-        q->setSelectedRole(reported);   // pre-selected: the radios show what the user confirms
-    }
-    finishCli(true, FirmwareTab::tr("MCU application version=%1 role=%2").arg(runningVersion, runningRole));
-}
-
-void FirmwareTab::Private::finishCli(bool ok, const QString& message)
-{
-    std::function<void(bool, const QString&)> done = std::move(cliDone);
-    cliDone = nullptr;
-    if (done) {
-        done(ok, message);
-    }
-}
-
-void FirmwareTab::Private::startChainMcu()
-{
-    if (!mcuPackage.isValid()) {
-        q->appendLog(FirmwareTab::tr("No MCU package chosen: the MCU update is skipped"));
-        keepSsh = false;
-        closeSsh();
-        endOperation(kOpPullFlash, true, FirmwareTab::tr("SoC flashed; no MCU package chosen"));
-        return;
-    }
-    step = kOpMcu;
-    startMcuRead([this](bool ok, const QString& message) {
-        if (!ok && !cancelRequested && pendingVersion.isEmpty()
-            && (lastCliExit == kRfmcuNoReply || lastCliExit == kRfmcuPortBusy)) {
-            // rfmcu ran on the board but the application CLI did not answer: a CC1310 left in its
-            // UART updater (an interrupted transfer, a bootloader-only J-Link flash: runbook
-            // Part B / Part J) has no CLI. McuUpdater::flash() handles exactly that board (HELLO is
-            // answered by INFO), so the chain updates it instead of stopping - with the role the
-            // user confirmed, since such a board cannot report one. (Port busy after the stale
-            // rfmcu was stopped: the link's open stops it again right before its bridge.)
-            if (confirmedRole == 0) {
-                stepFinished(kOpMcu, false,
-                             FirmwareTab::tr("cannot read the running MCU version (%1) and no role is confirmed: "
-                                             "choose rx or tx, then press Update MCU")
-                                 .arg(message));
-                return;
-            }
-            q->appendLog(FirmwareTab::tr("MCU version unknown (%1): it may sit in its UART updater; updating it")
-                             .arg(message));
-            startMcuUpdate(kOpMcu);
-            return;
-        }
-        if (!ok) {
-            stepFinished(kOpMcu, false, FirmwareTab::tr("cannot read the running MCU version: %1").arg(message));
-            return;
-        }
-        if (runningVersion == mcuPackage.versionText()) {
-            stepFinished(kOpMcu, true, FirmwareTab::tr("the MCU already runs %1; update skipped").arg(runningVersion));
-            return;
-        }
-        startMcuUpdate(kOpMcu);
-    });
+    return answer;
 }
 
 // =======================================================================================
@@ -2911,129 +1673,59 @@ void FirmwareTab::Private::startChainMcu()
 
 void FirmwareTab::pull()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpPull);
-    d->keepSsh = false;
-    d->startPull();
+    d->syncJob();
+    d->job->pull();
 }
 
 void FirmwareTab::flashSoc()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpFlash);
-    d->startFlash();
+    d->syncJob();
+    d->job->flashSoc();
 }
 
 void FirmwareTab::updateMcu()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpMcu);
-    d->startMcuUpdate(kOpMcu);
+    d->syncJob();
+    d->job->updateMcu();
 }
 
 void FirmwareTab::setMcuRole()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpSetRole);
-    d->startMcuUpdate(kOpSetRole);
+    d->syncJob();
+    d->job->setMcuRole();
 }
 
 void FirmwareTab::readMcuInfo()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpInfo);
-    d->step = kOpInfo;
-    d->startMcuRead([this](bool ok, const QString& message) { d->stepFinished(kOpInfo, ok, message); });
+    d->syncJob();
+    d->job->readMcuInfo();
 }
 
 void FirmwareTab::pullAndFlash()
 {
-    if (d->refuseIfBusy()) {
-        return;
-    }
-    d->beginOperation(kOpPullFlash);
-    d->keepSsh = true;
-    appendLog(tr("Pull & Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed"));
-    d->startPull();
+    d->syncJob();
+    d->job->pullAndFlash();
 }
 
 void FirmwareTab::cancel()
 {
-    if (!isBusy()) {
-        return;
-    }
-    if (d->step == kOpFlash && !d->flashCancellable) {
-        const QString message = tr("Cannot cancel while upgrade_tool writes the flash");
-        appendLog(message);
-        emit statusMessage(message, kStatusLongMs);
-        return;
-    }
-    d->cancelRequested = true;
-    appendLog(tr("Cancelling %1").arg(Private::operationTitle(d->step.isEmpty() ? d->operation : d->step)));
-    if (d->step == kOpPull) {
-        if (d->pullPhase == Private::PullPhase::Connecting) {
-            d->ssh->close();   // reported as Disconnected -> the step ends "cancelled"
-        } else if (d->pullerActive) {
-            d->puller->cancel();   // reports finished(false, "cancelled") once the transfer is undone
-            QTimer::singleShot(kPullCancelGraceMs, this, [this]() {
-                if (d->pullerActive) {
-                    d->pullFinished(false, tr("cancelled"));
-                }
-            });
-        }
-        return;
-    }
-    if (d->step == kOpFlash) {
-        d->flasher->cancel();
-        QTimer::singleShot(kSilentRefusalMs, this, [this]() {
-            if (d->flasherActive && !d->flasher->isRunning()) {
-                d->flashFinished(false, tr("cancelled"));
-            }
-        });
-        return;
-    }
-    if (d->cliInvocation) {
-        d->cliInvocation->cancel();   // its finished() reports "cancelled"
-        return;
-    }
-    if (d->step == kOpMcu || d->step == kOpSetRole) {
-        if (d->updaterActive) {
-            d->updater->cancel();   // finished(false, "cancelled") closes the link
-        } else if (d->linkActive && !d->mcuResultPending) {
-            d->mcuDone(false, tr("cancelled"));
-        }
-    }
+    d->job->cancel();
 }
 
 void FirmwareTab::rollBack()
 {
-    if (d->refuseIfBusy()) {
+    if (isBusy()) {
+        d->job->rollBack();   // refused with "Busy: ..." in the status bar
         return;
     }
-    QString error;
-    if (!ImagePuller::rollBack(cacheDirectory(), &error)) {
-        const QString message = tr("Roll back failed: %1").arg(error.isEmpty() ? tr("there is no previous image") : error);
-        appendLog(message);
-        emit statusMessage(message, kStatusLongMs);
-        d->refreshImage();
+    d->job->setCacheDirectory(cacheDirectory());
+    QString message;
+    if (!d->job->rollBack(&message)) {
+        emit statusMessage(message, kStatusLongMs);   // the job logged it
         return;
     }
-    d->localImage.clear();
     AppSettings::instance().setFirmwareLocalImage(QString());
-    const QString message = tr("Rolled back: the previous image is the current one again");
-    appendLog(message);
     emit statusMessage(message, kStatusShortMs);
-    d->refreshImage(/*reread=*/true);
 }
 
 void FirmwareTab::chooseLocalImage()
@@ -3049,7 +1741,8 @@ void FirmwareTab::chooseLocalImage()
 
 void FirmwareTab::choosePackage()
 {
-    const QString start = d->mcuPackagePath.isEmpty() ? QString() : QFileInfo(d->mcuPackagePath).absolutePath();
+    const QString current = d->job->packagePath();
+    const QString start = current.isEmpty() ? QString() : QFileInfo(current).absolutePath();
     const QString file = QFileDialog::getOpenFileName(this, tr("Choose a CC1310 Firmware Package"), start,
                                                       tr("CC1310 firmware packages (*.pkg);;All files (*)"));
     if (!file.isEmpty()) {
@@ -3059,15 +1752,12 @@ void FirmwareTab::choosePackage()
 
 void FirmwareTab::refreshStatus()
 {
-    if (isBusy()) {
-        return;   // upgrade_tool / adb belong to the running operation
-    }
-    d->flasher->queryStatus();
+    d->job->refreshStatus();   // nothing while busy: upgrade_tool / adb belong to the running operation
 }
 
 void FirmwareTab::planPartitions()
 {
-    d->requestPlan(true);
+    d->job->planPartitions();
 }
 
 void FirmwareTab::installDrivers()
@@ -3087,7 +1777,7 @@ void FirmwareTab::installDrivers()
     appendLog(tr("Starting the Rockchip driver installer %1").arg(nativePath(installer)));
     ToolRunner::Options options;
     options.workingDirectory = QFileInfo(installer).absolutePath();
-    ToolInvocation* invocation = d->runner->run(installer, {}, options);
+    ToolInvocation* invocation = d->job->toolRunner()->run(installer, {}, options);
     connect(invocation, &ToolInvocation::finished, this, [this, installer](const ToolResult& result) {
         if (!result.started) {
             const QString message = tr("Could not start %1: %2. Run it as administrator from that folder.")
@@ -3103,6 +1793,11 @@ void FirmwareTab::installDrivers()
 
 void FirmwareTab::appendLog(const QString& line)
 {
+    d->appendLines(line, /*mirror=*/true);
+}
+
+void FirmwareTab::Private::appendLines(const QString& line, bool mirror)
+{
     QString text = line;
     text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
     text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
@@ -3114,11 +1809,13 @@ void FirmwareTab::appendLog(const QString& line)
             continue;   // blank lines inside multi-line tool output
         }
         const QString stamped = stamp + QLatin1Char(' ') + trimmed;
-        d->logView->appendPlainText(stamped);
-        qCInfo(lcFirmware).noquote() << trimmed;
-        emit logLineAdded(stamped);
+        logView->appendPlainText(stamped);
+        if (mirror) {
+            qCInfo(lcFirmware).noquote() << trimmed;
+        }
+        emit q->logLineAdded(stamped);
     }
-    d->lastLogWasProgress = false;
+    lastLogWasProgress = false;
 }
 
 void FirmwareTab::Private::appendToolLine(const QString& line)
@@ -3182,33 +1879,29 @@ void FirmwareTab::applyPreferences()
     if (!d->toolPathsPinned) {
         const QString upgradeTool = ToolLocator::locate(ToolLocator::Tool::UpgradeTool, s.firmwareUpgradeToolPath());
         const QString adb = ToolLocator::locate(ToolLocator::Tool::Adb, s.firmwareAdbPath());
-        const bool changed = upgradeTool != d->upgradeToolPath || adb != d->adbPath || d->logView->document()->isEmpty();
-        d->upgradeToolPath = upgradeTool;
-        d->adbPath = adb;
+        const bool changed = upgradeTool != d->job->upgradeToolPath() || adb != d->job->adbPath()
+                             || d->logView->document()->isEmpty();
+        d->job->setToolPaths(upgradeTool, adb);
         d->driverInstallerPath = ToolLocator::locate(ToolLocator::Tool::DriverInstaller);
-        d->pushToolPaths();
         if (changed) {
             d->logToolPaths();
             d->runFirmwareInfo(imagePath());
-            d->requestPlan(true);
+            d->job->planPartitions();
         }
     }
-    d->flasher->setWaitTimeoutSeconds(s.firmwareLoaderWaitSeconds());
-    d->flasher->setAdbReturnTimeoutSeconds(s.firmwareAdbReturnSeconds());
+    d->job->setLoaderWaitSeconds(s.firmwareLoaderWaitSeconds());
+    d->job->setAdbReturnSeconds(s.firmwareAdbReturnSeconds());
     const QString cache = s.firmwareCacheDirectory();
     if (cache != cacheDirectory()) {
         d->cacheDirEdit->setText(nativePath(cache));
-        d->refreshImage();
+        d->job->setCacheDirectory(cache);
+        d->job->refreshImage();
     }
 }
 
 void FirmwareTab::disconnectSource()
 {
-    if (d->step == kOpPull && isBusy()) {
-        cancel();
-    }
-    d->keepSsh = false;
-    d->closeSsh();
+    d->job->disconnectSource();
 }
 
 // =======================================================================================

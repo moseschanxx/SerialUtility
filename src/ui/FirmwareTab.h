@@ -25,6 +25,7 @@ class SshProfileStore;
 class SshConnection;
 class ToolRunner;
 class McuLink;
+class FirmwareJob;
 
 /**
  * The Firmware tab (File > Firmware Update, Ctrl+Shift+U; one instance in the main window's
@@ -53,7 +54,7 @@ class McuLink;
  * the gear opens the profile manager (sshProfilesEditRequested()). The remote folder is
  * remembered per target (AppSettings::firmwareRemoteFolder(target)); a new target starts with
  * the last folder used, initially "~/rk/rockchip-platforms/output/image". Pull connects its own
- * SshConnection (the tab owns one; host key and authentication go through HostKeyDialog /
+ * SshConnection (the tab's FirmwareJob owns one; host key and authentication go through HostKeyDialog /
  * AuthPromptDialog exactly as a session tab does, with "remember" and the DPAPI store), then
  * runs the ImagePuller and reports remote size, mtime and git describe before the transfer;
  * the connection is closed again after the pull (or kept while a Pull & Flash runs). "Use local
@@ -103,6 +104,17 @@ class McuLink;
  * the confirmed role; stops at the first failure (adb errors included). SoC first, because the
  * MCU path needs rfmcu on the SoC.
  *
+ * View and chain (v0.5.1): every operation above runs in a FirmwareJob (src/firmware/FirmwareJob.h,
+ * su_core) that the tab owns - the steps, the rules, the log lines and the messages are the job's,
+ * the same ones the console tool su-fw runs. The tab keeps its widgets, dialogs, settings and the
+ * status timer: it hands the fields and the Preferences to the job when an operation starts,
+ * renders what the job reports (log lines with the time added, progress, the lasting status, the
+ * device, image, package, MCU and partition state), answers the job's questions with
+ * HostKeyDialog / AuthPromptDialog / the "reboot loader" QMessageBox, remembers in AppSettings what
+ * the job reports (the pull source, a board's flash layout, the cache image after a pull), and
+ * returns the job's collaborators from toolRunner(), socFlasher(), mcuLink(), mcuUpdater(),
+ * imagePuller() and sshConnection().
+ *
  * Every step writes a time-stamped line to the log pane (and the System Log through lcFirmware)
  * - the command lines run, the tools' output, the flasher / updater narration (McuUpdater's
  * fw_update.py wording), never a secret. Save writes the pane to a text file; Clear empties it.
@@ -122,7 +134,7 @@ class FirmwareTab : public QWidget
 public:
     using SessionProvider = std::function<QList<SessionWidget*>()>;
 
-    /// `runner` null = a ProcessToolRunner owned by the tab; `profiles` not owned, may be null.
+    /// `runner` null = a ProcessToolRunner owned by the tab's FirmwareJob; `profiles` not owned, may be null.
     explicit FirmwareTab(SshProfileStore* profiles, ToolRunner* runner = nullptr, QWidget* parent = nullptr);
     ~FirmwareTab() override;
 
@@ -132,6 +144,7 @@ public:
     QString currentOperation() const;              ///< "pull" / "flash" / "mcu" / "set-role" / "info" / "pull-flash" / ""
 
     // ---- Collaborators (fakes injected by the tests) --------------------------------------
+    FirmwareJob* firmwareJob() const;              ///< the chain the tab drives (owned by the tab)
     ToolRunner* toolRunner() const;
     SocFlasher* socFlasher() const;
     McuLink* mcuLink() const;

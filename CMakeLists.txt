@@ -226,7 +226,8 @@ set(SU_CORE_SOURCES
     src/ssh/SshWorker.h
     src/ssh/SshWorker.cpp
 
-    # Firmware tab core (v0.5): external tools, Rockchip flashing, the CC1310 updater, the image pull
+    # Firmware tab core (v0.5): external tools, Rockchip flashing, the CC1310 updater, the image pull,
+    # and (v0.5.1) FirmwareJob, the whole chain without widgets
     src/firmware/ToolRunner.h
     src/firmware/ToolRunner.cpp
     src/firmware/AdbTool.h
@@ -247,6 +248,8 @@ set(SU_CORE_SOURCES
     src/firmware/SocFlasher.cpp
     src/firmware/ImagePuller.h
     src/firmware/ImagePuller.cpp
+    src/firmware/FirmwareJob.h
+    src/firmware/FirmwareJob.cpp
 
     src/terminal/TerminalTypes.h
     src/terminal/CharWidth.h

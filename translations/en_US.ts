@@ -503,14 +503,9 @@
     </message>
 </context>
 <context>
-    <name>FirmwareTab</name>
+    <name>FirmwareJob</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+790"/>
-        <source>Choose the Local Image Cache</source>
-        <translation>Choose the Local Image Cache</translation>
-    </message>
-    <message>
-        <location line="+53"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+291"/>
         <source>SSH: %1</source>
         <translation>SSH: %1</translation>
     </message>
@@ -520,7 +515,7 @@
         <translation>Authenticated to %1 (%2)</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+10"/>
         <source>Remote %1: %2, built %3</source>
         <translation>Remote %1: %2, built %3</translation>
     </message>
@@ -535,7 +530,7 @@
         <translation>Pulling update.img: %1</translation>
     </message>
     <message>
-        <location line="+51"/>
+        <location line="+34"/>
         <source>Flashing SoC: %1 %2 %</source>
         <translation>Flashing SoC: %1 %2 %</translation>
     </message>
@@ -580,7 +575,470 @@
         <translation>Updating MCU: %1 / %2 bytes (%3 %)</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+147"/>
+        <source>file not found</source>
+        <translation>file not found</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>not a Rockchip RKFW image</source>
+        <translation>not a Rockchip RKFW image</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Image %1 refused: %2</source>
+        <translation>Image %1 refused: %2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Using the local image %1</source>
+        <translation>Using the local image %1</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>unreadable file</source>
+        <translation>unreadable file</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Package %1 refused: %2</source>
+        <translation>Package %1 refused: %2</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Package %1: %2</source>
+        <translation>Package %1: %2</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
+        <translation>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Pull</source>
+        <translation>Pull</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash SoC</source>
+        <translation>Flash SoC</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Update MCU</source>
+        <translation>Update MCU</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Set role</source>
+        <translation>Set role</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Read MCU</source>
+        <translation>Read MCU</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Pull &amp; Flash</source>
+        <translation>Pull &amp; Flash</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>%1 done: %2</source>
+        <translation>%1 done: %2</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <location line="+472"/>
+        <source>%1 failed: %2</source>
+        <translation>%1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="-428"/>
+        <source>the SSH profile of the build machine no longer exists</source>
+        <translation>the SSH profile of the build machine no longer exists</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>enter the build machine (an SSH profile or user@host)</source>
+        <translation>enter the build machine (an SSH profile or user@host)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>&quot;%1&quot; is not an SSH target such as user@host[:port]</source>
+        <translation>&quot;%1&quot; is not an SSH target such as user@host[:port]</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>authentication failed: nobody answered &quot;%1&quot;</source>
+        <translation>authentication failed: nobody answered &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+62"/>
+        <source>upgrade_tool not found</source>
+        <translation>upgrade_tool not found</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Partitions of %1: %2</source>
+        <translation>Partitions of %1: %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</source>
+        <translation>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Cannot list the partitions of %1: %2</source>
+        <translation>Cannot list the partitions of %1: %2</translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Cannot read the flash layout of board %1: %2</source>
+        <translation>Cannot read the flash layout of board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
+        <translation>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flash layout of board %1: %2</source>
+        <translation>Flash layout of board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>partition layout unknown: connect the board running once</source>
+        <translation>partition layout unknown: connect the board running once</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 is not in the board&apos;s partition layout</source>
+        <translation>%1 is not in the board&apos;s partition layout</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the package has no image file for %1</source>
+        <translation>the package has no image file for %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 (%2 bytes) does not fit the partition (%3 bytes)</source>
+        <translation>%1 (%2 bytes) does not fit the partition (%3 bytes)</translation>
+    </message>
+    <message>
+        <location line="+142"/>
+        <source>Busy: %1 is still running</source>
+        <translation>Busy: %1 is still running</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>--- %1 ---</source>
+        <translation>--- %1 ---</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>%1: %2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>stopped at %1: %2</source>
+        <translation>stopped at %1: %2</translation>
+    </message>
+    <message>
+        <location line="+73"/>
+        <source>enter the remote folder that holds update.img</source>
+        <translation>enter the remote folder that holds update.img</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot create the cache folder %1</source>
+        <translation>cannot create the cache folder %1</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Pull: connecting to %1...</source>
+        <translation>Pull: connecting to %1...</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Connecting to %1</source>
+        <translation>Connecting to %1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot connect to %1</source>
+        <translation>cannot connect to %1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Connected to %1 (%2)</source>
+        <translation>Connected to %1 (%2)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+354"/>
+        <location line="+36"/>
+        <location line="+211"/>
+        <location line="+10"/>
+        <location line="+13"/>
+        <source>cancelled</source>
+        <translation>cancelled</translation>
+    </message>
+    <message>
+        <location line="-622"/>
+        <location line="+11"/>
+        <source>the connection to %1 closed</source>
+        <translation>the connection to %1 closed</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Pull: checking update.img on %1...</source>
+        <translation>Pull: checking update.img on %1...</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image pull did not start</source>
+        <translation>the image pull did not start</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>no image: pull one or choose a local image first</source>
+        <translation>no image: pull one or choose a local image first</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <location line="+26"/>
+        <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
+        <translation>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>no partition is checked: check the ones to write (All checks every one)</source>
+        <translation>no partition is checked: check the ones to write (All checks every one)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</source>
+        <translation>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Flashing %1</source>
+        <translation>Flashing %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Flashing SoC: starting...</source>
+        <translation>Flashing SoC: starting...</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>the SoC flasher did not start</source>
+        <translation>the SoC flasher did not start</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Flashing SoC: looking for the board</source>
+        <translation>Flashing SoC: looking for the board</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: rebooting the board into Loader mode</source>
+        <translation>Flashing SoC: rebooting the board into Loader mode</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: waiting for the board in Loader / Maskrom mode</source>
+        <translation>Flashing SoC: waiting for the board in Loader / Maskrom mode</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: writing the flash - do not unplug the board</source>
+        <translation>Flashing SoC: writing the flash - do not unplug the board</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Flashing SoC: waiting for the board to come back on ADB</source>
+        <translation>Flashing SoC: waiting for the board to come back on ADB</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Flashing SoC: reading the board information</source>
+        <translation>Flashing SoC: reading the board information</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>The board appeared meanwhile; nothing sent</source>
+        <translation>The board appeared meanwhile; nothing sent</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Sent &quot;reboot loader&quot; through %1</source>
+        <translation>Sent &quot;reboot loader&quot; through %1</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>choose a valid .pkg package first</source>
+        <translation>choose a valid .pkg package first</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>choose the MCU role (rx or tx) first: it is never guessed</source>
+        <translation>choose the MCU role (rx or tx) first: it is never guessed</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Updating the MCU with %1 (role %2)</source>
+        <translation>Updating the MCU with %1 (role %2)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Setting the MCU role to %1</source>
+        <translation>Setting the MCU role to %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1: opening the link through the board...</source>
+        <translation>%1: opening the link through the board...</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>the MCU link could not be opened</source>
+        <translation>the MCU link could not be opened</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>the MCU updater did not start</source>
+        <translation>the MCU updater did not start</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Reading the MCU version through ADB...</source>
+        <translation>Reading the MCU version through ADB...</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <location line="+36"/>
+        <source>adb could not be started: %1</source>
+        <translation>adb could not be started: %1</translation>
+    </message>
+    <message>
+        <location line="-32"/>
+        <location line="+36"/>
+        <source>adb did not answer in time</source>
+        <translation>adb did not answer in time</translation>
+    </message>
+    <message>
+        <location line="-26"/>
+        <source>rfmcu cmd %1</source>
+        <translation>rfmcu cmd %1</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</source>
+        <translation>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the MCU did not answer &quot;%1&quot;</source>
+        <translation>the MCU did not answer &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>rfmcu cmd %1 failed (exit code %2): %3</source>
+        <translation>rfmcu cmd %1 failed (exit code %2): %3</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>unexpected reply to &quot;version&quot;: %1</source>
+        <translation>unexpected reply to &quot;version&quot;: %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>nothing</source>
+        <translation>nothing</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>MCU application version=%1 role=%2</source>
+        <translation>MCU application version=%1 role=%2</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>No MCU package chosen: the MCU update is skipped</source>
+        <translation>No MCU package chosen: the MCU update is skipped</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>SoC flashed; no MCU package chosen</source>
+        <translation>SoC flashed; no MCU package chosen</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</source>
+        <translation>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>MCU version unknown (%1): it may sit in its UART updater; updating it</source>
+        <translation>MCU version unknown (%1): it may sit in its UART updater; updating it</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cannot read the running MCU version: %1</source>
+        <translation>cannot read the running MCU version: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>the MCU already runs %1; update skipped</source>
+        <translation>the MCU already runs %1; update skipped</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
+        <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Cannot cancel while upgrade_tool writes the flash</source>
+        <translation>Cannot cancel while upgrade_tool writes the flash</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancelling %1</source>
+        <translation>Cancelling %1</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Roll back failed: %1</source>
+        <translation>Roll back failed: %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>there is no previous image</source>
+        <translation>there is no previous image</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Rolled back: the previous image is the current one again</source>
+        <translation>Rolled back: the previous image is the current one again</translation>
+    </message>
+</context>
+<context>
+    <name>FirmwareTab</name>
+    <message>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+611"/>
+        <source>Choose the Local Image Cache</source>
+        <translation>Choose the Local Image Cache</translation>
+    </message>
+    <message>
+        <location line="+113"/>
         <source>Source</source>
         <translation>Source</translation>
     </message>
@@ -631,12 +1089,11 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+1067"/>
         <source>Pull</source>
         <translation>Pull</translation>
     </message>
     <message>
-        <location line="-1066"/>
+        <location line="+1"/>
         <source>Copy update.img from the build machine (skipped when it did not change)</source>
         <translation>Copy update.img from the build machine (skipped when it did not change)</translation>
     </message>
@@ -743,12 +1200,11 @@
     </message>
     <message>
         <location line="+2"/>
-        <location line="+1047"/>
         <source>Flash SoC</source>
         <translation>Flash SoC</translation>
     </message>
     <message>
-        <location line="-1044"/>
+        <location line="+3"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
     </message>
@@ -809,23 +1265,21 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+1034"/>
         <source>Update MCU</source>
         <translation>Update MCU</translation>
     </message>
     <message>
-        <location line="-1033"/>
+        <location line="+1"/>
         <source>Send the package to the CC1310 through the board (needs a confirmed role)</source>
         <translation>Send the package to the CC1310 through the board (needs a confirmed role)</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+1035"/>
         <source>Set role</source>
         <translation>Set role</translation>
     </message>
     <message>
-        <location line="-1034"/>
+        <location line="+1"/>
         <source>Store the selected role in the CC1310</source>
         <translation>Store the selected role in the CC1310</translation>
     </message>
@@ -875,57 +1329,7 @@
         <translation>Firmware</translation>
     </message>
     <message>
-        <location line="+136"/>
-        <source>file not found</source>
-        <translation>file not found</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>not a Rockchip RKFW image</source>
-        <translation>not a Rockchip RKFW image</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Image %1 refused: %2</source>
-        <translation>Image %1 refused: %2</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Using the local image %1</source>
-        <translation>Using the local image %1</translation>
-    </message>
-    <message>
-        <location line="+26"/>
-        <source>unreadable file</source>
-        <translation>unreadable file</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Package %1 refused: %2</source>
-        <translation>Package %1 refused: %2</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Package %1: %2</source>
-        <translation>Package %1: %2</translation>
-    </message>
-    <message>
-        <location line="+179"/>
-        <source>the SSH profile of the build machine no longer exists</source>
-        <translation>the SSH profile of the build machine no longer exists</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>enter the build machine (an SSH profile or user@host)</source>
-        <translation>enter the build machine (an SSH profile or user@host)</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>&quot;%1&quot; is not an SSH target such as user@host[:port]</source>
-        <translation>&quot;%1&quot; is not an SSH target such as user@host[:port]</translation>
-    </message>
-    <message>
-        <location line="+32"/>
+        <location line="+356"/>
         <source>no image yet: pull one from the build machine or use a local image</source>
         <translation>no image yet: pull one from the build machine or use a local image</translation>
     </message>
@@ -946,7 +1350,7 @@
         <translation>previous: %1</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+21"/>
         <source>upgrade_tool not found: no image details</source>
         <translation>upgrade_tool not found: no image details</translation>
     </message>
@@ -967,53 +1371,22 @@
     </message>
     <message>
         <location line="+10"/>
-        <location line="+185"/>
+        <location line="+62"/>
         <source>no image selected</source>
         <translation>no image selected</translation>
     </message>
     <message>
-        <location line="-148"/>
-        <source>upgrade_tool not found</source>
-        <translation>upgrade_tool not found</translation>
-    </message>
-    <message>
-        <location line="+39"/>
-        <source>Partitions of %1: %2</source>
-        <translation>Partitions of %1: %2</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Cannot list the partitions of %1: %2</source>
-        <translation>Cannot list the partitions of %1: %2</translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <location line="+78"/>
+        <location line="+11"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>partition layout unknown: connect the board running once</translation>
     </message>
     <message>
-        <location line="-75"/>
-        <source>%1 is not in the board&apos;s partition layout</source>
-        <translation>%1 is not in the board&apos;s partition layout</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>the package has no image file for %1</source>
-        <translation>the package has no image file for %1</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>%1 (%2 bytes) does not fit the partition (%3 bytes)</source>
-        <translation>%1 (%2 bytes) does not fit the partition (%3 bytes)</translation>
-    </message>
-    <message>
-        <location line="+33"/>
+        <location line="-38"/>
         <source>missing</source>
         <translation>missing</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+30"/>
         <source>unpacking the image to list its partitions...</source>
         <translation>unpacking the image to list its partitions...</translation>
     </message>
@@ -1033,27 +1406,12 @@
         <translation>%1 partitions, %2 selected (%3)</translation>
     </message>
     <message>
-        <location line="+74"/>
-        <source>Cannot read the flash layout of board %1: %2</source>
-        <translation>Cannot read the flash layout of board %1: %2</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
-        <translation>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Flash layout of board %1: %2</source>
-        <translation>Flash layout of board %1: %2</translation>
-    </message>
-    <message>
-        <location line="+27"/>
+        <location line="+44"/>
         <source>not checked yet</source>
         <translation>not checked yet</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>no board</source>
         <translation>no board</translation>
     </message>
@@ -1078,7 +1436,7 @@
         <translation>Maskrom mode %1</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+24"/>
         <source>%1 %2, %3 bytes, CRC OK</source>
         <translation>%1 %2, %3 bytes, CRC OK</translation>
     </message>
@@ -1088,12 +1446,12 @@
         <translation>no package chosen</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+11"/>
         <source>unknown</source>
         <translation>unknown</translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+61"/>
         <source>upgrade_tool: %1</source>
         <translation>upgrade_tool: %1</translation>
     </message>
@@ -1103,170 +1461,7 @@
         <translation>adb: %1</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Read MCU</source>
-        <translation>Read MCU</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Pull &amp; Flash</source>
-        <translation>Pull &amp; Flash</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Busy: %1 is still running</source>
-        <translation>Busy: %1 is still running</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>--- %1 ---</source>
-        <translation>--- %1 ---</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>%1: %2</source>
-        <translation>%1: %2</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <location line="+34"/>
-        <source>%1 failed: %2</source>
-        <translation>%1 failed: %2</translation>
-    </message>
-    <message>
-        <location line="-29"/>
-        <source>stopped at %1: %2</source>
-        <translation>stopped at %1: %2</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>%1 done: %2</source>
-        <translation>%1 done: %2</translation>
-    </message>
-    <message>
-        <location line="+56"/>
-        <source>enter the remote folder that holds update.img</source>
-        <translation>enter the remote folder that holds update.img</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>cannot create the cache folder %1</source>
-        <translation>cannot create the cache folder %1</translation>
-    </message>
-    <message>
-        <location line="+40"/>
-        <source>Pull: connecting to %1...</source>
-        <translation>Pull: connecting to %1...</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Connecting to %1</source>
-        <translation>Connecting to %1</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>cannot connect to %1</source>
-        <translation>cannot connect to %1</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Connected to %1 (%2)</source>
-        <translation>Connected to %1 (%2)</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <location line="+386"/>
-        <location line="+36"/>
-        <location line="+210"/>
-        <location line="+10"/>
-        <location line="+13"/>
-        <source>cancelled</source>
-        <translation>cancelled</translation>
-    </message>
-    <message>
-        <location line="-654"/>
-        <location line="+11"/>
-        <source>the connection to %1 closed</source>
-        <translation>the connection to %1 closed</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Pull: checking update.img on %1...</source>
-        <translation>Pull: checking update.img on %1...</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>the image pull did not start</source>
-        <translation>the image pull did not start</translation>
-    </message>
-    <message>
-        <location line="+43"/>
-        <source>no image: pull one or choose a local image first</source>
-        <translation>no image: pull one or choose a local image first</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <location line="+21"/>
-        <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
-        <translation>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</translation>
-    </message>
-    <message>
-        <location line="-9"/>
-        <source>no partition is checked: check the ones to write (All checks every one)</source>
-        <translation>no partition is checked: check the ones to write (All checks every one)</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</source>
-        <translation>Partitions checked: %1 (Loader mode writes these one by one; MASKROM mode writes the whole image)</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Flashing %1</source>
-        <translation>Flashing %1</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Flashing SoC: starting...</source>
-        <translation>Flashing SoC: starting...</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>the SoC flasher did not start</source>
-        <translation>the SoC flasher did not start</translation>
-    </message>
-    <message>
-        <location line="+18"/>
-        <source>Flashing SoC: looking for the board</source>
-        <translation>Flashing SoC: looking for the board</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Flashing SoC: rebooting the board into Loader mode</source>
-        <translation>Flashing SoC: rebooting the board into Loader mode</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Flashing SoC: waiting for the board in Loader / Maskrom mode</source>
-        <translation>Flashing SoC: waiting for the board in Loader / Maskrom mode</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Flashing SoC: writing the flash - do not unplug the board</source>
-        <translation>Flashing SoC: writing the flash - do not unplug the board</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Flashing SoC: waiting for the board to come back on ADB</source>
-        <translation>Flashing SoC: waiting for the board to come back on ADB</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Flashing SoC: reading the board information</source>
-        <translation>Flashing SoC: reading the board information</translation>
-    </message>
-    <message>
-        <location line="+50"/>
+        <location line="+103"/>
         <source>Firmware Update</source>
         <translation>Firmware Update</translation>
     </message>
@@ -1291,93 +1486,22 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>No, use the MASKROM button</translation>
     </message>
     <message>
-        <location line="+19"/>
-        <source>The board appeared meanwhile; nothing sent</source>
-        <translation>The board appeared meanwhile; nothing sent</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Sent &quot;reboot loader&quot; through %1</source>
-        <translation>Sent &quot;reboot loader&quot; through %1</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
-        <translation>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>choose a valid .pkg package first</source>
-        <translation>choose a valid .pkg package first</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>choose the MCU role (rx or tx) first: it is never guessed</source>
-        <translation>choose the MCU role (rx or tx) first: it is never guessed</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Updating the MCU with %1 (role %2)</source>
-        <translation>Updating the MCU with %1 (role %2)</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Setting the MCU role to %1</source>
-        <translation>Setting the MCU role to %1</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>%1: opening the link through the board...</source>
-        <translation>%1: opening the link through the board...</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>the MCU link could not be opened</source>
-        <translation>the MCU link could not be opened</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>the MCU updater did not start</source>
-        <translation>the MCU updater did not start</translation>
-    </message>
-    <message>
-        <location line="+39"/>
-        <source>Reading the MCU version through ADB...</source>
-        <translation>Reading the MCU version through ADB...</translation>
-    </message>
-    <message>
-        <location line="+41"/>
-        <source>rfmcu cmd %1</source>
-        <translation>rfmcu cmd %1</translation>
-    </message>
-    <message>
-        <location line="-14"/>
-        <location line="+36"/>
-        <source>adb could not be started: %1</source>
-        <translation>adb could not be started: %1</translation>
-    </message>
-    <message>
-        <location line="-2673"/>
+        <location line="-1549"/>
         <source>to the end</source>
         <translation>to the end</translation>
     </message>
     <message>
-        <location line="+373"/>
+        <location line="+229"/>
         <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
         <translation>Role %1 remembered from the last session: click it or press Read to confirm it</translation>
     </message>
     <message>
-        <location line="+621"/>
+        <location line="+446"/>
         <source>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</source>
         <translation>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</translation>
     </message>
     <message>
-        <location line="+651"/>
-        <source>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</source>
-        <translation>The flash layout is not known yet: the image carries none, and it is read from the board once it runs (ADB); MASKROM mode needs none</translation>
-    </message>
-    <message>
-        <location line="+135"/>
+        <location line="+597"/>
         <source>layout from the board</source>
         <translation>layout from the board</translation>
     </message>
@@ -1407,103 +1531,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>Flash layout from the board: %1</translation>
     </message>
     <message>
-        <location line="+846"/>
-        <location line="+36"/>
-        <source>adb did not answer in time</source>
-        <translation>adb did not answer in time</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</source>
-        <translation>the MCU port is busy (another rfmcu holds /dev/ttyS1): %1</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>the MCU did not answer &quot;%1&quot;</source>
-        <translation>the MCU did not answer &quot;%1&quot;</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>rfmcu cmd %1 failed (exit code %2): %3</source>
-        <translation>rfmcu cmd %1 failed (exit code %2): %3</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>unexpected reply to &quot;version&quot;: %1</source>
-        <translation>unexpected reply to &quot;version&quot;: %1</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>nothing</source>
-        <translation>nothing</translation>
-    </message>
-    <message>
-        <location line="+34"/>
-        <source>MCU application version=%1 role=%2</source>
-        <translation>MCU application version=%1 role=%2</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>No MCU package chosen: the MCU update is skipped</source>
-        <translation>No MCU package chosen: the MCU update is skipped</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>SoC flashed; no MCU package chosen</source>
-        <translation>SoC flashed; no MCU package chosen</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</source>
-        <translation>cannot read the running MCU version (%1) and no role is confirmed: choose rx or tx, then press Update MCU</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>MCU version unknown (%1): it may sit in its UART updater; updating it</source>
-        <translation>MCU version unknown (%1): it may sit in its UART updater; updating it</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>cannot read the running MCU version: %1</source>
-        <translation>cannot read the running MCU version: %1</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>the MCU already runs %1; update skipped</source>
-        <translation>the MCU already runs %1; update skipped</translation>
-    </message>
-    <message>
-        <location line="+65"/>
-        <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
-        <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Cannot cancel while upgrade_tool writes the flash</source>
-        <translation>Cannot cancel while upgrade_tool writes the flash</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Cancelling %1</source>
-        <translation>Cancelling %1</translation>
-    </message>
-    <message>
-        <location line="+43"/>
-        <source>Roll back failed: %1</source>
-        <translation>Roll back failed: %1</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>there is no previous image</source>
-        <translation>there is no previous image</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Rolled back: the previous image is the current one again</source>
-        <translation>Rolled back: the previous image is the current one again</translation>
-    </message>
-    <message>
-        <location line="+10"/>
+        <location line="+362"/>
         <source>Choose a Rockchip Update Image</source>
         <translation>Choose a Rockchip Update Image</translation>
     </message>
@@ -1513,7 +1541,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>Rockchip update images (*.img);;All files (*)</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+10"/>
         <source>Choose a CC1310 Firmware Package</source>
         <translation>Choose a CC1310 Firmware Package</translation>
     </message>
@@ -1523,7 +1551,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>CC1310 firmware packages (*.pkg);;All files (*)</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+24"/>
         <source>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</source>
         <translation>The Rockchip driver installer is missing (%1); install DriverAssistant by hand</translation>
     </message>
@@ -1543,7 +1571,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>The driver installer ended (exit code %1); replug the board</translation>
     </message>
     <message>
-        <location line="+64"/>
+        <location line="+71"/>
         <source>Save Firmware Log</source>
         <translation>Save Firmware Log</translation>
     </message>
