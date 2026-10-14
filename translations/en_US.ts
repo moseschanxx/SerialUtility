@@ -747,12 +747,12 @@
     </message>
     <message>
         <location line="+16"/>
-        <location line="+1030"/>
+        <location line="+1033"/>
         <source>another firmware operation is running (%1)</source>
         <translation>another firmware operation is running (%1)</translation>
     </message>
     <message>
-        <location line="-1024"/>
+        <location line="-1027"/>
         <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
         <translation>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</translation>
     </message>
@@ -805,14 +805,14 @@
         <location line="+4"/>
         <location line="+485"/>
         <location line="+36"/>
-        <location line="+223"/>
+        <location line="+226"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-765"/>
+        <location line="-768"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -1082,7 +1082,7 @@
         <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+31"/>
         <source>Cannot cancel while upgrade_tool writes the flash</source>
         <translation>Cannot cancel while upgrade_tool writes the flash</translation>
     </message>
@@ -1682,7 +1682,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>internal: unaddressed write refused</translation>
     </message>
     <message>
-        <location line="+121"/>
+        <location line="+130"/>
         <source>no change on the USB bus yet: the board is still on ADB</source>
         <translation>no change on the USB bus yet: the board is still on ADB</translation>
     </message>
@@ -1742,7 +1742,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>in Loader mode on port %1, LocationID %2</translation>
     </message>
     <message>
-        <location line="+229"/>
+        <location line="+238"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -1757,14 +1757,19 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>  exit code %1</translation>
     </message>
     <message>
-        <location line="+56"/>
-        <location line="+428"/>
+        <location line="+75"/>
+        <source>%1, not its Loader-mode %2</source>
+        <translation>%1, not its Loader-mode %2</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location line="+429"/>
         <source>upgrade_tool could not be run: %1</source>
         <translation>upgrade_tool could not be run: %1</translation>
     </message>
     <message>
-        <location line="-426"/>
-        <location line="+430"/>
+        <location line="-427"/>
+        <location line="+431"/>
         <source>upgrade_tool LD timed out</source>
         <translation>upgrade_tool LD timed out</translation>
     </message>
@@ -1866,12 +1871,12 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+4"/>
-        <location line="+536"/>
+        <location line="+548"/>
         <source>adb devices timed out</source>
         <translation>adb devices timed out</translation>
     </message>
     <message>
-        <location line="-524"/>
+        <location line="-536"/>
         <source>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</source>
         <translation>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</translation>
     </message>
@@ -1916,17 +1921,27 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>the USB enumeration shows no Rockchip ADB device although adb lists boards: port mapping impossible (driver?)</translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+44"/>
         <source>a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2</source>
         <translation>a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+2"/>
+        <source>ports %1 are in download mode but upgrade_tool LD lists only LocationID %2: one of these devices is not listed; %3</source>
+        <translation>ports %1 are in download mode but upgrade_tool LD lists only LocationID %2: one of these devices is not listed; %3</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such device: port mapping impossible (driver?)</source>
         <translation>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such device: port mapping impossible (driver?)</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+3"/>
+        <source>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows only port %2: one of these LocationIDs has no device on the bus; port mapping impossible (driver?)</source>
+        <translation>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows only port %2: one of these LocationIDs has no device on the bus; port mapping impossible (driver?)</translation>
+    </message>
+    <message>
+        <location line="+17"/>
         <source>a rockusb device is already in %1 mode (LocationID %2) that no selected board accounts for; reset it with `%3` or replug it, then run again</source>
         <translation>a rockusb device is already in %1 mode (LocationID %2) that no selected board accounts for; reset it with `%3` or replug it, then run again</translation>
     </message>
@@ -2088,7 +2103,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>board %1 is still on ADB although a Loader device appeared on port %2: not this board</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+16"/>
         <source>in Loader mode on port %1, LocationID %2 (%3 s)</source>
         <translation>in Loader mode on port %1, LocationID %2 (%3 s)</translation>
     </message>
@@ -2103,21 +2118,23 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>mapping stopped: resetting the board back to ADB</translation>
     </message>
     <message>
-        <location line="+21"/>
-        <location line="+335"/>
-        <location line="+483"/>
+        <location line="+149"/>
+        <location line="+533"/>
+        <source>port %1 shows %2</source>
+        <translation>port %1 shows %2</translation>
+    </message>
+    <message>
+        <location line="-508"/>
         <source>cancelled before its write started; reset back to ADB</source>
         <translation>cancelled before its write started; reset back to ADB</translation>
     </message>
     <message>
-        <location line="-817"/>
-        <location line="+335"/>
-        <location line="+483"/>
+        <location line="+1"/>
         <source>cancelled: resetting the board back to ADB</source>
         <translation>cancelled: resetting the board back to ADB</translation>
     </message>
     <message>
-        <location line="-769"/>
+        <location line="-105"/>
         <source>reconciled: %1 devices in download mode, every one a mapped board</source>
         <translation>reconciled: %1 devices in download mode, every one a mapped board</translation>
     </message>
@@ -2148,57 +2165,66 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+7"/>
-        <location line="+851"/>
+        <location line="+913"/>
         <source>; it is in Loader mode now (port %1, LocationID %2)</source>
         <translation>; it is in Loader mode now (port %1, LocationID %2)</translation>
     </message>
     <message>
-        <location line="-850"/>
-        <location line="+857"/>
+        <location line="-912"/>
+        <location line="+916"/>
         <source>; it is in Loader mode now (port %1)</source>
         <translation>; it is in Loader mode now (port %1)</translation>
     </message>
     <message>
-        <location line="-853"/>
+        <location line="-912"/>
         <source>a Loader device appeared late %1 and belongs to no mapped board</source>
         <translation>a Loader device appeared late %1 and belongs to no mapped board</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+40"/>
         <source>reset back to ADB; nothing was written</source>
         <translation>reset back to ADB; nothing was written</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`</source>
         <translation>%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+514"/>
+        <location line="+527"/>
         <source>no output</source>
         <translation>no output</translation>
     </message>
     <message>
-        <location line="-412"/>
-        <location line="+409"/>
+        <location line="-533"/>
+        <location line="+124"/>
+        <location line="+406"/>
         <source>timed out</source>
         <translation>timed out</translation>
     </message>
     <message>
-        <location line="-330"/>
-        <location line="+294"/>
+        <location line="-1671"/>
         <source>an ADB device</source>
         <translation>an ADB device</translation>
     </message>
     <message>
-        <location line="-294"/>
-        <location line="+294"/>
+        <location line="+3"/>
         <source>nothing</source>
         <translation>nothing</translation>
     </message>
     <message>
-        <location line="-287"/>
+        <location line="+1156"/>
+        <source>cancelled before its write started</source>
+        <translation>cancelled before its write started</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>; upgrade_tool RD found no device with LocationID %1 (it is gone): find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
+        <translation>; upgrade_tool RD found no device with LocationID %1 (it is gone): find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</translation>
+    </message>
+    <message>
+        <location line="+177"/>
         <source>LD lists LocationID %1</source>
         <translation>LD lists LocationID %1</translation>
     </message>
@@ -2228,7 +2254,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>checked: port %1 shows %2 (%3)</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+19"/>
         <source>port %1 shows %2; %3</source>
         <translation>port %1 shows %2; %3</translation>
     </message>
@@ -2293,23 +2319,28 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>%1 written: %2 bytes in %3 s</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+19"/>
         <source>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</source>
         <translation>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</translation>
     </message>
     <message>
         <location line="+2"/>
-        <location line="+334"/>
+        <location line="+381"/>
         <source>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
         <translation>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</translation>
     </message>
     <message>
-        <location line="-322"/>
+        <location line="-369"/>
         <source>partitions written; resetting the board</source>
         <translation>partitions written; resetting the board</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+22"/>
+        <source>partitions written, but upgrade_tool RD found no device with LocationID %1 (it is gone): find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
+        <translation>partitions written, but upgrade_tool RD found no device with LocationID %1 (it is gone): find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>partitions written, but upgrade_tool RD did not reset the board (%1); replug it</source>
         <translation>partitions written, but upgrade_tool RD did not reset the board (%1); replug it</translation>
     </message>
@@ -2364,17 +2395,32 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>the ADB wait was cancelled; the partitions were written</translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="+66"/>
         <source>the end-of-run check could not run: %1</source>
         <translation>the end-of-run check could not run: %1</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+35"/>
         <source>a device in download mode on port %1 that upgrade_tool LD does not list belongs to no board of the run</source>
         <translation>a device in download mode on port %1 that upgrade_tool LD does not list belongs to no board of the run</translation>
     </message>
     <message>
-        <location line="+175"/>
+        <location line="+34"/>
+        <source>LocationID %1 is gone; port %2 shows its Loader device with LocationID %3, the only new one on the bus: it is this board&apos;s</source>
+        <translation>LocationID %1 is gone; port %2 shows its Loader device with LocationID %3, the only new one on the bus: it is this board&apos;s</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>; it is still in Loader mode (port %1, LocationID %2): reset it by hand with `%3`</source>
+        <translation>; it is still in Loader mode (port %1, LocationID %2): reset it by hand with `%3`</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>still in Loader mode on port %1, LocationID %2: reset it by hand with `%3` (the line follows)</source>
+        <translation>still in Loader mode on port %1, LocationID %2: reset it by hand with `%3` (the line follows)</translation>
+    </message>
+    <message>
+        <location line="+154"/>
         <source>port mapping not available on this platform</source>
         <translation>port mapping not available on this platform</translation>
     </message>

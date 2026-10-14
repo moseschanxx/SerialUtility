@@ -866,7 +866,12 @@ Loader mode later (during the next board's reads, or after the last mapping) is 
 into a later `before` and invisible; it stops the run like Ambiguous. The same snapshot closes every
 run that rebooted a board: whatever sits in download mode and belongs to nobody is reported as
 `unattributed` (the summary says so; the boards' results stay), and the run's own failed / not-back
-boards found in Loader mode get `leftInLoader` and their addressed retry lines.
+boards found in Loader mode get `leftInLoader` and their addressed retry lines - so does a board a
+stop or a cancel reset whose RD answered OK and did not take (both reads must agree; it no longer
+counts as reset back to ADB). When exactly one board shows its Loader device on its port without its
+id being listed (it re-enumerated) and exactly one LocationID on the bus is nobody's, with no unknown
+download-mode port, the two are one device: the board takes the id and its lines are addressed to it
+(a WL or an RD that met the gone id, exit 255, ends with runnable lines instead of "find it with LD").
 
 **Before any reboot.** `adb devices` selects (unauthorized / offline / absent: skipped with
 `AdbTool::selectDevice()`'s words; an adb that cannot run selects nobody, exit 1; nobody on ADB, exit
@@ -885,7 +890,9 @@ checked once with `SocFlasher::writePartitions()`'s rules (file, fits, sector-al
 (`<extract folder>/.fleet/<serial>`: upgrade_tool writes a Log folder into its cwd); the files are the
 plan's unpacked images, shared read-only (EXF ran once, in the job's plan). A slot that frees starts
 the next mapped board. Before every WL and before the RD the board is **re-checked**: the enumeration
-must show a download-mode instance on its port and no ADB instance; and - **the LD gate** - whenever
+must show the download-mode instance of its Loader mode on its port - the pid it showed when it was
+mapped; another pid there (MASKROM after a brown-out) fails the check, so no addressed WL goes to a
+device that cannot take it - and no ADB instance; and - **the LD gate** - whenever
 no WL / RD of the run is in flight, `LD` must list its id in Loader mode. The gate keeps a
 single-flight listing of its own (it answers every board that asks while it runs and for 500 ms after
 its result; the mapping's and the reconciliation's LDs never answer a re-check). `LD` opens every
@@ -901,12 +908,15 @@ is not reset and the ADB wait decides (back: done with a warning; not back: NotB
 could not run is no evidence: the board fails with its retry lines. **A failing WL leaves the board
 in Loader mode** (no RD: nothing else is written to it) and its lines name the only safe retry -
 addressed: one `upgrade_tool -s <id> WL ...` per missing row, then `upgrade_tool -s <id> RD`
-(`FleetBoard::retry`, the JSON `retry`); `su-fw flash-soc --serial X` only once `LD` lists X as the
-only device in download mode, because the single-board flow writes without `-s` and takes the first
-Loader device `LD` lists (after a hub brown-out several boards sit in Loader mode at once). A board
-whose rows are written is reset at once with `-s <id> RD` (the LD timeout applies: a timed-out RD is a
-failed reset, never a cut write) and waited for on ADB (`adb -s X get-state` from one timer, at most
-one per board), then `cat /proc/version; uptime` and `rfmcu status` (recorded, never judged).
+(`FleetBoard::retry`, the JSON `retry`; each line names upgrade_tool by the full path the run used -
+the bundled tool is not on PATH - so it runs as it is in cmd.exe); `su-fw flash-soc --serial X` only
+once `LD` lists X as the only device in download mode, because the single-board flow writes without
+`-s` and takes the first Loader device `LD` lists (after a hub brown-out several boards sit in Loader
+mode at once). A board whose rows are written is reset at once with `-s <id> RD` (the LD timeout
+applies: a timed-out RD is a failed reset, never a cut write; an RD that finds no device - the id is
+gone - says so and names no `-s <gone id>` line) and waited for on ADB (`adb -s X get-state` from
+one timer, at most one per board), then `cat /proc/version; uptime` and `rfmcu status` (recorded,
+never judged).
 
 **Cancel = drain** (`FleetFlasher::cancel()`, Ctrl+C / `--timeout`; `FirmwareJob::isCancellable()`
 stays true): selecting - the run ends after the command in flight; mapping - the board already told
@@ -943,7 +953,7 @@ LocationIDs are never reset. `--max-parallel` defaults to every board. A termina
 pipe is not. The dry run's banner is the operation's own. A board left Loader mode between its last
 WL and its RD is fully written: no RD, the ADB wait decides.
 
-**Tests.** `tst_fleetflasher` (49 functions, 67 results with the data rows): `compare()` row by row,
+**Tests.** `tst_fleetflasher` (59 functions, 77 results with the data rows): `compare()` row by row,
 `Snapshot::from()`, `tagFor()`, `FleetReport` (table, JSON, summaries, exit codes) by hand, and runs
 on `FakeToolRunner` + `FakeUsbBus` (tests/support: the seven bench boards with their Windows port
 keys; every misbehaviour - stays on ADB, vanishes, MASKROM, drags the next board, ghost, no LD line,
@@ -953,8 +963,13 @@ LD / write overlaps, cancelled writes): the happy path (one addressed WL and RD 
 its own, no EXF), waves and slots, the LD gate (exactly one LD for the first wave), every skip and stop,
 the reconciliation and the end-of-run report, the re-checks before a WL, between rows and before the
 RD, failing WL / RD with the retry lines, cancel in every phase (RDs wait for the gate's LD), the dry
-run, `--all-boards`, the silence line. `tst_firmwarecli` (+18): the usage errors, dry run, two boards,
-`--all-boards`, a phone, JSON lines, not back, Ctrl+C drain, `--timeout` while mapping, a stop, a
+run, `--all-boards`, the silence line; after review 3 also a MASKROM pid at a mid-wave check, a
+stop's / a cancel's RD that answered OK and did not take, an RD that finds no device (and the
+pairing with the new id at the end), the baseline refusal naming every port and id, the retry lines
+with the tool's path, a WL that cannot start, an RD that times out, a failing `cat /proc/cmdline`, a
+stop's failing RD, and an LD listing that a board leaves before its check. `tst_firmwarecli` (+21):
+the usage errors, dry run, two boards, `--all-boards`, a phone, JSON lines, not back, Ctrl+C drain,
+`--timeout` while mapping and during the writes, `--no-wait`, `--layout`, a stop, a
 foreign device, the bootloader warning, the lock, an unknown layout (exit 1, not 2), the question,
 `--log` / `--quiet`, and the single-board command lines compared byte for byte with literal lists.
 `tst_firmwaretools` (+5): `portKey()`, `describe()`, the addressed command lines, `deviceAt()` /

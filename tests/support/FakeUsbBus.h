@@ -47,7 +47,9 @@ class FakeToolRunner;
  * ldDuringWrites() (an LD started while a WL / RD was in flight, OR a WL / RD started while an LD
  * was in flight), maxConcurrentWrites() (the wave size), unaddressedCommands(), writesTo(serial) /
  * resetsTo(serial) (the lines addressed to the board's id, in order), cancelledWrites() (WL / RD
- * invocations that got cancel(): must be 0).
+ * invocations that got cancel(): must be 0). The upgrade_tool handlers answer the program by its
+ * bare name or by a path to it (quoted when it holds a blank, with or without ".exe"), so a
+ * flasher given the bundled tool's full path runs on the same bus.
  */
 class FakeUsbBus : public QObject
 {
@@ -68,7 +70,9 @@ public:
     void setLdDurationMs(int ms);         ///< default 0: how long `upgrade_tool LD` runs; it answers from the state at its END
     void setWriteDurationMs(int ms);      ///< default 40 per WL
     void setWriteFailure(const QString& serial, const QString& fileName, const QByteArray& output, int exitCode);
-    void setResetFailure(const QString& serial, const QByteArray& output, int exitCode);
+    void setResetFailure(const QString& serial, const QByteArray& output, int exitCode);   ///< "Reset Device OK." with 0: an RD that answers OK and does not take
+    void setWriteStartFailure(const QString& serial, const QString& error);   ///< its WLs cannot start (ToolResult::started false, `error`)
+    void setResetTimeout(const QString& serial);          ///< its RDs time out; the board stays in Loader mode
     void setNoAdbReturn(const QString& serial);           ///< after its RD the board stays Absent
     void leaveLoaderBeforeWrite(const QString& serial);   ///< back on ADB right before its first WL is asked for
     void leaveLoaderAfterRows(const QString& serial, int rows);   ///< back on ADB once `rows` WLs completed
@@ -76,6 +80,7 @@ public:
     void releaseWrites();                                 ///< finish every hung WL (100 %, exit 0)
     void moveToAdb(const QString& serial);                ///< the test's own hand on the bus
     void moveToLoader(const QString& serial);             ///< ... a foreign Loader device, for instance
+    void moveToMaskrom(const QString& serial);            ///< MASKROM on its port at once (a brown-out: pid 0x110c, LD says Maskrom, the port's id)
     void addForeignLoader(const QString& port);           ///< a Loader device that is no board of the bus
     void addForeignAdb(const QString& serial);            ///< an `adb devices` entry with no Rockchip instance on the bus (a phone)
     void reenumerate(const QString& serial);              ///< a new LocationID for a Loader-mode board, same port; the old id is gone

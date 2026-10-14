@@ -640,10 +640,16 @@ su-fw flash-soc --all-boards --partitions rootfs --image update.img --yes --json
 reported with `leftInLoader` and the exact commands that finish it, addressed to it alone: run the
 `retry` lines of its board object (the log's `  retry: ...` lines) as they are - one
 `upgrade_tool -s <LocationID> WL <sector> <count> <file>` per missing partition, then
-`upgrade_tool -s <LocationID> RD`. Use `su-fw flash-soc --serial X` for it **only once
-`upgrade_tool LD` lists X as the only device in download mode**: the single-board flow writes without
-`-s` and takes any Loader device. When the LocationID is gone (`No found specific rockusb device!`)
-the board's line says so: find it with `upgrade_tool LD` first and address it with `-s`.
+`upgrade_tool -s <LocationID> RD`. Each line names the `upgrade_tool` su-fw ran by its full path
+(the bundled `tools\upgrade_tool.exe` is not on PATH), quoted when the path holds a blank: it runs
+as it is in `cmd.exe`; in PowerShell put `& ` in front. Use `su-fw flash-soc --serial X` for it
+**only once `upgrade_tool LD` lists X as the only device in download mode**: the single-board flow
+writes without `-s` and takes any Loader device. When the LocationID is gone (`No found specific
+rockusb device!`, a WL's or an RD's) the board's line says so: find it with `upgrade_tool LD` first
+and address it with `-s` - unless the run's closing picture shows that board's Loader device on its
+port with the only new LocationID on the bus: then the board takes that id and its `retry` lines are
+addressed to it. A board a stop or a cancel reset that is still in Loader mode at the end of the run
+(its RD did not take) gets `leftInLoader` and the RD line alone.
 
 ### Quick commands
 

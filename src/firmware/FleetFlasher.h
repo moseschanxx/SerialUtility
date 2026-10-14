@@ -46,9 +46,12 @@ struct FleetBoard
     QStringList written;    ///< the partitions written completely, in order
     /// A board left in Loader mode by a failed WL (or a pre-RD `LD` that could not run): the
     /// addressed command lines that finish it by hand, in order - one "upgrade_tool -s n WL <sector>
-    /// <count> <file>" per row not written (the failed row first), then "upgrade_tool -s n RD".
-    /// Empty otherwise, and empty when the id is gone (exit 255 "No found specific rockusb
-    /// device!": the hint then names `upgrade_tool LD`). Logged one per line, carried in the JSON.
+    /// <count> <file>" per row not written (the failed row first), then "upgrade_tool -s n RD"; a
+    /// board never written (a stop's / a cancel's RD that did not take) gets the RD alone. The
+    /// program is the upgrade_tool the run used, with its full path (native separators, quoted when
+    /// it holds a blank), so a line runs as it is. Empty otherwise, and empty when the id is gone
+    /// (exit 255 "No found specific rockusb device!": the hint then names `upgrade_tool LD`) unless
+    /// the end-of-run picture pairs the board with its new id. Logged one per line, in the JSON.
     QStringList retry;
     bool adbBack = false;   ///< `adb -s <serial> get-state` answered "device" after the reset
     bool leftInLoader = false;   ///< the board is (still) in Loader mode by the last evidence: a failed WL gets no RD (nothing else is written to it; `retry` names the addressed commands that finish it by hand)
@@ -198,12 +201,21 @@ struct FleetBoard
  *        in the baseline goes to unattributedDevices() and is logged with the hint - that is what
  *        report().setUnattributed() carries for a real run, so the owner is never told "clean"
  *        while a device he was not told about sits in Loader mode for the next run to refuse on.
- *        The same snapshot corrects the run's own ended boards: a Failed / NotBack board (not a
- *        MASKROM one, not one already leftInLoader) whose port shows a download-mode instance or
+ *        The same snapshot corrects the run's own ended boards: a Failed / NotBack board, or a
+ *        Skipped one a stop / a cancel reset (not a MASKROM one, not one already leftInLoader),
+ *        whose port shows the pid of its Loader mode (the one it showed when it was mapped) or
  *        whose LocationID `LD` still lists in Loader mode (a re-enumeration gap seen by a re-check,
- *        a failed RD) gets leftInLoader, its detail extended "; it is in Loader mode now (port P,
- *        LocationID n)" and - when LD lists its id - the addressed retry lines (one WL per row
- *        not in written, then the RD), logged as a failed WL's are.
+ *        a failed RD; for an RD that answered OK both reads must agree) gets leftInLoader, its
+ *        detail extended "; it is in Loader mode now (port P, LocationID n)" (a Skipped one: "; it
+ *        is still in Loader mode (port P, LocationID n): reset it by hand with `upgrade_tool -s n
+ *        RD`", and it no longer counts as reset back to ADB) and - when LD lists its id - the
+ *        addressed retry lines (one WL per row not in written, then the RD; the RD alone for a
+ *        Skipped one), logged as a failed WL's are. When exactly one board of the run shows its
+ *        Loader device on its port without its id being listed (it re-enumerated) and exactly one
+ *        LocationID on the bus is nobody's, with no unknown download-mode port, the two are one
+ *        device: the board takes that id (the line "LocationID n is gone; port P shows its Loader
+ *        device with LocationID m, the only new one on the bus: it is this board's") and gets its
+ *        addressed lines - leftInLoader or not, so a WL / RD that met the gone id ends addressed.
  *     A stop ("mapping stopped: <reason>; nothing was written"): nothing has been written; every
  *     mapped board gets `upgrade_tool -s <id> RD` ("reset back to ADB; nothing was written") and is
  *     Skipped "mapping stopped: <reason>"; the board being mapped is Failed with the reason; every
@@ -219,8 +231,10 @@ struct FleetBoard
  *     into its cwd; a folder that cannot be created fails the board before any write). The files
  *     are the plan's unpacked images, shared read-only by every board: EXF ran once, in the owner's
  *     plan, and never runs here. Before every WL and before the RD the board is re-checked:
- *     the enumeration (no device I/O) must still show a download-mode instance on its port and no
- *     ADB instance there; and - the LD gate - whenever no WL / RD of this run is in flight, one
+ *     the enumeration (no device I/O) must still show the download-mode instance of its Loader
+ *     mode on its port - the pid the port showed when it was mapped; another pid there (MASKROM
+ *     after a brown-out) fails the check, shown as "PID_110C, not its Loader-mode PID_110E" - and
+ *     no ADB instance there; and - the LD gate - whenever no WL / RD of this run is in flight, one
  *     `LD` must still list its LocationID in Loader mode. The gate keeps a listing of its own: a
  *     single-flight `LD` answers every board that asks while it runs, and its result answers every
  *     board that asks within 500 ms after it arrived (counted from the result, not the start);
@@ -270,7 +284,12 @@ struct FleetBoard
  *     board's bytes (the owner prints every 10 %). A board whose rows are written is reset at once:
  *     `upgrade_tool -s <id> RD` ("partitions written; resetting the board"); an RD that is not clean
  *     (not started, timed out, or neither exit 0 nor RockchipTool::reportsResetOk()) -> Failed
- *     "partitions written, but upgrade_tool RD did not reset the board (<tail>); replug it".
+ *     "partitions written, but upgrade_tool RD did not reset the board (<tail>); replug it"; an RD
+ *     answered "No found specific rockusb device!" -> Failed "partitions written, but upgrade_tool
+ *     RD found no device with LocationID n (it is gone): find its LocationID with `upgrade_tool
+ *     LD` before any retry, and address it with -s" (retry empty, leftInLoader = its port shows
+ *     its Loader mode; the line "port P shows <...>"); a stop's / a cancel's RD that meets a gone
+ *     id says the same after its Skipped text, and is not counted as reset back to ADB.
  *     Per board at most one tool process ever; a WL is never cancelled and never timed out; an RD
  *     carries the LD timeout as in 0.6.0 (a timed-out RD is a failed reset, never a cut write);
  *     after 5 min without output (and after every further 5 min) the board's line says "upgrade_tool

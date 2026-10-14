@@ -132,17 +132,26 @@ QString unaddressedRefusal()
     return FleetFlasher::tr("internal: unaddressed write refused");
 }
 
-QString retryWl(const QString& locationId, const PartitionImage& row)
+/// A retry line runs as it is: `program` is the upgrade_tool the run used (native separators,
+/// quoted by formatCommandLine() when it holds a blank), not the bare name - the bundled tool is
+/// not on PATH.
+QString retryWl(const QString& program, const QString& locationId, const PartitionImage& row)
 {
     const QString count = row.size == 0 ? QStringLiteral("-1") : QString::number(row.size / kSectorBytes);
-    return ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
-                                         {QStringLiteral("-s"), locationId, QStringLiteral("WL"),
-                                          QString::number(row.offset / kSectorBytes), count, QDir::toNativeSeparators(row.file)});
+    return ToolRunner::formatCommandLine(program, {QStringLiteral("-s"), locationId, QStringLiteral("WL"),
+                                                   QString::number(row.offset / kSectorBytes), count, QDir::toNativeSeparators(row.file)});
 }
 
-QString retryRd(const QString& locationId)
+QString retryRd(const QString& program, const QString& locationId)
 {
-    return ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"), {QStringLiteral("-s"), locationId, QStringLiteral("RD")});
+    return ToolRunner::formatCommandLine(program, {QStringLiteral("-s"), locationId, QStringLiteral("RD")});
+}
+
+/// The RD named inside a message: the bare form, as UnattributedDevice::hint() words it (the
+/// runnable line with the tool's path follows as a "  retry: ..." line).
+QString rdHint(const QString& locationId)
+{
+    return QStringLiteral("upgrade_tool -s %1 RD").arg(locationId);
 }
 
 } // namespace
@@ -363,6 +372,8 @@ struct FleetFlasher::Private
         bool checkQueued = false;              ///< waits for the gate's LD
         bool checkBeforeRd = false;
         bool leftBeforeReset = false;          ///< the pre-RD check failed: the ADB wait decides
+        bool resetOk = false;                  ///< a stop's / a cancel's RD answered OK (counted in resetCount)
+        quint16 mappedPid = 0;                 ///< the pid its port showed when it was mapped (its Loader mode)
         QString leftEvidenceNow;               ///< "port P shows ...; LD ..." of that check
         QString leftEvidencePast;              ///< the same with "showed"
         QString vanishedPort;                  ///< LoaderNotEnumerated: the port its ADB instance left
@@ -388,6 +399,13 @@ struct FleetFlasher::Private
         QList<UsbDeviceInfo> bus;
         QList<RockusbDevice> rockusb;
         QString error;                         ///< `LD` could not run / timed out: no picture
+    };
+
+    /// What the enumeration shows on one port right now (no device I/O).
+    struct PortView
+    {
+        bool adb = false;                      ///< an ADB gadget on the port
+        quint16 pid = 0;                       ///< the first download-mode instance's pid; 0 = none
     };
 
     Private(FleetFlasher* owner, ToolRunner* toolRunner)
@@ -585,6 +603,47 @@ struct FleetFlasher::Private
         return enumerator ? enumerator(UsbProbe::kRockchipVid) : QList<UsbDeviceInfo>();
     }
 
+    PortView portView(const QString& port) const
+    {
+        PortView view;
+        for (const UsbDeviceInfo& device : enumerate()) {
+            if (device.portKey() != port) {
+                continue;
+            }
+            view.adb = view.adb || device.isAdbGadget();
+            if (device.isDownloadMode() && view.pid == 0) {
+                view.pid = device.pid;
+            }
+        }
+        return view;
+    }
+
+    /// The board's port shows it in its Loader mode: the pid it showed when it was mapped and no
+    /// ADB device. Another download-mode pid there (MASKROM: a brown-out drops a board to its
+    /// BootROM) is not Loader mode, whatever the enumeration calls it.
+    static bool inLoaderByPort(const PortView& view, quint16 mappedPid)
+    {
+        return !view.adb && view.pid != 0 && view.pid == mappedPid;
+    }
+
+    /// "an ADB device" / "nothing" / "PID_110E" / "PID_110C, not its Loader-mode PID_110E".
+    static QString shownOnPort(const PortView& view, quint16 mappedPid)
+    {
+        if (view.adb) {
+            return FleetFlasher::tr("an ADB device");
+        }
+        if (view.pid == 0) {
+            return FleetFlasher::tr("nothing");
+        }
+        if (mappedPid == 0 || view.pid == mappedPid) {
+            return pidText(view.pid);
+        }
+        return FleetFlasher::tr("%1, not its Loader-mode %2").arg(pidText(view.pid), pidText(mappedPid));
+    }
+
+    QString retryProgram() const { return QDir::toNativeSeparators(upgradeTool->toolPath()); }
+    QString retryRdLine(const QString& locationId) const { return retryRd(retryProgram(), locationId); }
+
     /// A snapshot in the pinned order: `LD` is started first and the enumeration is read when its
     /// result arrives, so the bus is never older than the listing (the class comment, step 2 c).
     void takeSnapshot(std::function<void(const Picture&)> then)
@@ -627,13 +686,14 @@ struct FleetFlasher::Private
     /// "upgrade_tool -s n WL ..." for every row from `fromRow` that is not written yet, then the RD.
     QStringList retryLines(const Board& board, int fromRow) const
     {
+        const QString program = retryProgram();
         QStringList lines;
         for (int r = qMax(0, fromRow); r < rows.size(); ++r) {
             if (!board.info.written.contains(rows.at(r).name)) {
-                lines << retryWl(board.info.locationId, rows.at(r));
+                lines << retryWl(program, board.info.locationId, rows.at(r));
             }
         }
-        lines << retryRd(board.info.locationId);
+        lines << retryRd(program, board.info.locationId);
         return lines;
     }
 
@@ -1084,23 +1144,35 @@ struct FleetFlasher::Private
     {
         const QStringList ports = sortedPorts(baseline.downloadPorts.keys());
         const QStringList ids = sortedIds(baseline.loaderIds + baseline.maskromIds);
+        // Which port lacks its LD line (or which id its port) cannot be told from two counts: with
+        // both sides non-empty the refusal names every port and every id, never one by position.
+        const QString portText = ports.join(QStringLiteral(", "));
+        const QString idText = ids.join(QStringLiteral(", "));
         if (ports.size() > ids.size()) {
-            const QStringList unlisted = ports.mid(ids.size());
             QList<UsbDeviceInfo> instances;
             for (const UsbDeviceInfo& device : bus) {
                 if (device.isDownloadMode() && ports.contains(device.portKey())) {
                     instances << device;
                 }
             }
-            refuse(FleetFlasher::tr("a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2")
-                       .arg(ids.isEmpty() ? ports.join(QStringLiteral(", ")) : unlisted.join(QStringLiteral(", ")),
-                            UsbProbe::driverHint(instances)));
+            const QString hint = UsbProbe::driverHint(instances);
+            refuse(ids.isEmpty()
+                       ? FleetFlasher::tr("a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2")
+                             .arg(portText, hint)
+                       : FleetFlasher::tr("ports %1 are in download mode but upgrade_tool LD lists only LocationID %2: one of these "
+                                          "devices is not listed; %3")
+                             .arg(portText, idText, hint));
             return false;
         }
         if (ids.size() > ports.size()) {
-            refuse(FleetFlasher::tr("upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such "
-                                    "device: port mapping impossible (driver?)")
-                       .arg(ids.mid(ports.size()).join(QStringLiteral(", "))));
+            refuse(ports.isEmpty()
+                       ? FleetFlasher::tr("upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such "
+                                          "device: port mapping impossible (driver?)")
+                             .arg(idText)
+                       : FleetFlasher::tr("upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows only "
+                                          "port %2: one of these LocationIDs has no device on the bus; port mapping impossible "
+                                          "(driver?)")
+                             .arg(idText, portText));
             return false;
         }
         if (ids.isEmpty()) {
@@ -1500,6 +1572,7 @@ struct FleetFlasher::Private
             }
             board.info.port = verdict.port;
             board.info.locationId = verdict.locationId;
+            board.mappedPid = picture.snapshot.downloadPorts.value(verdict.port);   // its Loader mode, for every re-check
             board.info.stage = FleetBoard::Stage::Loader;
             board.info.mappingSeconds = board.clock.elapsed() / 1000.0;
             changed(board);
@@ -1541,7 +1614,7 @@ struct FleetFlasher::Private
                 continue;
             }
             if (board.info.stage == FleetBoard::Stage::Loader) {
-                resetUnwritten(i, skipped, FleetFlasher::tr("mapping stopped: resetting the board back to ADB"));
+                resetUnwritten(i, skipped, skipped, FleetFlasher::tr("mapping stopped: resetting the board back to ADB"));
             } else {
                 endBoard(i, FleetBoard::Result::Skipped, skipped);
             }
@@ -1562,8 +1635,7 @@ struct FleetFlasher::Private
                 continue;
             }
             if (board.info.stage == FleetBoard::Stage::Loader) {
-                resetUnwritten(i, FleetFlasher::tr("cancelled before its write started; reset back to ADB"),
-                               FleetFlasher::tr("cancelled: resetting the board back to ADB"));
+                resetCancelled(i);
             } else {
                 endBoard(i, FleetBoard::Result::Skipped, FleetFlasher::tr("cancelled before its reboot; not touched"));
             }
@@ -1660,8 +1732,9 @@ struct FleetFlasher::Private
     }
 
     /// `-s <id> RD` for a mapped board that was never written (a stop, a cancel): Skipped with
-    /// `detail`. Waits for the gate's LD when one is in flight.
-    void resetUnwritten(int index, const QString& detail, const QString& line)
+    /// `doneDetail` when the RD answered OK, else `failBase` and what went wrong. Waits for the
+    /// gate's LD when one is in flight.
+    void resetUnwritten(int index, const QString& doneDetail, const QString& failBase, const QString& line)
     {
         Board& board = at(index);
         board.info.stage = FleetBoard::Stage::Resetting;
@@ -1672,33 +1745,60 @@ struct FleetFlasher::Private
         changed(board);
         boardLog(board, line);
         const quint64 id = runId;
-        whenGateFree([this, id, index, detail] {
+        whenGateFree([this, id, index, doneDetail, failBase] {
             if (!alive(id)) {
                 return;
             }
             Board& b = at(index);
             const QString n = b.info.locationId;
             ++inFlightUpgradeTools;
-            boardCommand(index, [this, n] { return upgradeTool->resetDeviceOn(n); }, true, [this, index, detail, n](const ToolResult& r) {
-                --inFlightUpgradeTools;
-                const QString output = r.outputText();
-                if (r.started && !r.timedOut && (r.exitCode == 0 || RockchipTool::reportsResetOk(output))) {
-                    ++resetCount;
-                    boardLog(at(index), FleetFlasher::tr("reset back to ADB; nothing was written"));
-                    endBoard(index, FleetBoard::Result::Skipped, detail);
-                } else {
-                    Board& b2 = at(index);
-                    const QString tail = r.started ? RockchipTool::tailForMessage(output) : r.error;
-                    b2.info.leftInLoader = true;
-                    b2.info.retry = {retryRd(n)};
-                    endBoard(index, FleetBoard::Result::Skipped,
-                             FleetFlasher::tr("%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`")
-                                 .arg(detail, tail.isEmpty() ? FleetFlasher::tr("no output") : tail, retryRd(n)),
-                             retryLogLines(b2.info.retry));
-                }
-                afterProcess();
-            });
+            boardCommand(index, [this, n] { return upgradeTool->resetDeviceOn(n); }, true,
+                         [this, index, doneDetail, failBase, n](const ToolResult& r) {
+                             --inFlightUpgradeTools;
+                             const QString output = r.outputText();
+                             Board& b2 = at(index);
+                             if (r.started && RockchipTool::reportsNoSuchDevice(output)) {
+                                 // The id is gone (exit 255): nothing was reset, and no RD line can address it.
+                                 const PortView view = portView(b2.info.port);
+                                 b2.info.leftInLoader = view.pid != 0 && view.pid == b2.mappedPid;
+                                 b2.info.retry.clear();
+                                 endBoard(index, FleetBoard::Result::Skipped, failBase + goneHint(n),
+                                          {FleetFlasher::tr("port %1 shows %2").arg(b2.info.port, shownOnPort(view, b2.mappedPid))});
+                             } else if (r.started && !r.timedOut && (r.exitCode == 0 || RockchipTool::reportsResetOk(output))) {
+                                 ++resetCount;
+                                 b2.resetOk = true;
+                                 boardLog(b2, FleetFlasher::tr("reset back to ADB; nothing was written"));
+                                 endBoard(index, FleetBoard::Result::Skipped, doneDetail);
+                             } else {
+                                 const QString tail = !r.started  ? r.error
+                                                      : r.timedOut ? FleetFlasher::tr("timed out")
+                                                                   : RockchipTool::tailForMessage(output);
+                                 b2.info.leftInLoader = true;
+                                 b2.info.retry = {retryRdLine(n)};
+                                 endBoard(index, FleetBoard::Result::Skipped,
+                                          FleetFlasher::tr("%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`")
+                                              .arg(failBase, tail.isEmpty() ? FleetFlasher::tr("no output") : tail, rdHint(n)),
+                                          retryLogLines(b2.info.retry));
+                             }
+                             afterProcess();
+                         });
         });
+    }
+
+    /// A mapped board the cancel caught before its first WL: reset, Skipped.
+    void resetCancelled(int index)
+    {
+        resetUnwritten(index, FleetFlasher::tr("cancelled before its write started; reset back to ADB"),
+                       FleetFlasher::tr("cancelled before its write started"), FleetFlasher::tr("cancelled: resetting the board back to ADB"));
+    }
+
+    /// "; upgrade_tool RD found no device with LocationID n (it is gone): ..." - an RD answered
+    /// "No found specific rockusb device!": the id names nothing any more.
+    static QString goneHint(const QString& locationId)
+    {
+        return FleetFlasher::tr("; upgrade_tool RD found no device with LocationID %1 (it is gone): find its LocationID with "
+                                "`upgrade_tool LD` before any retry, and address it with -s")
+            .arg(locationId);
     }
 
     // =========================================================================================
@@ -1859,23 +1959,15 @@ struct FleetFlasher::Private
         }
         const QString port = board.info.port;
         const QString n = board.info.locationId;
-        bool adbOnPort = false;
-        quint16 downloadPid = 0;
-        for (const UsbDeviceInfo& device : enumerate()) {
-            if (device.portKey() != port) {
-                continue;
-            }
-            adbOnPort = adbOnPort || device.isAdbGadget();
-            if (device.isDownloadMode() && downloadPid == 0) {
-                downloadPid = device.pid;
-            }
-        }
         if (!ldError.isEmpty()) {
             onGateLdFailed(index, ldError);
             return;
         }
-        const QString shown = adbOnPort ? FleetFlasher::tr("an ADB device") : downloadPid != 0 ? pidText(downloadPid) : FleetFlasher::tr("nothing");
-        const bool portOk = downloadPid != 0 && !adbOnPort;
+        // Mid-wave this is the only evidence: the pid of its Loader mode, not any download pid
+        // (a MASKROM pid on the port would take an addressed WL that cannot work).
+        const PortView view = portView(port);
+        const QString shown = shownOnPort(view, board.mappedPid);
+        const bool portOk = inLoaderByPort(view, board.mappedPid);
         bool ldOk = true;
         QString ldText;
         if (listing) {
@@ -1897,8 +1989,7 @@ struct FleetFlasher::Private
                 }
                 if (draining && !at(index).started) {
                     // Answered after the cancel (it waited for the gate's LD): never started, so reset.
-                    resetUnwritten(index, FleetFlasher::tr("cancelled before its write started; reset back to ADB"),
-                                   FleetFlasher::tr("cancelled: resetting the board back to ADB"));
+                    resetCancelled(index);
                     return;
                 }
                 if (at(index).checkBeforeRd) {
@@ -1928,11 +2019,11 @@ struct FleetFlasher::Private
         board.info.leftInLoader = true;
         if (board.checkBeforeRd) {
             board.info.writingSeconds = board.writeClock.elapsed() / 1000.0;
-            board.info.retry = {retryRd(board.info.locationId)};
+            board.info.retry = {retryRdLine(board.info.locationId)};
             endBoard(index, FleetBoard::Result::Failed,
                      FleetFlasher::tr("partitions written, but upgrade_tool LD could not run before the reset: %1; reset it by hand "
                                       "with `%2`")
-                         .arg(error, retryRd(board.info.locationId)),
+                         .arg(error, rdHint(board.info.locationId)),
                      retryLogLines(board.info.retry));
         } else {
             board.info.retry = retryLines(board, board.row);
@@ -2160,16 +2251,9 @@ struct FleetFlasher::Private
     {
         Board& board = at(index);
         const QString port = board.info.port;
-        bool adbOnPort = false;
-        quint16 downloadPid = 0;
-        for (const UsbDeviceInfo& device : enumerate()) {
-            if (device.portKey() == port) {
-                adbOnPort = adbOnPort || device.isAdbGadget();
-                downloadPid = device.isDownloadMode() && downloadPid == 0 ? device.pid : downloadPid;
-            }
-        }
-        const QString shown = adbOnPort ? FleetFlasher::tr("an ADB device") : downloadPid != 0 ? pidText(downloadPid) : FleetFlasher::tr("nothing");
-        board.info.leftInLoader = downloadPid != 0;
+        const PortView view = portView(port);
+        const QString shown = shownOnPort(view, board.mappedPid);
+        board.info.leftInLoader = view.pid != 0 && view.pid == board.mappedPid;
         board.info.retry.clear();
         board.info.writingSeconds = board.writeClock.elapsed() / 1000.0;
         endBoard(index, FleetBoard::Result::Failed,
@@ -2203,6 +2287,19 @@ struct FleetFlasher::Private
             }
             b.info.writingSeconds = b.writeClock.elapsed() / 1000.0;
             releaseSlot(b);
+            if (r.started && RockchipTool::reportsNoSuchDevice(output)) {
+                // The id is gone (exit 255): nothing was reset, and no RD line can address it.
+                const PortView view = portView(b.info.port);
+                b.info.leftInLoader = view.pid != 0 && view.pid == b.mappedPid;
+                b.info.retry.clear();
+                endBoard(index, FleetBoard::Result::Failed,
+                         FleetFlasher::tr("partitions written, but upgrade_tool RD found no device with LocationID %1 (it is gone): find "
+                                          "its LocationID with `upgrade_tool LD` before any retry, and address it with -s")
+                             .arg(b.info.locationId),
+                         {FleetFlasher::tr("port %1 shows %2").arg(b.info.port, shownOnPort(view, b.mappedPid))});
+                afterProcess();
+                return;
+            }
             if (!r.started || r.timedOut || !(r.exitCode == 0 || RockchipTool::reportsResetOk(output))) {
                 const QString tail = !r.started ? r.error : r.timedOut ? FleetFlasher::tr("timed out") : RockchipTool::tailForMessage(output);
                 endBoard(index, FleetBoard::Result::Failed,
@@ -2380,8 +2477,7 @@ struct FleetFlasher::Private
                 }
                 endBoard(i, FleetBoard::Result::NotBack, FleetFlasher::tr("the ADB wait was cancelled; the partitions were written"));
             } else if (board.info.stage == FleetBoard::Stage::Loader || (board.inSlot && !board.started && board.checkQueued)) {
-                resetUnwritten(i, FleetFlasher::tr("cancelled before its write started; reset back to ADB"),
-                               FleetFlasher::tr("cancelled: resetting the board back to ADB"));
+                resetCancelled(i);
             }
         }
         if (alive(id)) {
@@ -2449,7 +2545,6 @@ struct FleetFlasher::Private
                 finishRun();
                 return;
             }
-            correctEndedBoards(picture);
             QStringList boardPorts;
             QStringList boardIds;
             for (const auto& board : boards) {
@@ -2470,6 +2565,11 @@ struct FleetFlasher::Private
                                   ? 1
                                   : 0;
             }
+            // Exactly one such board and exactly one id nobody owns, no unknown port: one id, one
+            // port - the id is that board's, and its retry lines can be addressed.
+            const bool paired = strayPorts.isEmpty() && renumbered == 1 && strayIds.size() == 1
+                                && picture.snapshot.loaderIds.contains(strayIds.first());
+            correctEndedBoards(picture, paired ? strayIds.first() : QString());
             if (!(strayPorts.isEmpty() && strayIds.size() <= renumbered)) {
                 for (const UnattributedDevice& device : looseDevices(strayIds, strayPorts, picture.snapshot)) {
                     addUnattributed(device);
@@ -2484,34 +2584,68 @@ struct FleetFlasher::Private
         });
     }
 
-    /// The end-of-run picture against the run's own Failed / NotBack boards: one found in Loader
-    /// mode (a re-enumeration gap, a failed RD) is recorded as such, with its addressed retry lines.
-    void correctEndedBoards(const Picture& picture)
+    /// The end-of-run picture against the run's own ended boards - Failed, NotBack, and Skipped
+    /// after a stop's / a cancel's reset (it has a LocationID): one found in its Loader mode (a
+    /// re-enumeration gap, a failed RD, an RD that answered OK and did not take) is recorded as
+    /// such, with its addressed retry lines. `pairedId` (closeRun()): the one new LocationID that
+    /// belongs to the one board of the run that re-enumerated; "" = none.
+    void correctEndedBoards(const Picture& picture, const QString& pairedId)
     {
+        const Snapshot& now = picture.snapshot;
+        const QStringList listedAny = sortedIds(now.loaderIds + now.maskromIds);
         for (int i = 0; i < count(); ++i) {
             Board& board = at(i);
-            const bool candidateResult = board.info.result == FleetBoard::Result::Failed || board.info.result == FleetBoard::Result::NotBack;
-            if (!candidateResult || board.maskrom || board.info.leftInLoader || board.info.port.isEmpty()) {
+            const FleetBoard::Result result = board.info.result;
+            const bool skipped = result == FleetBoard::Result::Skipped;
+            const bool candidateResult = result == FleetBoard::Result::Failed || result == FleetBoard::Result::NotBack
+                                         || (skipped && !board.info.locationId.isEmpty());
+            if (!candidateResult || board.maskrom || board.info.port.isEmpty()) {
                 continue;
             }
-            const bool onPort = picture.snapshot.downloadPorts.contains(board.info.port);
-            const bool listed = !board.info.locationId.isEmpty() && picture.snapshot.loaderIds.contains(board.info.locationId);
-            if (!onPort && !listed) {
+            const QString port = board.info.port;
+            const quint16 pidNow = now.downloadPorts.value(port, 0);
+            const bool loaderOnPort = pidNow != 0 && pidNow == board.mappedPid;
+            const bool paired = !pairedId.isEmpty() && loaderOnPort && !listedAny.contains(board.info.locationId);
+            if (board.info.leftInLoader && !paired) {
+                continue;   // recorded already, with its lines or with the LD hint
+            }
+            if (paired) {
+                boardLog(board, FleetFlasher::tr("LocationID %1 is gone; port %2 shows its Loader device with LocationID %3, the only "
+                                                 "new one on the bus: it is this board's")
+                                    .arg(board.info.locationId, port, pairedId));
+                board.info.locationId = pairedId;
+            }
+            const QString n = board.info.locationId;
+            const bool listed = !n.isEmpty() && now.loaderIds.contains(n);
+            // An RD that answered OK moments ago: both reads must still show the board in Loader mode.
+            if (board.resetOk ? !(loaderOnPort && listed) : !(loaderOnPort || listed)) {
                 continue;
+            }
+            if (board.resetOk) {
+                board.resetOk = false;
+                --resetCount;   // not reset back to ADB after all
             }
             board.info.leftInLoader = true;
-            if (listed) {
-                board.info.detail += FleetFlasher::tr("; it is in Loader mode now (port %1, LocationID %2)").arg(board.info.port, board.info.locationId);
+            if (listed && skipped) {
+                // Never written: only the reset is missing.
+                board.info.detail += FleetFlasher::tr("; it is still in Loader mode (port %1, LocationID %2): reset it by hand with `%3`")
+                                         .arg(port, n, rdHint(n));
+                board.info.retry = {retryRdLine(n)};
+                boardLog(board, FleetFlasher::tr("still in Loader mode on port %1, LocationID %2: reset it by hand with `%3` (the line "
+                                                 "follows)")
+                                    .arg(port, n, rdHint(n)));
+            } else if (listed) {
+                board.info.detail += FleetFlasher::tr("; it is in Loader mode now (port %1, LocationID %2)").arg(port, n);
                 board.info.retry = retryLines(board, 0);
                 boardLog(board, loaderHint(board));
-                for (const QString& line : retryLogLines(board.info.retry)) {
-                    boardLog(board, line);
-                }
             } else {
-                board.info.detail += FleetFlasher::tr("; it is in Loader mode now (port %1)").arg(board.info.port);
+                board.info.detail += FleetFlasher::tr("; it is in Loader mode now (port %1)").arg(port);
                 boardLog(board, FleetFlasher::tr("port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and "
                                                  "address it with -s")
-                                    .arg(board.info.port, pidText(picture.snapshot.downloadPorts.value(board.info.port))));
+                                    .arg(port, pidText(pidNow)));
+            }
+            for (const QString& line : retryLogLines(board.info.retry)) {
+                boardLog(board, line);
             }
             changed(board);
         }

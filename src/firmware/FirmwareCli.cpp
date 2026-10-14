@@ -351,10 +351,11 @@ A board not in Loader mode on its port in time is skipped; a Loader / MASKROM de
 accounts for refuses the run (the message names the "upgrade_tool -s <n> RD" that clears it).
 Ctrl+C skips and resets the boards not started; a board being written finishes all its
 partitions and its reset. A board left in Loader mode by a failing write is retried by hand with
-the addressed "  retry: upgrade_tool -s <LocationID> ..." lines of its log (one WL per missing
-partition, then RD) - su-fw flash-soc --serial only once upgrade_tool LD lists it as the ONLY
-device in download mode. The ports learned are remembered per board. Look first, touching no
-board (the selection, the remembered ports and the plan):
+the addressed "  retry: ..." lines of its log (one WL per missing partition, then RD, each with
+-s <LocationID> and upgrade_tool's full path: they run as they are in cmd.exe; in PowerShell put
+& in front) - su-fw flash-soc --serial only once upgrade_tool LD lists it as the ONLY device in
+download mode. The ports learned are remembered per board. Look first, touching no board (the
+selection, the remembered ports and the plan):
     su-fw flash-soc --all-boards --partitions rootfs --image update.img --dry-run --json
 
 Options:

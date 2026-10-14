@@ -300,6 +300,18 @@ private slots:
     void baselineLdCannotRunRefuses();
     void silenceLineIsPerBoard();
 
+    // ---- Review 3: the findings and the test gaps ---------------------------------------------
+    void maskromAtAMidWaveCheckIsNoLoader();
+    void skippedButStillInLoaderIsCorrected();
+    void resetFindsNoDevice();
+    void baselineMismatchNamesEveryPortAndId();
+    void retryLinesNameTheToolPath();
+    void writeCannotStartLeavesTheBoardInLoader();
+    void resetTimesOutIsAFailedReset();
+    void cmdlineFailureSkipsBeforeTheReboot();
+    void stopResetFailureLeavesTheBoardInLoader();
+    void ldListsButPortShowsAdb();
+
     // ---- FleetReport --------------------------------------------------------------------------
     void reportTableAndJson();
 
@@ -1248,40 +1260,79 @@ void Tst_fleetflasher::writeFailureLeavesTheBoardInLoader()
 void Tst_fleetflasher::noSuchDeviceIsAFailure()
 {
     // A hangs, so its WL is in flight when C (the second wave) is checked: the gate's LD is skipped,
-    // and C re-enumerated meanwhile - its WL with the old id finds no device.
-    FleetRig rig(caseDir());
-    rig.flasher.setBoards(benchBoards({0, 1, 2}));
-    rig.flasher.setMaxParallel(2);
-    rig.bus.hangWrites(serialOf(0));
-    bool renumbered = false;
-    QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig, &renumbered](FakeToolInvocation* i) {
-        const QString a = rig.bus.board(serialOf(0)).locationId;
-        if (!renumbered && !a.isEmpty() && i->commandLine().startsWith(QStringLiteral("upgrade_tool -s %1 WL ").arg(a))) {
-            renumbered = true;
-            rig.bus.reenumerate(serialOf(2));
+    // and C re-enumerated meanwhile - its WL with the old id finds no device. `strayPort`: a foreign
+    // Loader device appears as C ends, so the end-of-run picture has two unknown ids.
+    for (const bool strayPort : {false, true}) {
+        FleetRig rig(caseDir() + (strayPort ? QStringLiteral("-stray") : QString()));
+        rig.flasher.setBoards(benchBoards({0, 1, 2}));
+        rig.flasher.setMaxParallel(2);
+        rig.bus.hangWrites(serialOf(0));
+        bool renumbered = false;
+        QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig, &renumbered](FakeToolInvocation* i) {
+            const QString a = rig.bus.board(serialOf(0)).locationId;
+            if (!renumbered && !a.isEmpty() && i->commandLine().startsWith(QStringLiteral("upgrade_tool -s %1 WL ").arg(a))) {
+                renumbered = true;
+                rig.bus.reenumerate(serialOf(2));
+            }
+        });
+        FleetBoard cAtItsEnd;
+        QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&rig, &cAtItsEnd, strayPort](const FleetBoard& board) {
+            if (board.serial == serialOf(2)) {
+                cAtItsEnd = board;
+                if (strayPort) {
+                    rig.bus.addForeignLoader(QStringLiteral("9&FFFF0000&0&1"));
+                }
+                rig.bus.releaseWrites();
+            }
+        });
+        QVERIFY(rig.run());
+        QVERIFY(renumbered);
+        // At its end the id it was written with is gone: no addressed line can be given yet.
+        const QString gone = cAtItsEnd.locationId;
+        QCOMPARE(cAtItsEnd.result, FleetBoard::Result::Failed);
+        QCOMPARE(cAtItsEnd.detail, QStringLiteral("writing rootfs failed: No found specific rockusb device! (LocationID %1 is gone)").arg(gone));
+        QVERIFY(cAtItsEnd.retry.isEmpty());
+        QVERIFY(cAtItsEnd.leftInLoader);
+        QVERIFY(rig.lineIndex(cAtItsEnd.label() + QStringLiteral(" port %1 shows PID_110E: find its LocationID with `upgrade_tool LD` before any "
+                                                                 "retry, and address it with -s")
+                                                      .arg(portOf(2)))
+                >= 0);
+        QVERIFY(rig.anyLineContains(QStringLiteral("checked: port %1 shows PID_110E (LD not run: ").arg(portOf(2))));
+        QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
+        QCOMPARE(rig.boardOf(serialOf(1)).result, FleetBoard::Result::Done);
+        QCOMPARE(rig.bus.cancelledWrites(), 0);
+        QVERIFY(serialHintsAreSafe(rig.lines));
+        const FleetBoard c = rig.boardOf(serialOf(2));
+        const QString fresh = rig.bus.board(serialOf(2)).locationId;
+        QVERIFY(!fresh.isEmpty() && fresh != gone);
+        if (strayPort) {
+            // Two ids nobody owns and an unknown port: never paired by guessing.
+            QCOMPARE(c.locationId, gone);
+            QVERIFY(c.retry.isEmpty());
+            QCOMPARE(c.detail, cAtItsEnd.detail);
+            QCOMPARE(rig.flasher.unattributedDevices().size(), qsizetype(2));
+            QVERIFY2(rig.message().endsWith(QStringLiteral("; 2 Loader devices left unattributed")), qPrintable(rig.message()));
+            QVERIFY(!rig.anyLineContains(QStringLiteral(" is gone; port ")));
+            continue;
         }
-    });
-    QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&rig](const FleetBoard& board) {
-        if (board.serial == serialOf(2)) {
-            rig.bus.releaseWrites();
-        }
-    });
-    QVERIFY(rig.run());
-    QVERIFY(renumbered);
-    const FleetBoard c = rig.boardOf(serialOf(2));
-    QCOMPARE(c.result, FleetBoard::Result::Failed);
-    QCOMPARE(c.detail, QStringLiteral("writing rootfs failed: No found specific rockusb device! (LocationID %1 is gone)").arg(c.locationId));
-    QVERIFY(c.retry.isEmpty());
-    QVERIFY(c.leftInLoader);
-    QVERIFY(rig.lineIndex(c.label() + QStringLiteral(" port %1 shows PID_110E: find its LocationID with `upgrade_tool LD` before any retry, and "
-                                                     "address it with -s")
-                                          .arg(portOf(2)))
-            >= 0);
-    QVERIFY(rig.anyLineContains(QStringLiteral("checked: port %1 shows PID_110E (LD not run: ").arg(portOf(2))));
-    QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
-    QCOMPARE(rig.boardOf(serialOf(1)).result, FleetBoard::Result::Done);
-    QVERIFY(rig.flasher.unattributedDevices().isEmpty());   // the new id is on C's port: C's
-    QCOMPARE(rig.bus.cancelledWrites(), 0);
+        // The end-of-run picture: one board re-enumerated, one id nobody owns - one device, so the
+        // board takes the id and its retry lines are addressed (finding 5).
+        QCOMPARE(c.locationId, fresh);
+        QVERIFY(c.leftInLoader);
+        QCOMPARE(c.detail, cAtItsEnd.detail + QStringLiteral("; it is in Loader mode now (port %1, LocationID %2)").arg(portOf(2), fresh));
+        const PartitionImage row = rig.flasher.partitions().first();
+        QCOMPARE(c.retry, (QStringList{QStringLiteral("upgrade_tool -s %1 WL 8064 10240 %2").arg(fresh, QDir::toNativeSeparators(row.file)),
+                                       QStringLiteral("upgrade_tool -s %1 RD").arg(fresh)}));
+        QVERIFY2(rig.lineIndex(c.label() + QStringLiteral(" LocationID %1 is gone; port %2 shows its Loader device with LocationID %3, the only new "
+                                                          "one on the bus: it is this board's")
+                                               .arg(gone, portOf(2), fresh))
+                     >= 0,
+                 qPrintable(rig.dump()));
+        QVERIFY(rig.lineIndex(c.label() + QStringLiteral("   retry: ") + c.retry.first()) >= 0);
+        QVERIFY(rig.lineIndex(c.label() + QStringLiteral("   retry: ") + c.retry.last()) >= 0);
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());   // the new id is on C's port: C's
+        QCOMPARE(FleetReport::boardJson(c).value(QStringLiteral("loader")).toString(), fresh);
+    }
 }
 
 void Tst_fleetflasher::resetFailureIsFailed()
@@ -1702,6 +1753,411 @@ void Tst_fleetflasher::silenceLineIsPerBoard()
     QVERIFY(stillRunning);   // reported, never stopped
     QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
     QCOMPARE(rig.bus.cancelledWrites(), 0);
+}
+
+// =============================================================================================
+// Review 3: the findings and the test gaps
+// =============================================================================================
+
+void Tst_fleetflasher::maskromAtAMidWaveCheckIsNoLoader()
+{
+    // A hangs, so its WL is in flight when C (the second wave) is checked by the enumeration alone;
+    // C drops to MASKROM meanwhile (a brown-out: pid 0x110c on its port, LD says Maskrom).
+    FleetRig rig(caseDir());
+    rig.flasher.setBoards(benchBoards({0, 1, 2}));
+    rig.flasher.setMaxParallel(2);
+    rig.bus.hangWrites(serialOf(0));
+    bool dropped = false;
+    QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig, &dropped](FakeToolInvocation* i) {
+        const QString a = rig.bus.board(serialOf(0)).locationId;
+        if (!dropped && !a.isEmpty() && i->commandLine().startsWith(QStringLiteral("upgrade_tool -s %1 WL ").arg(a))) {
+            dropped = true;
+            rig.bus.moveToMaskrom(serialOf(2));
+        }
+    });
+    QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&rig](const FleetBoard& board) {
+        if (board.serial == serialOf(2)) {
+            rig.bus.releaseWrites();
+        }
+    });
+    QVERIFY(rig.run());
+    QVERIFY(dropped);
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    QCOMPARE(c.result, FleetBoard::Result::Failed);
+    const QRegularExpression evidence(QStringLiteral("^left Loader mode before rootfs was written \\(port %1 shows PID_110C, not its Loader-mode "
+                                                     "PID_110E; LD not run: \\d+ writes in flight\\): nothing written for it$")
+                                          .arg(QRegularExpression::escape(portOf(2))));
+    QVERIFY2(evidence.match(c.detail).hasMatch(), qPrintable(c.detail));   // and the end-of-run picture does not call it Loader mode
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^upgrade_tool -s %1 WL ").arg(c.locationId))), 0);   // no WL to a MASKROM device
+    QVERIFY(rig.bus.resetsTo(serialOf(2)).isEmpty());
+    QVERIFY(!c.leftInLoader);
+    QVERIFY(c.retry.isEmpty());   // no addressed WL line that cannot work on it
+    QVERIFY(!rig.anyLineContains(QStringLiteral("checked: port %1 shows PID_110C").arg(portOf(2))));
+    QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
+    QCOMPARE(rig.boardOf(serialOf(1)).result, FleetBoard::Result::Done);
+    QVERIFY(rig.flasher.unattributedDevices().isEmpty());   // its port and its id are C's
+    QVERIFY(serialHintsAreSafe(rig.lines));
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+}
+
+void Tst_fleetflasher::skippedButStillInLoaderIsCorrected()
+{
+    // A stop's RD to A answers "Reset Device OK." and does not take: the end-of-run picture finds
+    // A in Loader mode, so it is neither "reset back to ADB" nor counted as such.
+    {
+        FleetRig rig(caseDir());
+        rig.bus.setReboot(serialOf(2), FakeUsbBus::Reboot::DragsNext);
+        rig.bus.setResetFailure(serialOf(0), "Reset Device OK.\r\n", 0);
+        QVERIFY(rig.run());
+        const FleetBoard a = rig.boardOf(serialOf(0));
+        const QString n = a.locationId;
+        QCOMPARE(a.result, FleetBoard::Result::Skipped);
+        QVERIFY(a.leftInLoader);
+        QVERIFY2(a.detail.startsWith(QStringLiteral("mapping stopped: while rebooting %1: two boards changed at once").arg(serialOf(2))), qPrintable(a.detail));
+        QVERIFY2(a.detail.endsWith(QStringLiteral("; it is still in Loader mode (port %1, LocationID %2): reset it by hand with `upgrade_tool -s %2 RD`")
+                                       .arg(portOf(0), n)),
+                 qPrintable(a.detail));
+        QCOMPARE(a.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(n)});
+        QVERIFY(rig.lineIndex(a.label() + QStringLiteral(" still in Loader mode on port %1, LocationID %2: reset it by hand with `upgrade_tool -s %2 "
+                                                         "RD` (the line follows)")
+                                              .arg(portOf(0), n))
+                >= 0);
+        QVERIFY(rig.lineIndex(a.label() + QStringLiteral("   retry: upgrade_tool -s %1 RD").arg(n)) >= 0);
+        QVERIFY2(rig.message().endsWith(QStringLiteral("; nothing was written; 1 board reset back to ADB; 2 Loader devices left unattributed")),
+                 qPrintable(rig.message()));
+        QCOMPARE(rig.flasher.report().resetCount(), 1);
+        const FleetBoard b = rig.boardOf(serialOf(1));   // B really went back
+        QVERIFY(!b.leftInLoader && b.retry.isEmpty());
+        QVERIFY(b.detail.startsWith(QStringLiteral("mapping stopped: ")) && !b.detail.contains(QStringLiteral("Loader mode (port")));
+        for (const FleetFlasher::UnattributedDevice& device : rig.flasher.unattributedDevices()) {
+            QVERIFY(device.locationId != n);   // A's port and id are A's
+        }
+        QCOMPARE(rig.count(QRegularExpression(QStringLiteral(" WL "))), 0);
+    }
+    {
+        // The same after a cancel during the mapping.
+        FleetRig rig(caseDir() + QStringLiteral("-cancel"));
+        rig.bus.setResetFailure(serialOf(0), "Reset Device OK.\r\n", 0);
+        QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig](FakeToolInvocation* i) {
+            if (i->commandLine() == QStringLiteral("adb -s %1 reboot loader").arg(serialOf(1))) {
+                rig.flasher.cancel();
+            }
+        });
+        QVERIFY(rig.run());
+        const FleetBoard a = rig.boardOf(serialOf(0));
+        QCOMPARE(a.detail, QStringLiteral("cancelled before its write started; reset back to ADB; it is still in Loader mode (port %1, LocationID %2): "
+                                          "reset it by hand with `upgrade_tool -s %2 RD`")
+                               .arg(portOf(0), a.locationId));
+        QVERIFY(a.leftInLoader);
+        QCOMPARE(a.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(a.locationId)});
+        const FleetBoard b = rig.boardOf(serialOf(1));
+        QCOMPARE(b.detail, QStringLiteral("cancelled before its write started; reset back to ADB"));
+        QVERIFY(!b.leftInLoader);
+        QCOMPARE(rig.flasher.report().resetCount(), 1);
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());
+    }
+}
+
+void Tst_fleetflasher::resetFindsNoDevice()
+{
+    // A cancel's RD meets a gone id (A re-enumerated once B was mapped): exit 255, nothing reset.
+    {
+        FleetRig rig(caseDir());
+        QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig](FakeToolInvocation* i) {
+            if (i->commandLine() == QStringLiteral("adb -s %1 reboot loader").arg(serialOf(1))) {
+                rig.flasher.cancel();
+            }
+        });
+        QObject::connect(&rig.flasher, &FleetFlasher::boardEvent, &rig.flasher, [&rig](const FleetBoard& board, const QString& text) {
+            if (board.serial == serialOf(1) && text.startsWith(QStringLiteral("in Loader mode on port "))) {
+                rig.bus.reenumerate(serialOf(0));   // before the cancel's RDs start
+            }
+        });
+        FleetBoard aAtItsEnd;
+        QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&aAtItsEnd](const FleetBoard& board) {
+            if (board.serial == serialOf(0)) {
+                aAtItsEnd = board;
+            }
+        });
+        QVERIFY(rig.run());
+        const QString gone = aAtItsEnd.locationId;
+        QCOMPARE(rig.bus.resetsTo(serialOf(0)), QStringList());   // the RD named no device the bus knows
+        QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^upgrade_tool -s %1 RD$").arg(gone))), 1);
+        QCOMPARE(aAtItsEnd.result, FleetBoard::Result::Skipped);
+        QCOMPARE(aAtItsEnd.detail, QStringLiteral("cancelled before its write started; upgrade_tool RD found no device with LocationID %1 (it is "
+                                                  "gone): find its LocationID with `upgrade_tool LD` before any retry, and address it with -s")
+                                       .arg(gone));
+        QVERIFY(aAtItsEnd.retry.isEmpty());   // never `-s <gone id> RD` as the way out
+        QVERIFY(aAtItsEnd.leftInLoader);      // its port still shows its Loader mode
+        QVERIFY(rig.lineIndex(aAtItsEnd.label() + QStringLiteral(" port %1 shows PID_110E").arg(portOf(0))) >= 0);
+        QVERIFY(!rig.anyLineContains(QStringLiteral("reset it by hand with `upgrade_tool -s %1 RD`").arg(gone)));
+        QCOMPARE(rig.flasher.report().resetCount(), 1);   // B only
+        // The end-of-run picture pairs A with its new id: its one RD line is addressed again.
+        const FleetBoard a = rig.boardOf(serialOf(0));
+        const QString fresh = rig.bus.board(serialOf(0)).locationId;
+        QVERIFY(!fresh.isEmpty() && fresh != gone);
+        QCOMPARE(a.locationId, fresh);
+        QCOMPARE(a.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(fresh)});
+        QCOMPARE(a.detail, aAtItsEnd.detail + QStringLiteral("; it is still in Loader mode (port %1, LocationID %2): reset it by hand with "
+                                                             "`upgrade_tool -s %2 RD`")
+                                                  .arg(portOf(0), fresh));
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());
+        QCOMPARE(rig.count(QRegularExpression(QStringLiteral(" WL "))), 0);
+    }
+    {
+        // A written board's RD meets a gone id: B re-enumerates right after its WL, while A's WL is
+        // in flight (so B's pre-RD check is the enumeration alone and passes).
+        FleetRig rig(caseDir() + QStringLiteral("-written"));
+        rig.flasher.setBoards(benchBoards({0, 1}));
+        rig.flasher.setMaxParallel(2);
+        rig.bus.hangWrites(serialOf(0));
+        QObject::connect(&rig.flasher, &FleetFlasher::partitionWritten, &rig.flasher, [&rig](const FleetBoard& board) {
+            if (board.serial == serialOf(1)) {
+                rig.bus.reenumerate(serialOf(1));
+            }
+        });
+        FleetBoard bAtItsEnd;
+        QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&rig, &bAtItsEnd](const FleetBoard& board) {
+            if (board.serial == serialOf(1)) {
+                bAtItsEnd = board;
+                rig.bus.releaseWrites();
+            }
+        });
+        QVERIFY(rig.run());
+        const QString gone = bAtItsEnd.locationId;
+        QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^upgrade_tool -s %1 RD$").arg(gone))), 1);
+        QCOMPARE(bAtItsEnd.result, FleetBoard::Result::Failed);
+        QCOMPARE(bAtItsEnd.detail, QStringLiteral("partitions written, but upgrade_tool RD found no device with LocationID %1 (it is gone): find its "
+                                                  "LocationID with `upgrade_tool LD` before any retry, and address it with -s")
+                                       .arg(gone));
+        QVERIFY(bAtItsEnd.retry.isEmpty());
+        QVERIFY(bAtItsEnd.leftInLoader);
+        QCOMPARE(bAtItsEnd.written, QStringList{QStringLiteral("rootfs")});
+        QVERIFY(rig.lineIndex(bAtItsEnd.label() + QStringLiteral(" port %1 shows PID_110E").arg(portOf(1))) >= 0);
+        QVERIFY(!rig.anyLineContains(QStringLiteral("did not reset the board")));
+        QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
+        // Paired at the end: every row is written, so the RD alone, addressed to the new id.
+        const FleetBoard b = rig.boardOf(serialOf(1));
+        const QString fresh = rig.bus.board(serialOf(1)).locationId;
+        QCOMPARE(b.locationId, fresh);
+        QCOMPARE(b.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(fresh)});
+        QCOMPARE(b.detail, bAtItsEnd.detail + QStringLiteral("; it is in Loader mode now (port %1, LocationID %2)").arg(portOf(1), fresh));
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());
+        QCOMPARE(rig.bus.cancelledWrites(), 0);
+    }
+}
+
+void Tst_fleetflasher::baselineMismatchNamesEveryPortAndId()
+{
+    const QString listedPort = QStringLiteral("9&FFFF0000&0&1");   // a foreign Loader device: an instance and an LD line
+    const QString extraPort = QStringLiteral("9&AAAA0000&0&2");    // sorts first: blamed by position before the fix
+    const QString extra = QStringLiteral("aaaa000000000001");
+    for (const FakeUsbBus::Reboot behaviour : {FakeUsbBus::Reboot::NoLdLine, FakeUsbBus::Reboot::LdLineOnly}) {
+        FleetRig rig(caseDir() + QString::number(int(behaviour)));
+        rig.bus.addForeignLoader(listedPort);   // LocationID 100
+        rig.bus.addBoard(extra, extraPort);
+        rig.bus.setReboot(extra, behaviour);
+        rig.runner.run(QStringLiteral("adb"), {QStringLiteral("-s"), extra, QStringLiteral("reboot"), QStringLiteral("loader")});
+        QTRY_VERIFY(behaviour == FakeUsbBus::Reboot::NoLdLine ? rig.bus.board(extra).state == FakeUsbBus::State::Loader
+                                                                  : rig.bus.board(extra).ldListed);
+        QTest::qWait(30);   // the PnP lag
+        QVERIFY(rig.run());
+        if (behaviour == FakeUsbBus::Reboot::NoLdLine) {
+            QList<UsbDeviceInfo> instances;
+            for (const UsbDeviceInfo& d : rig.bus.enumerate(0x2207)) {
+                if (d.isDownloadMode()) {
+                    instances << d;
+                }
+            }
+            QCOMPARE(instances.size(), qsizetype(2));
+            QCOMPARE(rig.message(), QStringLiteral("ports %1, %2 are in download mode but upgrade_tool LD lists only LocationID 100: one of these devices "
+                                                   "is not listed; %3")
+                                        .arg(extraPort, listedPort, UsbProbe::driverHint(instances)));
+        } else {
+            const QString n = rig.bus.board(extra).locationId;
+            QCOMPARE(n, QStringLiteral("101"));
+            QCOMPARE(rig.message(), QStringLiteral("upgrade_tool LD lists LocationID 100, 101 in download mode but the USB enumeration shows only port "
+                                                   "%1: one of these LocationIDs has no device on the bus; port mapping impossible (driver?)")
+                                        .arg(listedPort));
+        }
+        QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s \\S+ reboot loader$"))), 1);   // only the test's own
+        QCOMPARE(rig.flasher.report().exitCode(), 1);
+    }
+}
+
+void Tst_fleetflasher::retryLinesNameTheToolPath()
+{
+    // The bundled tool is not on PATH: a retry line carries the path the run used, so it runs as it is.
+    FleetRig rig(caseDir());
+    const QString tool = QStringLiteral("C:/Program Files/BuildAI/SerialUtility/tools/upgrade_tool.exe");
+    rig.flasher.setToolPaths(tool, QStringLiteral("adb"));
+    rig.flasher.setBoards(benchBoards({0, 1}));
+    rig.bus.setWriteFailure(serialOf(1), QStringLiteral("rootfs.img"), "Write LBA failed, err=-3\r\n", 1);
+    QVERIFY(rig.run());
+    QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    const QString n = b.locationId;
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    const QString program = QDir::toNativeSeparators(tool);
+    const PartitionImage row = rig.flasher.partitions().first();
+    const QStringList retry = {ToolRunner::formatCommandLine(program, {QStringLiteral("-s"), n, QStringLiteral("WL"), QStringLiteral("8064"),
+                                                                       QStringLiteral("10240"), QDir::toNativeSeparators(row.file)}),
+                               ToolRunner::formatCommandLine(program, {QStringLiteral("-s"), n, QStringLiteral("RD")})};
+    QCOMPARE(b.retry, retry);
+#ifdef Q_OS_WIN
+    QCOMPARE(b.retry.last(), QStringLiteral("\"C:\\Program Files\\BuildAI\\SerialUtility\\tools\\upgrade_tool.exe\" -s %1 RD").arg(n));
+#endif
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral("   retry: ") + retry.at(0)) >= 0);
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral("   retry: ") + retry.at(1)) >= 0);
+    // The hint keeps the recipe's words; the runnable lines follow it.
+    QVERIFY(rig.anyLineContains(QStringLiteral("then `upgrade_tool -s %1 RD` (the lines follow)").arg(n)));
+    QCOMPARE(FleetReport::boardJson(b).value(QStringLiteral("retry")).toArray().first().toString(), retry.first());
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+}
+
+void Tst_fleetflasher::writeCannotStartLeavesTheBoardInLoader()
+{
+    FleetRig rig(caseDir());
+    rig.bus.setWriteStartFailure(serialOf(1), QStringLiteral("fake: upgrade_tool vanished"));
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    const QString n = b.locationId;
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, QStringLiteral("writing rootfs failed: fake: upgrade_tool vanished"));
+    QVERIFY(b.leftInLoader);   // nothing reached the board: it is in Loader mode, untouched
+    QVERIFY(b.written.isEmpty());
+    const PartitionImage row = rig.flasher.partitions().first();
+    const QStringList retry = {QStringLiteral("upgrade_tool -s %1 WL 8064 10240 %2").arg(n, QDir::toNativeSeparators(row.file)),
+                               QStringLiteral("upgrade_tool -s %1 RD").arg(n)};
+    QCOMPARE(b.retry, retry);
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral("   could not run: fake: upgrade_tool vanished")) >= 0);
+    const int failed = rig.lineIndex(b.label() + QStringLiteral(" writing rootfs failed: fake: upgrade_tool vanished"));
+    QVERIFY2(failed >= 0, qPrintable(rig.dump()));
+    QVERIFY(rig.lines.at(failed + 1).startsWith(b.label() + QStringLiteral(" left in Loader mode on port %1, LocationID %2: ").arg(portOf(1), n)));
+    QCOMPARE(rig.lines.at(failed + 2), b.label() + QStringLiteral("   retry: ") + retry.at(0));
+    QCOMPARE(rig.lines.at(failed + 3), b.label() + QStringLiteral("   retry: ") + retry.at(1));
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());   // no RD: nothing else is written to it
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+    QVERIFY(serialHintsAreSafe(rig.lines));
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+}
+
+void Tst_fleetflasher::resetTimesOutIsAFailedReset()
+{
+    FleetRig rig(caseDir());
+    rig.bus.setResetTimeout(serialOf(1));
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QVERIFY2(b.detail.startsWith(QStringLiteral("partitions written, but upgrade_tool RD did not reset the board (timed out); replug it")),
+             qPrintable(b.detail));
+    QCOMPARE(b.written, QStringList{QStringLiteral("rootfs")});
+    QCOMPARE(rig.bus.resetsTo(serialOf(1)).size(), qsizetype(1));
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral("   timed out")) >= 0);
+    // The RD carries the LD timeout (a timed-out RD is a failed reset), the WL none.
+    const QStringList commands = rig.runner.invocations();
+    int rds = 0;
+    for (int i = 0; i < commands.size(); ++i) {
+        if (commands.at(i) == QStringLiteral("upgrade_tool -s %1 RD").arg(b.locationId)) {
+            ++rds;
+            QCOMPARE(rig.runner.optionsAt(i).timeoutMs, rig.flasher.upgradeTool()->timeoutMs());
+            QVERIFY(rig.runner.optionsAt(i).timeoutMs > 0);
+        } else if (commands.at(i).startsWith(QStringLiteral("upgrade_tool -s %1 WL ").arg(b.locationId))) {
+            QCOMPARE(rig.runner.optionsAt(i).timeoutMs, 0);
+        }
+    }
+    QCOMPARE(rds, 1);
+    // Still in Loader mode at the end: recorded, with the addressed RD.
+    QVERIFY(b.leftInLoader);
+    QCOMPARE(b.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(b.locationId)});
+    QVERIFY(b.detail.endsWith(QStringLiteral("; it is in Loader mode now (port %1, LocationID %2)").arg(portOf(1), b.locationId)));
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+    QCOMPARE(rig.bus.cancelledWrites(), 0);
+}
+
+void Tst_fleetflasher::cmdlineFailureSkipsBeforeTheReboot()
+{
+    // `adb devices` listed B, but its /proc/cmdline cannot be read: skipped, never rebooted.
+    FleetRig rig(caseDir(), {QStringLiteral("rootfs")}, false);
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^adb -s %1 shell \"cat /proc/cmdline\"$").arg(serialOf(1))), [](FakeToolInvocation* i) {
+        i->emitOutput("error: closed\r\n");
+        i->finish(1);
+    });
+    scriptFleet(rig.bus, rig.runner);
+    QSignalSpy layouts(&rig.flasher, &FleetFlasher::mtdPartsRead);
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Skipped);
+    QCOMPARE(b.detail, QStringLiteral("adb could not read board %1: error: closed").arg(serialOf(1)));
+    QVERIFY(rig.lineIndex(b.label() + QLatin1Char(' ') + b.detail + QStringLiteral("; skipped")) >= 0);
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(serialOf(1)))), 0);
+    QVERIFY(b.layout.isEmpty() && b.port.isEmpty() && b.locationId.isEmpty());
+    QCOMPARE(layouts.count(), kBench - 1);
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+    QVERIFY(rig.flasher.stopReason().isEmpty());   // one board skipped, the run goes on
+}
+
+void Tst_fleetflasher::stopResetFailureLeavesTheBoardInLoader()
+{
+    FleetRig rig(caseDir());
+    rig.bus.setReboot(serialOf(2), FakeUsbBus::Reboot::DragsNext);
+    rig.bus.setResetFailure(serialOf(0), "Reset Device Fail!\r\n", 1);
+    QVERIFY(rig.run());
+    const FleetBoard a = rig.boardOf(serialOf(0));
+    const QString n = a.locationId;
+    QCOMPARE(a.result, FleetBoard::Result::Skipped);
+    QVERIFY(a.leftInLoader);
+    QCOMPARE(a.retry, QStringList{QStringLiteral("upgrade_tool -s %1 RD").arg(n)});
+    QVERIFY2(a.detail.startsWith(QStringLiteral("mapping stopped: while rebooting %1: two boards changed at once").arg(serialOf(2))), qPrintable(a.detail));
+    QVERIFY2(a.detail.endsWith(QStringLiteral("; upgrade_tool RD did not reset it (Reset Device Fail!): reset it by hand with `upgrade_tool -s %1 RD`")
+                                   .arg(n)),
+             qPrintable(a.detail));
+    QVERIFY(rig.lineIndex(a.label() + QStringLiteral("   retry: upgrade_tool -s %1 RD").arg(n)) >= 0);
+    QVERIFY2(rig.message().endsWith(QStringLiteral("; nothing was written; 1 board reset back to ADB; 2 Loader devices left unattributed")),
+             qPrintable(rig.message()));
+    QCOMPARE(rig.flasher.report().resetCount(), 1);
+    for (const FleetFlasher::UnattributedDevice& device : rig.flasher.unattributedDevices()) {
+        QVERIFY(device.locationId != n);   // A is a board of the run, never unattributed
+    }
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral(" WL "))), 0);
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+}
+
+void Tst_fleetflasher::ldListsButPortShowsAdb()
+{
+    // The first wave's one gate listing lists B in Loader mode, but B is back on ADB when its check
+    // reads the enumeration: the port decides.
+    FleetRig rig(caseDir(), {QStringLiteral("rootfs")}, false);
+    bool armed = false;
+    bool moved = false;
+    QObject::connect(&rig.flasher, &FleetFlasher::logLine, &rig.flasher, [&armed](const QString& line) {
+        if (line.startsWith(QStringLiteral("mapping done:"))) {
+            armed = true;
+        }
+    });
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [&rig, &armed, &moved](FakeToolInvocation* i) {
+        const QByteArray listing = rig.bus.ldOutput();
+        if (armed && !moved) {
+            moved = true;
+            rig.bus.moveToAdb(serialOf(1));   // after the listing was taken, before the checks read the bus
+        }
+        i->emitOutput(listing);
+        i->finish(0);
+    });
+    scriptFleet(rig.bus, rig.runner);
+    QVERIFY(rig.run());
+    QVERIFY(moved);
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, QStringLiteral("left Loader mode before rootfs was written (port %1 shows an ADB device; LD lists LocationID %2): nothing "
+                                      "written for it")
+                           .arg(portOf(1), b.locationId));
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^upgrade_tool -s %1 WL ").arg(b.locationId))), 0);
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());
+    QVERIFY(!b.leftInLoader);
+    QVERIFY(b.retry.isEmpty());
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
 }
 
 // =============================================================================================

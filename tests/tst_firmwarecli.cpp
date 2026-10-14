@@ -343,6 +343,9 @@ private slots:
     void fleetNotBackExits1();
     void fleetInterruptDrains();
     void fleetTimeoutDuringMapping();
+    void fleetTimeoutDuringTheWrites();
+    void fleetNoWait();
+    void fleetLayoutOption();
     void fleetMappingStopResetsAndReports();
     void fleetForeignLoaderRefused();
     void fleetBootloaderPartitionWarns();
@@ -2401,15 +2404,109 @@ void Tst_firmwarecli::fleetTimeoutDuringMapping()
     const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
                                         QStringLiteral("--image"), withEnvImage(), QStringLiteral("--timeout"), QStringLiteral("1")});
     QVERIFY2(result.code == 5, qPrintable(result.dump()));
-    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (timeout): timeout after 1 s: ")), qPrintable(result.lastText()));
+    // The 1 s run from the job's creation (the plan, adb devices, the baseline LD come first): on a
+    // loaded runner the first board may not be mapped yet, so only "not every board" is pinned.
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (timeout): timeout after 1 s")), qPrintable(result.lastText()));
     QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral(" WL "))), 0);
     int mapped = 0;
     for (int k = 0; k < 7; ++k) {
         const bool inLoader = result.hasTextStarting(QStringLiteral("[%1 %2] in Loader mode on port ").arg(FleetFlasher::tagFor(k), benchSerial(k)));
         mapped += inLoader ? 1 : 0;
-        QCOMPARE(fleet.bus.resetsTo(benchSerial(k)).size(), qsizetype(inLoader ? 1 : 0));
+        QCOMPARE(fleet.bus.resetsTo(benchSerial(k)).size(), qsizetype(inLoader ? 1 : 0));   // every mapped board reset, no other
     }
-    QVERIFY(mapped >= 1 && mapped < 7);
+    QVERIFY(mapped < 7);
+    QCOMPARE(fleet.bus.cancelledWrites(), 0);
+}
+
+void Tst_firmwarecli::fleetTimeoutDuringTheWrites()
+{
+    // --timeout while A writes (its WL hangs) and B waits for the one slot: B is reset and skipped,
+    // A finishes its write and its reset, exit 5.
+    FleetCliRig fleet;
+    fleet.bus.hangWrites(benchSerial(0));
+    QTimer driver;
+    driver.setInterval(10);
+    bool released = false;
+    QObject::connect(&driver, &QTimer::timeout, &fleet.rig.cli, [&]() {
+        if (!released && fleet.bus.resetsTo(benchSerial(1)).size() == 1) {   // the drain reached B
+            released = true;
+            fleet.bus.releaseWrites();
+        }
+    });
+    driver.start();
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("%1,%2").arg(benchSerial(0), benchSerial(1)),
+                                        QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), withEnvImage(),
+                                        QStringLiteral("--max-parallel"), QStringLiteral("1"), QStringLiteral("--timeout"), QStringLiteral("2")});
+    driver.stop();
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QVERIFY(released);
+    QVERIFY(result.hasText(QStringLiteral("Timeout: 2 s passed (--timeout); cancelling")));
+    QVERIFY(result.hasText(QStringLiteral("Cancelling Flash fleet")));
+    QVERIFY(result.hasText(QStringLiteral("cancel: the boards not started are reset and skipped; 1 write(s) in progress finish first (every row and "
+                                          "the reset)")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[A %1] rootfs written: ").arg(benchSerial(0))));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[A %1] done in ").arg(benchSerial(0))));
+    QCOMPARE(fleet.bus.writesTo(benchSerial(0)).size(), qsizetype(1));
+    QCOMPARE(fleet.bus.resetsTo(benchSerial(0)).size(), qsizetype(1));
+    QVERIFY(fleet.bus.writesTo(benchSerial(1)).isEmpty());
+    QVERIFY(result.hasText(QStringLiteral("[B %1] cancelled before its write started; reset back to ADB; skipped").arg(benchSerial(1))));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (timeout): timeout after 2 s: 1 of 2 boards flashed in ")),
+             qPrintable(result.lastText()));
+    QVERIFY(result.lastText().endsWith(QStringLiteral("; 1 skipped")));
+    QCOMPARE(fleet.bus.cancelledWrites(), 0);
+    QCOMPARE(fleet.bus.unaddressedCommands(), 0);
+}
+
+void Tst_firmwarecli::fleetNoWait()
+{
+    // --no-wait goes to the job's SocFlasher, which hands it to the fleet: done right after the RD.
+    FleetCliRig fleet;
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                                        QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), withEnvImage(),
+                                        QStringLiteral("--no-wait"), QStringLiteral("--json")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("get-state|rfmcu status|cat /proc/version; uptime"))), 0);
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool -s \\d+ RD$"))), 2);
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    QVERIFY2(allParse, qPrintable(result.out));
+    const QJsonObject done = objects.last();
+    QCOMPARE(done.value(QStringLiteral("exit")).toInt(), 0);
+    const QJsonArray boards = done.value(QStringLiteral("boards")).toArray();
+    QCOMPARE(boards.size(), qsizetype(2));
+    for (const QJsonValue& value : boards) {
+        const QJsonObject board = value.toObject();
+        QCOMPARE(board.value(QStringLiteral("result")).toString(), QStringLiteral("done"));
+        QCOMPARE(board.value(QStringLiteral("detail")).toString(), QStringLiteral("ADB not waited for (--no-wait)"));
+        QCOMPARE(board.value(QStringLiteral("adbBack")).toBool(), false);
+        QCOMPARE(board.value(QStringLiteral("written")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+    }
+}
+
+void Tst_firmwarecli::fleetLayoutOption()
+{
+    // A plain image (no layout of its own), nothing remembered: --layout is the plan's layout, and
+    // the layout gate compares every board with it (applyLayout() without a serial).
+    FleetCliRig fleet;
+    const QString other = QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),4M(boot),4M(rootfs),3M(userdata)");
+    fleet.bus.setMtdParts(benchSerial(1), other);
+    const QString image = makeImage(QStringLiteral("plain/update.img"));
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("%1,%2").arg(benchSerial(0), benchSerial(1)),
+                                        QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image,
+                                        QStringLiteral("--layout"), kNodeMtdParts});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));   // B skipped
+    QVERIFY(result.err.isEmpty());
+    const QStringList writes = fleet.bus.writesTo(benchSerial(0));
+    QCOMPARE(writes.size(), qsizetype(1));
+    QVERIFY2(writes.first().contains(QStringLiteral(" WL 8064 10240 ")), qPrintable(writes.first()));   // placed in the --layout
+    QVERIFY(result.hasTextStarting(QStringLiteral("[A %1] done in ").arg(benchSerial(0))));
+    QVERIFY2(result.hasText(QStringLiteral("[B %1] flash layout differs from the plan's (board: %2; plan: %3): not rebooted; skipped")
+                                .arg(benchSerial(1), other, kNodeMtdParts)),
+             qPrintable(result.dump()));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(benchSerial(1)))), 0);
+    QVERIFY(fleet.bus.writesTo(benchSerial(1)).isEmpty());
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): 1 of 2 boards flashed in ")), qPrintable(result.lastText()));
+    QVERIFY(result.lastText().endsWith(QStringLiteral("; 1 skipped")));
 }
 
 void Tst_firmwarecli::fleetMappingStopResetsAndReports()

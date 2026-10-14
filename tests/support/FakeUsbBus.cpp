@@ -21,6 +21,15 @@ constexpr quint16 kLoaderPid = 0x110e;
 constexpr quint16 kMaskromPid = 0x110c;
 constexpr int kCommandMs = 5;   ///< how long an RD or a refused command takes
 
+/// A handler pattern for upgrade_tool followed by `rest`: the program as a command line names it -
+/// the bare name, or a path to it (quoted when it holds a blank), with or without ".exe" - so a
+/// flasher given the bundled tool's full path is answered too.
+QRegularExpression upgradeToolCommand(const QString& rest)
+{
+    return QRegularExpression(QStringLiteral("^(?:upgrade_tool|\"[^\"]*[/\\\\]upgrade_tool(?:\\.exe)?\"|[^\\s\"]*[/\\\\]upgrade_tool(?:\\.exe)?) ")
+                              + rest);
+}
+
 UsbDeviceInfo instance(quint16 pid, const QString& port)
 {
     UsbDeviceInfo info;
@@ -61,6 +70,8 @@ struct FakeUsbBus::Private
         int rowsDone = 0;
         bool hang = false;
         QMap<QString, QPair<QByteArray, int>> writeFailures;   ///< file name -> output, exit code
+        QString writeStartError;      ///< its WLs cannot start ("" = they can)
+        bool resetTimesOut = false;
         bool resetFails = false;
         QByteArray resetOutput;
         int resetExit = 0;
@@ -342,6 +353,10 @@ struct FakeUsbBus::Private
             return;
         }
         entry->writes << i->commandLine();
+        if (!entry->writeStartError.isEmpty()) {
+            i->failToStart(entry->writeStartError);   // nothing reached the board
+            return;
+        }
         const QString fileName = QFileInfo(QDir::fromNativeSeparators(args.value(5))).fileName();
         if (entry->writeFailures.contains(fileName)) {
             const auto failure = entry->writeFailures.value(fileName);
@@ -404,6 +419,10 @@ struct FakeUsbBus::Private
             return;
         }
         entry->resets << i->commandLine();
+        if (entry->resetTimesOut) {
+            i->timeOut(kCommandMs);   // the board stays in Loader mode
+            return;
+        }
         if (entry->resetFails) {
             i->emitOutput(entry->resetOutput, kCommandMs);
             i->finish(entry->resetExit);
@@ -580,6 +599,20 @@ void FakeUsbBus::setResetFailure(const QString& serial, const QByteArray& output
     }
 }
 
+void FakeUsbBus::setWriteStartFailure(const QString& serial, const QString& error)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        entry->writeStartError = error;
+    }
+}
+
+void FakeUsbBus::setResetTimeout(const QString& serial)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        entry->resetTimesOut = true;
+    }
+}
+
 void FakeUsbBus::setNoAdbReturn(const QString& serial)
 {
     if (Private::Entry* entry = d->find(serial)) {
@@ -634,6 +667,13 @@ void FakeUsbBus::moveToLoader(const QString& serial)
     }
 }
 
+void FakeUsbBus::moveToMaskrom(const QString& serial)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        d->toDownload(*entry, entry->port, true, true, 0);
+    }
+}
+
 void FakeUsbBus::addForeignLoader(const QString& port)
 {
     d->foreignLoaders.append({port, d->idFor(port)});
@@ -684,10 +724,10 @@ QByteArray FakeUsbBus::adbDevicesOutput() const { return d->adbText(); }
 
 void FakeUsbBus::script(FakeToolRunner& runner)
 {
-    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [this](FakeToolInvocation* i) { d->onLd(i); });
-    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool -s \\S+ WL ")), [this](FakeToolInvocation* i) { d->onWl(i); });
-    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool -s \\S+ RD$")), [this](FakeToolInvocation* i) { d->onRd(i); });
-    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool (WL|RD|UF)\\b")), [this](FakeToolInvocation* i) { d->onUnaddressed(i); });
+    runner.addHandler(upgradeToolCommand(QStringLiteral("LD$")), [this](FakeToolInvocation* i) { d->onLd(i); });
+    runner.addHandler(upgradeToolCommand(QStringLiteral("-s \\S+ WL ")), [this](FakeToolInvocation* i) { d->onWl(i); });
+    runner.addHandler(upgradeToolCommand(QStringLiteral("-s \\S+ RD$")), [this](FakeToolInvocation* i) { d->onRd(i); });
+    runner.addHandler(upgradeToolCommand(QStringLiteral("(WL|RD|UF)\\b")), [this](FakeToolInvocation* i) { d->onUnaddressed(i); });
     runner.addHandler(QRegularExpression(QStringLiteral("^adb devices$")), [this](FakeToolInvocation* i) { d->onAdbDevices(i); });
     runner.addHandler(QRegularExpression(QStringLiteral("^adb -s \\S+ ")), [this](FakeToolInvocation* i) { d->onAdbSerial(i); });
 }
