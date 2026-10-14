@@ -381,7 +381,8 @@ void Tst_firmwarejob::inputsReachTheCollaborators()
     QCOMPARE(job.sourceTarget(), QStringLiteral("ssh:target:root@10.0.0.24"));
     job.setRemoteFolder(QStringLiteral(" ~/rk/out/image "));
     QCOMPARE(job.remoteFolder(), QStringLiteral("~/rk/out/image"));
-    job.setCacheDirectory(QStringLiteral("D:\\fw\\cache "));
+    // The platform's own separators plus a stray blank: the job stores the trimmed Qt form.
+    job.setCacheDirectory(QDir::toNativeSeparators(QStringLiteral("D:/fw/cache")) + QLatin1Char(' '));
     QCOMPARE(job.cacheDirectory(), QStringLiteral("D:/fw/cache"));
     QVERIFY(job.gitDescribe());
     job.setGitDescribe(false);
