@@ -371,3 +371,45 @@ Known limitations: `pull-flash --partitions` is refused (Pull & Flash always wri
 where the tab's "All" would skip that row; Ctrl+C during a write is handled (upgrade_tool never sees it,
 su-fw stops at the next safe point) but was not exercised on the board; the GUI's quick commands and
 dialogs are untouched by 0.6.0.
+
+## 16. v0.7.0 — `su-fw` flashes several boards at once (2026-10-14)
+
+Why: the boards' owner (Firmware/cc1310-firmware, `analysis/node_inventory/prompt_parallel_soc_flash.md`):
+seven Node boards flashed one after another take ~4 min, mostly the reboot into Loader mode and back; in
+parallel it should be under a minute. Hard rules from the same file: complete writes only (no kill, no
+timeout, no cancel of a write; no power or USB cuts), never idblock / uboot / env / meta unless named, a
+board that does not reach Loader mode on its port is skipped and never guessed, a `--dry-run` first.
+
+Facts measured first (12:53, read-only commands, boards B and G rebooted and back): the bundled adb
+reports no USB path (`get-devpath` = unknown) and Windows gives the boards generated PnP instance ids
+(`USB\VID_2207&PID_0006\6&38635FDB&0&2`: hub and port, no serial), so the serial-to-port mapping cannot be
+read - it is learned by difference, one board at a time (the ADB instance that vanishes, the Loader instance
+that appears on the same port, the new `upgrade_tool LD` LocationID), and remembered per serial.
+`upgrade_tool -s <LocationID> <command>` addresses exactly one device (B = 112, G = 154; a wrong id is
+refused with exit 255 "No found specific rockusb device!"); without `-s` the tool silently takes one of
+several Loader devices - the hazard every per-board command now avoids.
+
+Process: three independent designs (Fable) judged by two judges, the winner synthesized into the contract
+headers (`FleetFlasher.h`, `FleetReport.h`, additions to `RockchipTool`, `UsbProbe`, `FirmwareJob`,
+`FirmwareCli`, `AppSettings`), two safety critics and one revision, nine residual findings handed to the
+Opus implementer with the package; then a read-only Fable review and a fix round.
+
+| Layer | Result |
+|---|---|
+| Tools | `tst_firmwaretools` +5 cases (124): `-s <id>` on `WL` / `RD`, an empty id runs nothing, the LD parser with several devices |
+| Fleet | `tst_fleetflasher` 49 functions / 67 results on `FakeToolRunner` + `FakeUsbBus`: selection (`--serials` tags, `--all-boards`, a serial not attached, a foreign ADB device), the mapping by difference (snapshot order LD then PnP, exactly one change, a board that drags another, a late arrival, MASKROM instead of Loader, a Loader device already on the bus, the remembered port that differs, no layout under `--all-boards`), writes on N boards with `--max-parallel`, the shared EXF, the pre-WL and pre-RD re-checks, a failing WL (exit 255, a crash), nothing killed or timed out, cancel waits for the writes in flight and resets the rest, the lock, `RD` and the ADB wait per serial, kernel / uptime / `rfmcu status` per board, the retry lines of a board left in Loader mode, the end-of-run reconciliation, zero unaddressed writes counted after every case, the single-board command lines byte for byte as in 0.6.0 |
+| CLI | `tst_firmwarecli` +18 cases (86): the fleet options, `--all` refused for a fleet, the bootloader-partition warning, the dry run touches no board (fake invocations prove it), one line per board event, the final table, `--json` objects with `board` and the final `boards` array, exit codes 0 / 1 / 2 / 3 / 5, `--help` |
+| Real boards A-G, dry run (`build\Release\su-fw`, 16:28) | `--serials` all 7, `--all-boards`, both as JSON: "7 of 7 boards ready", the plan line "write rootfs (3841536 bytes, sector 8064, 10240 sectors) on 7 boards, up to 7 at once", no reboot (every uptime kept growing), `upgrade_tool LD: 0 devices`, `USB bus: 7 Rockchip devices (7 ADB, 0 in download mode)`; `--partitions env --dry-run` → "Warning: env is a bootloader partition; written because --partitions names it"; `--all` → exit 2 "refused for a fleet" |
+| Real boards F + G, rootfs in parallel (16:39, build 1f6beda) | exit 0, "2 of 2 boards flashed in 44.4 s (mapping 9.1 s, writing 31.1 s)": F c4130950110960e0 mapped to port 6&3A944CE5&0&1 / LocationID 151 in 4.0 s, G 5a33c81a6e996266 to 6&3A944CE5&0&4 / 154 in 3.8 s (the owner's table), `-s 151` / `-s 154 WL 8064 10240 rootfs.img` in parallel (27.9 s / 31.1 s), `-s <id> RD`, both back on ADB within 2 s (`5.10.209+, up 0 min; rfmcu: pid=46 uart=owned mcu=alive ...`); the other five boards untouched; the final table and the JSON carry port, loader id, mapping / writing / total seconds per board |
+| Real boards A-G, rootfs in parallel (16:40, build 1f6beda) | exit 0, "7 of 7 boards flashed in 67.4 s (mapping 30.8 s, writing 32.1 s)": the seven boards mapped one at a time (~4 s each: the ADB instance that vanished, the Loader instance on the same port, the new LocationID), seven `-s <id> WL 8064 10240 rootfs.img` in parallel, seven `-s <id> RD`, every board back on ADB within seconds with `rfmcu status` = `pid=46 uart=owned mcu=alive ...` and `up 0 min`; one line per board event, the final table and the JSON `boards` array with port, loader id and seconds per board. Sequential, the same seven boards take about 4 min (7 x 35 s) |
+| Real boards A-G again: restore of the fleet's current image (take7_update.img, rootfs) on the CC1310 session's request, 16:43 | exit 0, "7 of 7 boards flashed in 66.9 s (mapping 29.9 s, writing 32.4 s)"; the ports were remembered from the first run and every board mapped to the same port and LocationID again (A 6&38635FDB&0&3 / 113, B &2 / 112, C &4 / 114, D &1 / 111, E 6&3A944CE5&0&2 / 152, F &1 / 151, G &4 / 154 - upgrade_tool's LocationID is 110 + port on hub 3 and 150 + port on hub 2 of this PC); all back on ADB with rfmcud running |
+| Real boards A-G a fourth time: take8_update.img rootfs on the CC1310 session's request, 16:55 | exit 0, "7 of 7 boards flashed in 68.9 s (mapping 31.4 s, writing 32.5 s)", the same ports and LocationIDs, all back on ADB with rfmcud running. Further runs on that session's request as its image moved on: take9 at 17:08 (7 of 7 in 67.5 s), take10 at 17:15 (7 of 7 in 66.4 s). Six real fleet runs in one afternoon (2 + 7 + 7 + 7 + 7 + 7 boards): 37 of 37 boards flashed, 0 skipped, 0 failed, no unaddressed command, the same port and LocationID for every board every time; a full seven-board rootfs update takes 66-69 s against about 4 min one board after another. A seventh run at 17:21 with the fixed build (bb8e4aa sources, fps9 rootfs on B-G): 6 of 6 in 80.7 s - the unselected board A had been rebooted by another session just before and came back on ADB while G was being mapped; G's mapping took 23.4 s (15 `LD` polls) instead of about 4 s and then ended on G's remembered port and LocationID; 43 of 43 boards today, 0 failed, 0 misattributed. Worth adding: the log does not say why a mapping poll is still pending (which change it is waiting out); one line per pending reason would make such a wait self-explaining |
+| Review (Fable, read-only) and the fix round | 0 BLOCKER, 0 MAJOR, 7 MINOR (scratchpad reports/review3.md): the reviewer verified that every per-board upgrade_tool call carries `-s` with no fallback, that the mapping cannot guess, that no code path kills or cancels a write, that `--dry-run` runs only `adb devices` and `LD`, and that the single-board command lines are pinned byte for byte - verdict: run the owner's order with this build. Minors fixed in bb8e4aa: a mid-wave re-check accepts only the pid seen at the mapping (a MASKROM pid never passes as Loader), the end-of-run picture also corrects a Skipped board that is still in Loader mode, an RD that finds no device says the id is gone and offers no retry with it, the baseline mismatch names every port and id, one re-enumerated board and one stray id are paired (never with an unknown port on the bus), retry lines carry the tool's real path, the timeout test asserts only what timing guarantees; ten test gaps closed (a WL that cannot start, an RD that times out or finds no device, a failing `cat /proc/cmdline`, a stop's RD that fails, LD-lists-but-port-shows-ADB, CLI `--timeout` during the writes, `--no-wait`, `--layout`). Suites after the round: `tst_fleetflasher` 59 functions / 77 results, `tst_firmwarecli` 91, every new case checks zero unaddressed commands and zero cancelled writes |
+| GCC 11 `-Werror` (WSL) | 31 / 31 passed, 0 warnings (bb8e4aa; also 31 / 31 on 1f6beda before the fix round) |
+| Windows MSVC 2022 Release | 31 / 31 passed (492 s), 0 warnings (bb8e4aa; 501 s on 1f6beda before the fix round) |
+
+Known limitations: the fleet needs the Windows PnP enumeration for the mapping (Linux refuses the fleet
+command cleanly where the mapping is unavailable); a MASKROM board is reported and skipped (the single-board
+flow handles it alone); whether `upgrade_tool LD` next to a running `WL` disturbs the write was not
+measured, so the pre-write re-check is skipped while writes are in flight (the cautious default); a kill of
+the whole su-fw process tree still cuts a write (said in README and `--help`).
