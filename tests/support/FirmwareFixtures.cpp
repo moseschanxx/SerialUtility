@@ -7,6 +7,7 @@
 
 #include "firmware/ToolRunner.h"
 #include "support/FakeToolRunner.h"
+#include "support/FakeUsbBus.h"
 
 namespace FirmwareFixtures {
 
@@ -139,6 +140,22 @@ void scriptMcuBridge(FakeToolRunner& runner, quint16 bridgePort)
         i->hang();
     });
     runner.addScript(QRegularExpression(QStringLiteral("forward --remove tcp:\\d+$")), QByteArray());
+}
+
+const FleetBench kFleetBench[7] = {
+    {"A", "0225ce3c8d8d6e44", "6&38635FDB&0&3"}, {"B", "62ecfc6ddeb3f579", "6&38635FDB&0&2"},
+    {"C", "fe89cc526a354343", "6&38635FDB&0&4"}, {"D", "13fb949c8cac107f", "6&38635FDB&0&1"},
+    {"E", "64fad5e41d3273d5", "6&3A944CE5&0&2"}, {"F", "c4130950110960e0", "6&3A944CE5&0&1"},
+    {"G", "5a33c81a6e996266", "6&3A944CE5&0&4"},
+};
+
+void scriptFleet(FakeUsbBus& bus, FakeToolRunner& runner)
+{
+    for (const FleetBench& board : kFleetBench) {
+        bus.addBoard(QLatin1String(board.serial), QLatin1String(board.port));
+    }
+    runner.addHandler(exfPattern(), &nodeExtractor);
+    bus.script(runner);
 }
 
 bool BuildMachine::start(SshProfileStore* store, const QString& workDir)

@@ -130,6 +130,19 @@ void FakeToolInvocation::failToStart(const QString& message)
     });
 }
 
+void FakeToolInvocation::timeOut(int delayMs)
+{
+    schedule(delayMs, [this] {
+        markStarted();
+        ToolResult result = m_result;
+        result.started = true;
+        result.timedOut = true;
+        result.exitCode = -1;
+        result.error = QStringLiteral("timed out");
+        ToolInvocation::finish(result);
+    });
+}
+
 void FakeToolInvocation::hang()
 {
     schedule(0, [this] { markStarted(); });

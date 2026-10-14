@@ -504,7 +504,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+317"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+329"/>
         <source>SSH: %1</source>
         <translation>SSH：%1</translation>
     </message>
@@ -549,6 +549,11 @@
         <translation>SoC 刷写：%1</translation>
     </message>
     <message>
+        <location line="+34"/>
+        <source>Fleet flasher: %1</source>
+        <translation>批量刷写：%1</translation>
+    </message>
+    <message>
         <location line="+6"/>
         <source>MCU link: board %1</source>
         <translation>MCU 链路：开发板 %1</translation>
@@ -574,7 +579,7 @@
         <translation>正在更新 MCU：%1 / %2 字节（%3 %）</translation>
     </message>
     <message>
-        <location line="+147"/>
+        <location line="+149"/>
         <source>file not found</source>
         <translation>找不到文件</translation>
     </message>
@@ -644,18 +649,23 @@
         <translation>拉取并刷写</translation>
     </message>
     <message>
+        <location line="+3"/>
+        <source>Flash fleet</source>
+        <translation>批量刷写</translation>
+    </message>
+    <message>
         <location line="+7"/>
         <source>%1 done: %2</source>
         <translation>%1 完成：%2</translation>
     </message>
     <message>
         <location line="+0"/>
-        <location line="+541"/>
+        <location line="+546"/>
         <source>%1 failed: %2</source>
         <translation>%1 失败：%2</translation>
     </message>
     <message>
-        <location line="-497"/>
+        <location line="-502"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>构建机的 SSH 配置文件已不存在</translation>
     </message>
@@ -710,7 +720,7 @@
         <translation>开发板 %1 的闪存布局：%2</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+22"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>分区布局未知：请先连接正常运行的开发板一次</translation>
     </message>
@@ -730,18 +740,18 @@
         <translation>%1（%2 字节）超出分区大小（%3 字节）</translation>
     </message>
     <message>
-        <location line="+142"/>
+        <location line="+145"/>
         <source>Busy: %1 is still running</source>
         <translation>忙碌：%1 仍在运行</translation>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+881"/>
+        <location line="+1030"/>
         <source>another firmware operation is running (%1)</source>
         <translation>另一个固件操作正在运行（%1）</translation>
     </message>
     <message>
-        <location line="-875"/>
+        <location line="-1024"/>
         <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
         <translation>无法创建锁文件 %1：本机上的另一个固件操作将无法被察觉</translation>
     </message>
@@ -792,16 +802,16 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+354"/>
+        <location line="+485"/>
         <location line="+36"/>
-        <location line="+205"/>
+        <location line="+223"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>已取消</translation>
     </message>
     <message>
-        <location line="-616"/>
+        <location line="-765"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>与 %1 的连接已关闭</translation>
@@ -818,11 +828,12 @@
     </message>
     <message>
         <location line="+42"/>
+        <location line="+173"/>
         <source>no image: pull one or choose a local image first</source>
         <translation>没有镜像：请先拉取或选择本地镜像</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="-160"/>
         <location line="+26"/>
         <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
         <translation>分区：镜像中的全部分区（Loader 模式逐个写入；MASKROM 模式写入整个镜像）</translation>
@@ -893,7 +904,62 @@
         <translation>已通过 %1 发送 &quot;reboot loader&quot;</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+28"/>
+        <source>no plan</source>
+        <translation>没有分区方案</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the fleet needs the image&apos;s partition list: %1</source>
+        <translation>批量刷写需要镜像的分区列表：%1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</source>
+        <translation>闪存布局未知：请传入 --layout，或在开发板正常运行时先运行一次 su-fw status；Node 镜像自带布局</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>a fleet writes named partitions only: --partitions NAMES; every partition would include idblock, uboot, env and meta</source>
+        <translation>批量刷写只写入指定的分区：--partitions NAMES；“全部分区”会包含 idblock、uboot、env 和 meta</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>%1 cannot be written: %2; nothing was written</source>
+        <translation>%1 无法写入：%2；未写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>none of the named partitions (%1) is in %2; nothing was written</source>
+        <translation>指定的分区（%1）都不在 %2 中；未写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</source>
+        <translation>未选择开发板：请指定开发板（--serials），或选择 ADB 上的所有开发板（--all-boards）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>boards written at once must be 0 (all of them) to 64, not %1</source>
+        <translation>同时写入的开发板数量必须为 0（全部）到 64，而不是 %1</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Flashing fleet: starting...</source>
+        <translation>正在批量刷写：启动中...</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>the fleet flasher did not start</source>
+        <translation>批量刷写未能启动</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Flashing fleet: %1 of %2 boards done, %3 writing</source>
+        <translation>正在批量刷写：%2 块开发板中已完成 %1 块，%3 块正在写入</translation>
+    </message>
+    <message>
+        <location line="+29"/>
         <source>choose a valid .pkg package first</source>
         <translation>请先选择有效的 .pkg 固件包</translation>
     </message>
@@ -1015,12 +1081,13 @@
         <translation>拉取并刷写：拉取镜像、刷写 SoC、等待 ADB，必要时再更新 MCU</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+28"/>
         <source>Cannot cancel while upgrade_tool writes the flash</source>
         <translation>upgrade_tool 写入闪存期间无法取消</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="-6"/>
+        <location line="+12"/>
         <source>Cancelling %1</source>
         <translation>正在取消 %1</translation>
     </message>
@@ -1604,6 +1671,765 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <location line="+5"/>
         <source>Log saved to %1</source>
         <translation>日志已保存到 %1</translation>
+    </message>
+</context>
+<context>
+    <name>FleetFlasher</name>
+    <message>
+        <location filename="../src/firmware/FleetFlasher.cpp" line="+132"/>
+        <source>internal: unaddressed write refused</source>
+        <translation>内部错误：已拒绝未指定地址的写入</translation>
+    </message>
+    <message>
+        <location line="+121"/>
+        <source>no change on the USB bus yet: the board is still on ADB</source>
+        <translation>USB 总线上尚无变化：开发板仍在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>two boards changed at once: ADB instances gone on ports %1; Loader devices appeared on ports %2; new LocationIDs %3</source>
+        <translation>两块开发板同时发生变化：ADB 实例从端口 %1 消失；Loader 设备出现在端口 %2；新的 LocationID %3</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>a Loader device on port %1 which still lists an ADB device</source>
+        <translation>端口 %1 上出现 Loader 设备，但该端口仍列出 ADB 设备</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>no LocationID yet</source>
+        <translation>尚无 LocationID</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LocationID %1</source>
+        <translation>LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>a device entered download mode on port %1 (%2) while the board is still on ADB: not this board</source>
+        <translation>有设备在端口 %1（%2）上进入下载模式，而该开发板仍在 ADB 上：不是这块开发板</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>upgrade_tool LD lists a new LocationID %1 but the bus shows no new download-mode device yet</source>
+        <translation>upgrade_tool LD 列出了新的 LocationID %1，但总线上尚未出现新的下载模式设备</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>the board left port %1 but a Loader device appeared on port %2</source>
+        <translation>开发板离开了端口 %1，但 Loader 设备出现在端口 %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>the board left ADB (port %1), waiting for its Loader device</source>
+        <translation>开发板已离开 ADB（端口 %1），正在等待它的 Loader 设备</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Loader device on port %1, waiting for upgrade_tool LD to list it</source>
+        <translation>端口 %1 上已有 Loader 设备，正在等待 upgrade_tool LD 列出它</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>in MASKROM mode on port %1, LocationID %2</source>
+        <translation>在端口 %1 上处于 MASKROM 模式，LocationID %2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>in Loader mode on port %1, LocationID %2</source>
+        <translation>在端口 %1 上处于 Loader 模式，LocationID %2</translation>
+    </message>
+    <message>
+        <location line="+229"/>
+        <source>  could not run: %1</source>
+        <translation>  无法运行：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>  timed out</source>
+        <translation>  超时</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  exit code %1</source>
+        <translation>  退出码 %1</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <location line="+428"/>
+        <source>upgrade_tool could not be run: %1</source>
+        <translation>无法运行 upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="-426"/>
+        <location line="+430"/>
+        <source>upgrade_tool LD timed out</source>
+        <translation>upgrade_tool LD 超时</translation>
+    </message>
+    <message>
+        <location line="-393"/>
+        <source>left in Loader mode on port %1, LocationID %2: nothing else is written to it. Retry by hand, addressed: one `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;` per missing row, then `upgrade_tool -s %2 RD` (the lines follow); `su-fw flash-soc --serial %3` only once `upgrade_tool LD` lists it as the ONLY device in download mode (the single-board flow writes without -s and takes any Loader device)</source>
+        <translation>在端口 %1 上停留在 Loader 模式，LocationID %2：不会再向它写入任何内容。请手动按地址重试：每个缺失的分区执行一次 `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;`，然后执行 `upgrade_tool -s %2 RD`（命令见下方）；只有当 `upgrade_tool LD` 列出它是唯一处于下载模式的设备时，才可使用 `su-fw flash-soc --serial %3`（单板流程写入时不带 -s，会选中任意 Loader 设备）</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>LocationID %1 is in %2 mode and belongs to no mapped board: reset it with `%3`</source>
+        <translation>LocationID %1 处于 %2 模式，不属于任何已映射的开发板：请用 `%3` 复位它</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>LocationID %1 on port %2 is in %3 mode and belongs to no mapped board: reset it with `%4`</source>
+        <translation>端口 %2 上的 LocationID %1 处于 %3 模式，不属于任何已映射的开发板：请用 `%4` 复位它</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>done in %1 s (mapping %2 s, writing %3 s)</source>
+        <translation>完成，用时 %1 秒（映射 %2 秒，写入 %3 秒）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1; skipped</source>
+        <translation>%1；已跳过</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</source>
+        <translation>未选择开发板：请指定开发板（--serials），或选择 ADB 上的所有开发板（--all-boards）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>nothing to write: no partition selected</source>
+        <translation>没有要写入的内容：未选择分区</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>upgrade_tool not found: set its path in Preferences</source>
+        <translation>找不到 upgrade_tool：请在首选项中设置其路径</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb not found: set its path in Preferences</source>
+        <translation>找不到 adb：请在首选项中设置其路径</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</source>
+        <translation>闪存布局未知：请传入 --layout，或在开发板正常运行时先运行一次 su-fw status；Node 镜像自带布局</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>no tool runner</source>
+        <translation>没有工具运行器</translation>
+    </message>
+    <message>
+        <location line="+76"/>
+        <source>Dry run: the selection, the remembered ports and the plan; no reboot, no write</source>
+        <translation>试运行：仅显示所选开发板、记住的端口和刷写计划；不重启、不写入</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 (%2 bytes)</source>
+        <translation>%1（%2 字节）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Fleet: every board adb lists (--all-boards); writing %1 on up to %2 at once</source>
+        <translation>批量：adb 列出的所有开发板（--all-boards）；写入 %1，最多同时 %2 块</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Fleet: every board adb lists (--all-boards); writing %1 on all of them at once</source>
+        <translation>批量：adb 列出的所有开发板（--all-boards）；写入 %1，全部同时进行</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Fleet: %1 boards (%2); writing %3 on up to %4 at once</source>
+        <translation>批量：%1 块开发板（%2）；写入 %3，最多同时 %4 块</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>not touched: %1</source>
+        <translation>未改动：%1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <location line="+39"/>
+        <source>cancelled before any board was touched</source>
+        <translation>已在改动任何开发板之前取消</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>adb could not be run: %1</source>
+        <translation>无法运行 adb：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+536"/>
+        <source>adb devices timed out</source>
+        <translation>adb devices 超时</translation>
+    </message>
+    <message>
+        <location line="-524"/>
+        <source>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</source>
+        <translation>adb 列出的 %1 处于“%2”状态：未选择（--all-boards 只选择状态为 &quot;device&quot; 的开发板）</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>not on ADB: %1</source>
+        <translation>不在 ADB 上：%1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>no selected board is on ADB (attached: %1)</source>
+        <translation>所选开发板都不在 ADB 上（已连接：%1）</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>cancelled before the mapping; not touched</source>
+        <translation>在映射之前已取消；未改动</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cancelled before any board was rebooted</source>
+        <translation>已在重启任何开发板之前取消</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>upgrade_tool LD: 1 device</source>
+        <translation>upgrade_tool LD：1 个设备</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>upgrade_tool LD: %1 devices</source>
+        <translation>upgrade_tool LD：%1 个设备</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>adb lists %1 devices but the USB bus shows %2 Rockchip ADB gadgets: a non-Rockchip ADB device is attached; name the boards with --serials</source>
+        <translation>adb 列出了 %1 个设备，但 USB 总线上只有 %2 个 Rockchip ADB 设备：连接了非 Rockchip 的 ADB 设备；请用 --serials 指定开发板</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the USB enumeration shows no Rockchip ADB device although adb lists boards: port mapping impossible (driver?)</source>
+        <translation>adb 列出了开发板，但 USB 枚举中没有 Rockchip ADB 设备：无法进行端口映射（驱动问题？）</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2</source>
+        <translation>端口 %1 上的 Rockchip 设备处于下载模式，但 upgrade_tool LD 没有列出它：%2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such device: port mapping impossible (driver?)</source>
+        <translation>upgrade_tool LD 列出了处于下载模式的 LocationID %1，但 USB 枚举中没有对应的设备：无法进行端口映射（驱动问题？）</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>a rockusb device is already in %1 mode (LocationID %2) that no selected board accounts for; reset it with `%3` or replug it, then run again</source>
+        <translation>已有一个 rockusb 设备处于 %1 模式（LocationID %2），不属于任何所选开发板；请用 `%3` 复位它或重新插拔，然后再运行</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>a rockusb device is already in %1 mode on port %2 (LocationID %3) that no selected board accounts for; reset it with `%4` or replug it, then run again</source>
+        <translation>端口 %2 上已有一个 rockusb 设备处于 %1 模式（LocationID %3），不属于任何所选开发板；请用 `%4` 复位它或重新插拔，然后再运行</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 rockusb devices are already in download mode (LocationIDs %2) that no selected board accounts for; reset them with %3 or replug them, then run again</source>
+        <translation>已有 %1 个 rockusb 设备处于下载模式（LocationID %2），不属于任何所选开发板；请用 %3 复位它们或重新插拔，然后再运行</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>on ADB; expected port unknown (first run)</source>
+        <translation>在 ADB 上；预期端口未知（首次运行）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>on ADB; expected port %1 (remembered)</source>
+        <translation>在 ADB 上；预期端口 %1（已记住）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>foreign %1 device, LocationID %2: not part of the fleet; reset it with `%3` or replug it</source>
+        <translation>外来的 %1 设备，LocationID %2：不属于本批开发板；请用 `%3` 复位它或重新插拔</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>foreign %1 device on port %2, LocationID %3: not part of the fleet; reset it with `%4` or replug it</source>
+        <translation>端口 %2 上外来的 %1 设备，LocationID %3：不属于本批开发板；请用 `%4` 复位它或重新插拔</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>the image of partition %1 is missing: %2</source>
+        <translation>分区 %1 的镜像缺失：%2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 is not in the board&apos;s partition layout</source>
+        <translation>%1 不在开发板的分区布局中</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</source>
+        <translation>%1（%2 字节）超出分区 %3 的大小（%4 字节）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>partition %1 does not start on a 512-byte sector (offset %2)</source>
+        <translation>分区 %1 的起始位置未对齐 512 字节扇区（偏移 %2）</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>%1 (%2 bytes, sector %3, %4 sectors)</source>
+        <translation>%1（%2 字节，扇区 %3，共 %4 个扇区）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Plan: write %1 on %2 boards, up to %3 at once</source>
+        <translation>计划：在 %2 块开发板上写入 %1，最多同时 %3 块</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <location line="+305"/>
+        <source>cancelled before its reboot; not touched</source>
+        <translation>在重启之前已取消；未改动</translation>
+    </message>
+    <message>
+        <location line="-291"/>
+        <source>board running %1, rebooting it into Loader mode</source>
+        <translation>开发板运行 %1，正在将其重启到 Loader 模式</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>an unknown kernel</source>
+        <translation>未知内核</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>adb timed out</source>
+        <translation>adb 超时</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>exit code %1</source>
+        <translation>退出码 %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>adb could not read board %1: %2</source>
+        <translation>adb 无法读取开发板 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>flash layout of the board: %1</source>
+        <translation>开发板的闪存布局：%1</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>no flash layout in its /proc/cmdline: not a board this plan can place its rows on; name it with --serials to write it anyway</source>
+        <translation>其 /proc/cmdline 中没有闪存布局：本计划无法在这块开发板上安排分区；如仍要写入，请用 --serials 指定它</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>flash layout differs from the plan&apos;s (board: %1; plan: %2): not rebooted</source>
+        <translation>闪存布局与计划不同（开发板：%1；计划：%2）：未重启</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>not rebooted: %1</source>
+        <translation>未重启：%1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <location line="+32"/>
+        <source>while rebooting %1: %2</source>
+        <translation>重启 %1 时：%2</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>entered MASKROM instead of Loader mode: not flashed in a fleet; flash it alone with `su-fw flash-soc --serial %1` only once `upgrade_tool LD` lists it as the ONLY device in download mode (MASKROM mode writes the whole image with UF: idblock, uboot, env and meta included)</source>
+        <translation>进入了 MASKROM 模式而不是 Loader 模式：不参与批量刷写；只有当 `upgrade_tool LD` 列出它是唯一处于下载模式的设备时，才可单独用 `su-fw flash-soc --serial %1` 刷写（MASKROM 模式用 UF 写入整个镜像，包括 idblock、uboot、env 和 meta）</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>reboot loader had no effect: board %1 is still on ADB after %2 s</source>
+        <translation>reboot loader 无效：%2 秒后开发板 %1 仍在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>board %1 left ADB (port %2) but no Loader device appeared within %3 s; it may be rebooting: check it by hand</source>
+        <translation>开发板 %1 已离开 ADB（端口 %2），但 %3 秒内没有出现 Loader 设备；它可能正在重启：请手动检查</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>a Loader device appeared on port %1 but upgrade_tool LD never listed it within %2 s: %3; board %4 is in Loader mode and must be power-cycled by hand</source>
+        <translation>端口 %1 上出现了 Loader 设备，但 upgrade_tool LD 在 %2 秒内一直没有列出它：%3；开发板 %4 处于 Loader 模式，必须手动断电重启</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>a Loader device on port %1 still lists an ADB device after %2 s: cannot tell whose it is</source>
+        <translation>%2 秒后端口 %1 上的 Loader 设备仍列出 ADB 设备：无法判断它属于哪块开发板</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool LD lists LocationID %1 but no download-mode device appeared on the bus within %2 s: cannot tell whose it is; board %3 is still on ADB</source>
+        <translation>upgrade_tool LD 列出了 LocationID %1，但 %2 秒内总线上没有出现下载模式设备：无法判断它属于哪块开发板；开发板 %3 仍在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>while rebooting %1: adb could not confirm that the board left ADB (%2)</source>
+        <translation>重启 %1 时：adb 无法确认该开发板已离开 ADB（%2）</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>board %1 is still on ADB although a Loader device appeared on port %2: not this board</source>
+        <translation>虽然端口 %2 上出现了 Loader 设备，但开发板 %1 仍在 ADB 上：不是这块开发板</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>in Loader mode on port %1, LocationID %2 (%3 s)</source>
+        <translation>在端口 %1 上处于 Loader 模式，LocationID %2（%3 秒）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source> (moved: expected %1)</source>
+        <translation>（已移动：预期 %1）</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>mapping stopped: resetting the board back to ADB</source>
+        <translation>映射已停止：正在将开发板复位回 ADB</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <location line="+335"/>
+        <location line="+483"/>
+        <source>cancelled before its write started; reset back to ADB</source>
+        <translation>在开始写入之前已取消；已复位回 ADB</translation>
+    </message>
+    <message>
+        <location line="-817"/>
+        <location line="+335"/>
+        <location line="+483"/>
+        <source>cancelled: resetting the board back to ADB</source>
+        <translation>已取消：正在将开发板复位回 ADB</translation>
+    </message>
+    <message>
+        <location line="-769"/>
+        <source>reconciled: %1 devices in download mode, every one a mapped board</source>
+        <translation>已核对：%1 个设备处于下载模式，均为已映射的开发板</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>reconciled: %1 devices in download mode: %2 mapped boards, %3 in MASKROM mode (not written)</source>
+        <translation>已核对：%1 个设备处于下载模式：%2 块已映射的开发板，%3 块处于 MASKROM 模式（不写入）</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>mapping done: %1 of %2 boards in Loader mode; writing starts (up to %3 at once)</source>
+        <translation>映射完成：%2 块开发板中有 %1 块处于 Loader 模式；开始写入（最多同时 %3 块）</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>on port %1 (LocationID %2)</source>
+        <translation>在端口 %1 上（LocationID %2）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>on port %1 (no LocationID yet)</source>
+        <translation>在端口 %1 上（尚无 LocationID）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>(LocationID %1)</source>
+        <translation>（LocationID %1）</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+851"/>
+        <source>; it is in Loader mode now (port %1, LocationID %2)</source>
+        <translation>；它现在处于 Loader 模式（端口 %1，LocationID %2）</translation>
+    </message>
+    <message>
+        <location line="-850"/>
+        <location line="+857"/>
+        <source>; it is in Loader mode now (port %1)</source>
+        <translation>；它现在处于 Loader 模式（端口 %1）</translation>
+    </message>
+    <message>
+        <location line="-853"/>
+        <source>a Loader device appeared late %1 and belongs to no mapped board</source>
+        <translation>有 Loader 设备迟到出现 %1，不属于任何已映射的开发板</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>reset back to ADB; nothing was written</source>
+        <translation>已复位回 ADB；未写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`</source>
+        <translation>%1；upgrade_tool RD 未能复位它（%2）：请用 `%3` 手动复位</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+514"/>
+        <source>no output</source>
+        <translation>无输出</translation>
+    </message>
+    <message>
+        <location line="-412"/>
+        <location line="+409"/>
+        <source>timed out</source>
+        <translation>超时</translation>
+    </message>
+    <message>
+        <location line="-330"/>
+        <location line="+294"/>
+        <source>an ADB device</source>
+        <translation>一个 ADB 设备</translation>
+    </message>
+    <message>
+        <location line="-294"/>
+        <location line="+294"/>
+        <source>nothing</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="-287"/>
+        <source>LD lists LocationID %1</source>
+        <translation>LD 列出了 LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LD lists LocationID %1 in MASKROM mode</source>
+        <translation>LD 列出了处于 MASKROM 模式的 LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LD does not list LocationID %1</source>
+        <translation>LD 没有列出 LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>LD not run: %1 writes in flight</source>
+        <translation>未运行 LD：%1 个写入正在进行</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>checked: LD lists LocationID %1 in Loader mode; port %2 shows %3</source>
+        <translation>已检查：LD 列出了处于 Loader 模式的 LocationID %1；端口 %2 显示 %3</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>checked: port %1 shows %2 (%3)</source>
+        <translation>已检查：端口 %1 显示 %2（%3）</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>port %1 shows %2; %3</source>
+        <translation>端口 %1 显示 %2；%3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>port %1 showed %2; %3</source>
+        <translation>端口 %1 曾显示 %2；%3</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>left Loader mode before %1 was written (%2): nothing written for it</source>
+        <translation>在写入 %1 之前已离开 Loader 模式（%2）：未向它写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>partitions written, but upgrade_tool LD could not run before the reset: %1; reset it by hand with `%2`</source>
+        <translation>分区已写入，但复位前无法运行 upgrade_tool LD：%1；请用 `%2` 手动复位</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>upgrade_tool LD could not run before %1: %2; nothing written for it</source>
+        <translation>写入 %1 之前无法运行 upgrade_tool LD：%2；未向它写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>partitions written, but the board left Loader mode before its reset (%1): not reset by the fleet; check it by hand</source>
+        <translation>分区已写入，但开发板在复位前离开了 Loader 模式（%1）：批量刷写未复位它；请手动检查</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Writing %1 (%2 of %3)</source>
+        <translation>正在写入 %1（第 %2 个，共 %3 个）</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>cannot create the working folder %1: nothing written for it</source>
+        <translation>无法创建工作文件夹 %1：未向它写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>writing %1 (%2 of %3): %4 (%5 bytes) at sector %6, partition of %7 sectors</source>
+        <translation>正在写入 %1（第 %2 个，共 %3 个）：%4（%5 字节），起始扇区 %6，分区共 %7 个扇区</translation>
+    </message>
+    <message>
+        <location line="+80"/>
+        <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
+        <translation>upgrade_tool 已 %1 分钟没有输出；它仍保持运行，因为中途停止需要通过 MASKROM 恢复（如果它确实卡死，请手动结束 upgrade_tool 进程）</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>writing %1 failed: %2</source>
+        <translation>写入 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output (exit code %1)</source>
+        <translation>无输出（退出码 %1）</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 written: %2 bytes in %3 s</source>
+        <translation>%1 已写入：%2 字节，用时 %3 秒</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</source>
+        <translation>写入 %1 失败：No found specific rockusb device!（LocationID %2 已不存在）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+334"/>
+        <source>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
+        <translation>端口 %1 显示 %2：重试之前请先用 `upgrade_tool LD` 找到它的 LocationID，并用 -s 指定地址</translation>
+    </message>
+    <message>
+        <location line="-322"/>
+        <source>partitions written; resetting the board</source>
+        <translation>分区已写入；正在复位开发板</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>partitions written, but upgrade_tool RD did not reset the board (%1); replug it</source>
+        <translation>分区已写入，但 upgrade_tool RD 未能复位开发板（%1）；请重新插拔开发板</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>ADB not waited for (--no-wait)</source>
+        <translation>未等待 ADB（--no-wait）</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>waiting for ADB (up to %1 s)</source>
+        <translation>正在等待 ADB（最多 %1 秒）</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>partitions written and the board reset, but ADB did not come back within %1 s; check the serial console</source>
+        <translation>分区已写入且开发板已复位，但 ADB 在 %1 秒内没有恢复；请检查串口控制台</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>back on ADB</source>
+        <translation>已重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>; rfmcu: %1</source>
+        <translation>；rfmcu：%1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>partitions written; the board left Loader mode before its reset (%1) and came back on ADB by itself</source>
+        <translation>分区已写入；开发板在复位前离开了 Loader 模式（%1），并已自行重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>still waiting for %1 write(s) to finish; the writes are never interrupted</source>
+        <translation>仍在等待 %1 个写入完成；写入过程绝不会被中断</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cancel: the boards not started are reset and skipped; %1 write(s) in progress finish first (every row and the reset)</source>
+        <translation>取消：尚未开始的开发板将被复位并跳过；%1 个正在进行的写入会先完成（全部分区以及复位）</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cancel: the boards not started are reset and skipped</source>
+        <translation>取消：尚未开始的开发板将被复位并跳过</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>the ADB wait was cancelled; the partitions were written</source>
+        <translation>ADB 等待已取消；分区已写入</translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>the end-of-run check could not run: %1</source>
+        <translation>结束时的检查无法运行：%1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>a device in download mode on port %1 that upgrade_tool LD does not list belongs to no board of the run</source>
+        <translation>端口 %1 上有一个 upgrade_tool LD 未列出的下载模式设备，不属于本次运行的任何开发板</translation>
+    </message>
+    <message>
+        <location line="+175"/>
+        <source>port mapping not available on this platform</source>
+        <translation>本平台不支持端口映射</translation>
+    </message>
+</context>
+<context>
+    <name>FleetReport</name>
+    <message>
+        <location filename="../src/firmware/FleetReport.cpp" line="+90"/>
+        <source>; 1 Loader device left unattributed</source>
+        <translation>；1 个 Loader 设备未能归属</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>; %1 Loader devices left unattributed</source>
+        <translation>；%1 个 Loader 设备未能归属</translation>
+    </message>
+    <message>
+        <location line="+98"/>
+        <source>; nothing was written</source>
+        <translation>；未写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>; 1 board reset back to ADB</source>
+        <translation>；1 块开发板已复位回 ADB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>; %1 boards reset back to ADB</source>
+        <translation>；%1 块开发板已复位回 ADB</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>dry run: %1 of %2 boards ready</source>
+        <translation>试运行：%2 块开发板中有 %1 块就绪</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+15"/>
+        <source>; %1 skipped</source>
+        <translation>；%1 块已跳过</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>%1 of %2 boards flashed in %3 s (mapping %4 s, writing %5 s)</source>
+        <translation>%2 块开发板中有 %1 块刷写完成，用时 %3 秒（映射 %4 秒，写入 %5 秒）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>; %1 not back on ADB</source>
+        <translation>；%1 块未重新出现在 ADB 上</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>; %1 failed</source>
+        <translation>；%1 块失败</translation>
     </message>
 </context>
 <context>
@@ -4320,7 +5146,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+198"/>
+        <location line="+259"/>
         <source>no firmware image selected</source>
         <translation>未选择固件镜像</translation>
     </message>
@@ -5148,7 +5974,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+245"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+234"/>
         <source>  could not run: %1</source>
         <translation>  无法运行：%1</translation>
     </message>
@@ -6774,8 +7600,8 @@ You will be asked for it when connecting.</source>
 <context>
     <name>UsbProbe</name>
     <message>
-        <location filename="../src/firmware/UsbProbe.cpp" line="+87"/>
-        <location line="+56"/>
+        <location filename="../src/firmware/UsbProbe.cpp" line="+116"/>
+        <location line="+58"/>
         <source>Unknown device</source>
         <translation>未知设备</translation>
     </message>
@@ -6793,6 +7619,21 @@ You will be asked for it when connecting.</source>
         <location line="+9"/>
         <source>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</source>
         <translation>%1：已绑定驱动程序 %2，但 adb 和 upgrade_tool 都没有列出该开发板。请重新插拔数据线；如果仍然看不到，请重新安装 Rockchip USB 驱动（DriverAssistant）。</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>USB bus: no Rockchip device</source>
+        <translation>USB 总线：没有 Rockchip 设备</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>USB bus: 1 Rockchip device (%1 ADB, %2 in download mode)</source>
+        <translation>USB 总线：1 个 Rockchip 设备（%1 个 ADB，%2 个处于下载模式）</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>USB bus: %1 Rockchip devices (%2 ADB, %3 in download mode)</source>
+        <translation>USB 总线：%1 个 Rockchip 设备（%2 个 ADB，%3 个处于下载模式）</translation>
     </message>
 </context>
 <context>

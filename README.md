@@ -527,6 +527,7 @@ pauses.
 | `su-fw partitions [--image F] [--layout M \| --serial S]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; the board is not touched |
 | `su-fw pull [--target T] [--remote-folder F] [--cache D] [--identity K] [--password-env VAR \| --password-stdin] [--accept-host-key]` | Pull `update.img` from the build machine (skipped when unchanged, the previous one kept) |
 | `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question |
+| `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*) |
 | `su-fw mcu-info [--serial S]` | The running CC1310's version and role |
 | `su-fw mcu-update --package P --role rx\|tx [--serial S]` | Update the CC1310 (the role is never guessed) |
 | `su-fw mcu-set-role --role rx\|tx [--serial S]` | Set the CC1310's role |
@@ -583,6 +584,66 @@ su-fw pull-flash --target builder@10.0.10.71 --password-env SU_PASSWORD --accept
 `su-fw pull ...`, then `su-fw flash-soc --partitions boot,rootfs`. su-fw prints English only (its
 output is read by scripts); `QT_LOGGING_RULES="buildai.*=true"` adds the internal diagnostics on
 stderr.
+
+#### Flashing several boards (`--serials` / `--all-boards`, v0.7.0)
+
+`su-fw flash-soc --serials F=c4130950110960e0,G=5a33c81a6e996266 --partitions rootfs` (or
+`--all-boards`: every board `adb devices` lists as `device`) flashes a bench of Node boards in about
+the time of one. ADB cannot tell which USB port a serial is on, so the port is **learned by
+difference, one board at a time**: a picture of the bus (the Rockchip devices Windows enumerates and
+`upgrade_tool LD`'s list), `adb -s <serial> reboot loader`, and new pictures until exactly that
+board's ADB device vanished and one Loader device with one new LocationID appeared on the same
+port - anything else (two boards changing at once, a Loader device on another port, a device nobody
+can name) stops the run before a byte is written. Then the named partitions are written on up to
+`--max-parallel` boards at once (default: all), every `upgrade_tool` command addressed with
+`-s <LocationID>` and every board re-checked before each write; each board is reset with
+`upgrade_tool -s <LocationID> RD`, waited for on ADB, and its kernel, uptime and `rfmcu status` are
+printed. The rules: only `--partitions` (`--all` is refused: idblock, uboot, env and meta are
+written only when named, with a warning line); a board that does not show up in Loader mode on its
+port in time is skipped and reported, never guessed; a Loader / MASKROM device on the bus that no
+selected board accounts for refuses the run (the message names the `upgrade_tool -s <n> RD` that
+clears it); `--all-boards` refuses next to a non-Rockchip ADB device (a phone) and skips a board
+whose `/proc/cmdline` reports no flash layout. A write is never cut: Ctrl+C or `--timeout` skips and
+resets the boards not started, while a board being written finishes all its partitions and its reset
+(exit 5). The learned ports are remembered per board (`--dry-run` shows them as "expected port", a
+real run notes a board that moved); they never address a board.
+
+**Exit 0 means every selected board is back on ADB** (with `--no-wait`: reset). `1` a board was
+skipped, failed or did not come back (or the run stopped / could not start), `2` usage, `3` no
+selected board is on ADB, `5` `--timeout` / Ctrl+C. The output has one line per board and event
+(`HH:MM:SS [F c4130950110960e0] in Loader mode on port 6&3A944CE5&0&1, LocationID 112 (1.2 s)`),
+progress every 10 % per board, and last a table (board, serial, port, LocationID, result, mapping /
+writing / total seconds, detail). With `--json` a board's lines carry `board`, `tag` and `stage`, each
+board ends with a `step` object (`result`, `seconds`, `written`, `retry`, `adbBack`), and the `done`
+object carries the whole record:
+
+```json
+{"time":"...","step":"flash-soc","event":"done","text":"2 of 2 boards flashed in 41.0 s (mapping 3.1 s, writing 29.8 s)","ok":true,"exit":0,
+ "fleet":true,"dryRun":false,"image":"C:\\...\\update.img","partitions":["rootfs"],"maxParallel":0,"seconds":41.0,"mappingSeconds":3.1,
+ "writingSeconds":29.8,"stop":"","unattributed":[],"summary":{"selected":2,"done":2,"notBack":0,"failed":0,"skipped":0},
+ "boards":[{"tag":"F","serial":"c4130950110960e0","adb":"device","expectedPort":"","port":"6&3A944CE5&0&1","loader":"112","stage":"finished",
+            "result":"done","ok":true,"seconds":38.2,"mappingSeconds":1.2,"writingSeconds":29.4,"detail":"","written":["rootfs"],"retry":[],
+            "adbBack":true,"leftInLoader":false,"kernel":"5.10.209+","uptime":"up 0 min","boardInfo":"Linux version 5.10.209+ ...",
+            "rfmcu":"pid=412 uart=owned mcu=alive"}, ...]}
+```
+
+**Agent recipe**: look first, then two boards, then all of them; read `done.boards[]`, and tell
+whoever else uses the boards when you start and when you are done.
+
+```powershell
+su-fw flash-soc --all-boards --partitions rootfs --image update.img --dry-run --json   # no reboot, no write
+su-fw flash-soc --serials F=c4130950110960e0,G=5a33c81a6e996266 --partitions rootfs --image update.img --yes --json
+su-fw flash-soc --all-boards --partitions rootfs --image update.img --yes --json --log fleet.log
+```
+
+**A board left in Loader mode** (a write that failed - after a hub brown-out several at once) is
+reported with `leftInLoader` and the exact commands that finish it, addressed to it alone: run the
+`retry` lines of its board object (the log's `  retry: ...` lines) as they are - one
+`upgrade_tool -s <LocationID> WL <sector> <count> <file>` per missing partition, then
+`upgrade_tool -s <LocationID> RD`. Use `su-fw flash-soc --serial X` for it **only once
+`upgrade_tool LD` lists X as the only device in download mode**: the single-board flow writes without
+`-s` and takes any Loader device. When the LocationID is gone (`No found specific rockusb device!`)
+the board's line says so: find it with `upgrade_tool LD` first and address it with `-s`.
 
 ### Quick commands
 

@@ -267,6 +267,37 @@ ToolInvocation* RockchipTool::resetDevice()
     return m_runner->run(m_tool, {QStringLiteral("RD")}, options);
 }
 
+ToolInvocation* RockchipTool::writeLbaOn(const QString& locationId, quint64 startSector, quint64 sectorCount,
+                                         const QString& file, const QString& workingDirectory)
+{
+    // The address is part of the call: an empty one is a programming error, and a release build
+    // writes nothing rather than an unaddressed WL that would take any device in download mode.
+    Q_ASSERT(!locationId.isEmpty());
+    if (locationId.isEmpty()) {
+        return nullptr;
+    }
+    const QString count = sectorCount == 0 ? QStringLiteral("-1") : QString::number(sectorCount);
+    ToolRunner::Options options = imageCommandOptions(file, 0);   // no timeout: a WL is never cut
+    if (!workingDirectory.isEmpty()) {
+        options.workingDirectory = workingDirectory;
+    }
+    return m_runner->run(m_tool,
+                         {QStringLiteral("-s"), locationId, QStringLiteral("WL"), QString::number(startSector), count,
+                          QDir::toNativeSeparators(file)},
+                         options);
+}
+
+ToolInvocation* RockchipTool::resetDeviceOn(const QString& locationId)
+{
+    Q_ASSERT(!locationId.isEmpty());
+    if (locationId.isEmpty()) {
+        return nullptr;
+    }
+    ToolRunner::Options options;
+    options.timeoutMs = m_timeoutMs;   // a timed-out RD is a failed reset, never a cut write
+    return m_runner->run(m_tool, {QStringLiteral("-s"), locationId, QStringLiteral("RD")}, options);
+}
+
 QList<RockusbDevice> RockchipTool::parseDeviceList(const QString& output)
 {
     QList<RockusbDevice> devices;
@@ -319,6 +350,36 @@ bool RockchipTool::reportsSuccess(const QString& output)
 {
     // usb_update.sh: grep -qi 'Upgrade firmware ok'
     return output.contains(QLatin1String("Upgrade firmware ok"), Qt::CaseInsensitive);
+}
+
+std::optional<RockusbDevice> RockchipTool::deviceAt(const QList<RockusbDevice>& devices, const QString& locationId)
+{
+    for (const RockusbDevice& device : devices) {
+        if (!locationId.isEmpty() && device.locationId == locationId) {
+            return device;
+        }
+    }
+    return std::nullopt;
+}
+
+bool RockchipTool::reportsNoSuchDevice(const QString& output)
+{
+    return output.contains(QLatin1String("No found specific rockusb device"), Qt::CaseInsensitive);
+}
+
+bool RockchipTool::reportsWriteFailure(const QString& output)
+{
+    // "Write LBA failed!", "Error:...->Fail to write lba,...", "Write LBA quit, creating comm object
+    // failed!" (upgrade_tool v2.37). The banner ("please upgrade it to enjoy fast download") has
+    // none of these words; it is cut first all the same.
+    static const QRegularExpression failure(QStringLiteral("\\bfail|\\bquit\\b|\\berror\\b"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    return failure.match(stripBanner(output)).hasMatch();
+}
+
+bool RockchipTool::reportsResetOk(const QString& output)
+{
+    return output.contains(QLatin1String("Reset Device OK"), Qt::CaseInsensitive);
 }
 
 QString RockchipTool::stripBanner(const QString& output)

@@ -505,7 +505,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+317"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+329"/>
         <source>SSH: %1</source>
         <translation>SSH: %1</translation>
     </message>
@@ -550,6 +550,11 @@
         <translation>SoC flasher: %1</translation>
     </message>
     <message>
+        <location line="+34"/>
+        <source>Fleet flasher: %1</source>
+        <translation>Fleet flasher: %1</translation>
+    </message>
+    <message>
         <location line="+6"/>
         <source>MCU link: board %1</source>
         <translation>MCU link: board %1</translation>
@@ -575,7 +580,7 @@
         <translation>Updating MCU: %1 / %2 bytes (%3 %)</translation>
     </message>
     <message>
-        <location line="+147"/>
+        <location line="+149"/>
         <source>file not found</source>
         <translation>file not found</translation>
     </message>
@@ -645,18 +650,23 @@
         <translation>Pull &amp; Flash</translation>
     </message>
     <message>
+        <location line="+3"/>
+        <source>Flash fleet</source>
+        <translation>Flash fleet</translation>
+    </message>
+    <message>
         <location line="+7"/>
         <source>%1 done: %2</source>
         <translation>%1 done: %2</translation>
     </message>
     <message>
         <location line="+0"/>
-        <location line="+541"/>
+        <location line="+546"/>
         <source>%1 failed: %2</source>
         <translation>%1 failed: %2</translation>
     </message>
     <message>
-        <location line="-497"/>
+        <location line="-502"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>the SSH profile of the build machine no longer exists</translation>
     </message>
@@ -711,7 +721,7 @@
         <translation>Flash layout of board %1: %2</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+22"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>partition layout unknown: connect the board running once</translation>
     </message>
@@ -731,18 +741,18 @@
         <translation>%1 (%2 bytes) does not fit the partition (%3 bytes)</translation>
     </message>
     <message>
-        <location line="+142"/>
+        <location line="+145"/>
         <source>Busy: %1 is still running</source>
         <translation>Busy: %1 is still running</translation>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+881"/>
+        <location line="+1030"/>
         <source>another firmware operation is running (%1)</source>
         <translation>another firmware operation is running (%1)</translation>
     </message>
     <message>
-        <location line="-875"/>
+        <location line="-1024"/>
         <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
         <translation>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</translation>
     </message>
@@ -793,16 +803,16 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+354"/>
+        <location line="+485"/>
         <location line="+36"/>
-        <location line="+205"/>
+        <location line="+223"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-616"/>
+        <location line="-765"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -819,11 +829,12 @@
     </message>
     <message>
         <location line="+42"/>
+        <location line="+173"/>
         <source>no image: pull one or choose a local image first</source>
         <translation>no image: pull one or choose a local image first</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="-160"/>
         <location line="+26"/>
         <source>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</source>
         <translation>Partitions: every partition of the image (Loader mode writes them one by one; MASKROM mode writes the whole image)</translation>
@@ -894,7 +905,62 @@
         <translation>Sent &quot;reboot loader&quot; through %1</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+28"/>
+        <source>no plan</source>
+        <translation>no plan</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the fleet needs the image&apos;s partition list: %1</source>
+        <translation>the fleet needs the image&apos;s partition list: %1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</source>
+        <translation>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>a fleet writes named partitions only: --partitions NAMES; every partition would include idblock, uboot, env and meta</source>
+        <translation>a fleet writes named partitions only: --partitions NAMES; every partition would include idblock, uboot, env and meta</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>%1 cannot be written: %2; nothing was written</source>
+        <translation>%1 cannot be written: %2; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>none of the named partitions (%1) is in %2; nothing was written</source>
+        <translation>none of the named partitions (%1) is in %2; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</source>
+        <translation>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>boards written at once must be 0 (all of them) to 64, not %1</source>
+        <translation>boards written at once must be 0 (all of them) to 64, not %1</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Flashing fleet: starting...</source>
+        <translation>Flashing fleet: starting...</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>the fleet flasher did not start</source>
+        <translation>the fleet flasher did not start</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Flashing fleet: %1 of %2 boards done, %3 writing</source>
+        <translation>Flashing fleet: %1 of %2 boards done, %3 writing</translation>
+    </message>
+    <message>
+        <location line="+29"/>
         <source>choose a valid .pkg package first</source>
         <translation>choose a valid .pkg package first</translation>
     </message>
@@ -1016,12 +1082,13 @@
         <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+28"/>
         <source>Cannot cancel while upgrade_tool writes the flash</source>
         <translation>Cannot cancel while upgrade_tool writes the flash</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="-6"/>
+        <location line="+12"/>
         <source>Cancelling %1</source>
         <translation>Cancelling %1</translation>
     </message>
@@ -1605,6 +1672,765 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <location line="+5"/>
         <source>Log saved to %1</source>
         <translation>Log saved to %1</translation>
+    </message>
+</context>
+<context>
+    <name>FleetFlasher</name>
+    <message>
+        <location filename="../src/firmware/FleetFlasher.cpp" line="+132"/>
+        <source>internal: unaddressed write refused</source>
+        <translation>internal: unaddressed write refused</translation>
+    </message>
+    <message>
+        <location line="+121"/>
+        <source>no change on the USB bus yet: the board is still on ADB</source>
+        <translation>no change on the USB bus yet: the board is still on ADB</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>two boards changed at once: ADB instances gone on ports %1; Loader devices appeared on ports %2; new LocationIDs %3</source>
+        <translation>two boards changed at once: ADB instances gone on ports %1; Loader devices appeared on ports %2; new LocationIDs %3</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>a Loader device on port %1 which still lists an ADB device</source>
+        <translation>a Loader device on port %1 which still lists an ADB device</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>no LocationID yet</source>
+        <translation>no LocationID yet</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LocationID %1</source>
+        <translation>LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>a device entered download mode on port %1 (%2) while the board is still on ADB: not this board</source>
+        <translation>a device entered download mode on port %1 (%2) while the board is still on ADB: not this board</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>upgrade_tool LD lists a new LocationID %1 but the bus shows no new download-mode device yet</source>
+        <translation>upgrade_tool LD lists a new LocationID %1 but the bus shows no new download-mode device yet</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>the board left port %1 but a Loader device appeared on port %2</source>
+        <translation>the board left port %1 but a Loader device appeared on port %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>the board left ADB (port %1), waiting for its Loader device</source>
+        <translation>the board left ADB (port %1), waiting for its Loader device</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Loader device on port %1, waiting for upgrade_tool LD to list it</source>
+        <translation>Loader device on port %1, waiting for upgrade_tool LD to list it</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>in MASKROM mode on port %1, LocationID %2</source>
+        <translation>in MASKROM mode on port %1, LocationID %2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>in Loader mode on port %1, LocationID %2</source>
+        <translation>in Loader mode on port %1, LocationID %2</translation>
+    </message>
+    <message>
+        <location line="+229"/>
+        <source>  could not run: %1</source>
+        <translation>  could not run: %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>  timed out</source>
+        <translation>  timed out</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>  exit code %1</source>
+        <translation>  exit code %1</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <location line="+428"/>
+        <source>upgrade_tool could not be run: %1</source>
+        <translation>upgrade_tool could not be run: %1</translation>
+    </message>
+    <message>
+        <location line="-426"/>
+        <location line="+430"/>
+        <source>upgrade_tool LD timed out</source>
+        <translation>upgrade_tool LD timed out</translation>
+    </message>
+    <message>
+        <location line="-393"/>
+        <source>left in Loader mode on port %1, LocationID %2: nothing else is written to it. Retry by hand, addressed: one `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;` per missing row, then `upgrade_tool -s %2 RD` (the lines follow); `su-fw flash-soc --serial %3` only once `upgrade_tool LD` lists it as the ONLY device in download mode (the single-board flow writes without -s and takes any Loader device)</source>
+        <translation>left in Loader mode on port %1, LocationID %2: nothing else is written to it. Retry by hand, addressed: one `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;` per missing row, then `upgrade_tool -s %2 RD` (the lines follow); `su-fw flash-soc --serial %3` only once `upgrade_tool LD` lists it as the ONLY device in download mode (the single-board flow writes without -s and takes any Loader device)</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>LocationID %1 is in %2 mode and belongs to no mapped board: reset it with `%3`</source>
+        <translation>LocationID %1 is in %2 mode and belongs to no mapped board: reset it with `%3`</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>LocationID %1 on port %2 is in %3 mode and belongs to no mapped board: reset it with `%4`</source>
+        <translation>LocationID %1 on port %2 is in %3 mode and belongs to no mapped board: reset it with `%4`</translation>
+    </message>
+    <message>
+        <location line="+56"/>
+        <source>done in %1 s (mapping %2 s, writing %3 s)</source>
+        <translation>done in %1 s (mapping %2 s, writing %3 s)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1; skipped</source>
+        <translation>%1; skipped</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</source>
+        <translation>no board selected: name the boards (--serials) or take every board on ADB (--all-boards)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>nothing to write: no partition selected</source>
+        <translation>nothing to write: no partition selected</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>upgrade_tool not found: set its path in Preferences</source>
+        <translation>upgrade_tool not found: set its path in Preferences</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>adb not found: set its path in Preferences</source>
+        <translation>adb not found: set its path in Preferences</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</source>
+        <translation>flash layout unknown: pass --layout, or run su-fw status once with a board running; the Node image carries its own</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>no tool runner</source>
+        <translation>no tool runner</translation>
+    </message>
+    <message>
+        <location line="+76"/>
+        <source>Dry run: the selection, the remembered ports and the plan; no reboot, no write</source>
+        <translation>Dry run: the selection, the remembered ports and the plan; no reboot, no write</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 (%2 bytes)</source>
+        <translation>%1 (%2 bytes)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Fleet: every board adb lists (--all-boards); writing %1 on up to %2 at once</source>
+        <translation>Fleet: every board adb lists (--all-boards); writing %1 on up to %2 at once</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Fleet: every board adb lists (--all-boards); writing %1 on all of them at once</source>
+        <translation>Fleet: every board adb lists (--all-boards); writing %1 on all of them at once</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Fleet: %1 boards (%2); writing %3 on up to %4 at once</source>
+        <translation>Fleet: %1 boards (%2); writing %3 on up to %4 at once</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>not touched: %1</source>
+        <translation>not touched: %1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <location line="+39"/>
+        <source>cancelled before any board was touched</source>
+        <translation>cancelled before any board was touched</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>adb could not be run: %1</source>
+        <translation>adb could not be run: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+536"/>
+        <source>adb devices timed out</source>
+        <translation>adb devices timed out</translation>
+    </message>
+    <message>
+        <location line="-524"/>
+        <source>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</source>
+        <translation>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>not on ADB: %1</source>
+        <translation>not on ADB: %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>no selected board is on ADB (attached: %1)</source>
+        <translation>no selected board is on ADB (attached: %1)</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>cancelled before the mapping; not touched</source>
+        <translation>cancelled before the mapping; not touched</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cancelled before any board was rebooted</source>
+        <translation>cancelled before any board was rebooted</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>upgrade_tool LD: 1 device</source>
+        <translation>upgrade_tool LD: 1 device</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>upgrade_tool LD: %1 devices</source>
+        <translation>upgrade_tool LD: %1 devices</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>adb lists %1 devices but the USB bus shows %2 Rockchip ADB gadgets: a non-Rockchip ADB device is attached; name the boards with --serials</source>
+        <translation>adb lists %1 devices but the USB bus shows %2 Rockchip ADB gadgets: a non-Rockchip ADB device is attached; name the boards with --serials</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the USB enumeration shows no Rockchip ADB device although adb lists boards: port mapping impossible (driver?)</source>
+        <translation>the USB enumeration shows no Rockchip ADB device although adb lists boards: port mapping impossible (driver?)</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2</source>
+        <translation>a Rockchip device on port %1 is in download mode but upgrade_tool LD does not list it: %2</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such device: port mapping impossible (driver?)</source>
+        <translation>upgrade_tool LD lists LocationID %1 in download mode but the USB enumeration shows no such device: port mapping impossible (driver?)</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>a rockusb device is already in %1 mode (LocationID %2) that no selected board accounts for; reset it with `%3` or replug it, then run again</source>
+        <translation>a rockusb device is already in %1 mode (LocationID %2) that no selected board accounts for; reset it with `%3` or replug it, then run again</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>a rockusb device is already in %1 mode on port %2 (LocationID %3) that no selected board accounts for; reset it with `%4` or replug it, then run again</source>
+        <translation>a rockusb device is already in %1 mode on port %2 (LocationID %3) that no selected board accounts for; reset it with `%4` or replug it, then run again</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 rockusb devices are already in download mode (LocationIDs %2) that no selected board accounts for; reset them with %3 or replug them, then run again</source>
+        <translation>%1 rockusb devices are already in download mode (LocationIDs %2) that no selected board accounts for; reset them with %3 or replug them, then run again</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>on ADB; expected port unknown (first run)</source>
+        <translation>on ADB; expected port unknown (first run)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>on ADB; expected port %1 (remembered)</source>
+        <translation>on ADB; expected port %1 (remembered)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>foreign %1 device, LocationID %2: not part of the fleet; reset it with `%3` or replug it</source>
+        <translation>foreign %1 device, LocationID %2: not part of the fleet; reset it with `%3` or replug it</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>foreign %1 device on port %2, LocationID %3: not part of the fleet; reset it with `%4` or replug it</source>
+        <translation>foreign %1 device on port %2, LocationID %3: not part of the fleet; reset it with `%4` or replug it</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>the image of partition %1 is missing: %2</source>
+        <translation>the image of partition %1 is missing: %2</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 is not in the board&apos;s partition layout</source>
+        <translation>%1 is not in the board&apos;s partition layout</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</source>
+        <translation>%1 (%2 bytes) does not fit partition %3 (%4 bytes)</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>partition %1 does not start on a 512-byte sector (offset %2)</source>
+        <translation>partition %1 does not start on a 512-byte sector (offset %2)</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>%1 (%2 bytes, sector %3, %4 sectors)</source>
+        <translation>%1 (%2 bytes, sector %3, %4 sectors)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Plan: write %1 on %2 boards, up to %3 at once</source>
+        <translation>Plan: write %1 on %2 boards, up to %3 at once</translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <location line="+305"/>
+        <source>cancelled before its reboot; not touched</source>
+        <translation>cancelled before its reboot; not touched</translation>
+    </message>
+    <message>
+        <location line="-291"/>
+        <source>board running %1, rebooting it into Loader mode</source>
+        <translation>board running %1, rebooting it into Loader mode</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>an unknown kernel</source>
+        <translation>an unknown kernel</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>adb timed out</source>
+        <translation>adb timed out</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>exit code %1</source>
+        <translation>exit code %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>adb could not read board %1: %2</source>
+        <translation>adb could not read board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>flash layout of the board: %1</source>
+        <translation>flash layout of the board: %1</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>no flash layout in its /proc/cmdline: not a board this plan can place its rows on; name it with --serials to write it anyway</source>
+        <translation>no flash layout in its /proc/cmdline: not a board this plan can place its rows on; name it with --serials to write it anyway</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>flash layout differs from the plan&apos;s (board: %1; plan: %2): not rebooted</source>
+        <translation>flash layout differs from the plan&apos;s (board: %1; plan: %2): not rebooted</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>not rebooted: %1</source>
+        <translation>not rebooted: %1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <location line="+32"/>
+        <source>while rebooting %1: %2</source>
+        <translation>while rebooting %1: %2</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>entered MASKROM instead of Loader mode: not flashed in a fleet; flash it alone with `su-fw flash-soc --serial %1` only once `upgrade_tool LD` lists it as the ONLY device in download mode (MASKROM mode writes the whole image with UF: idblock, uboot, env and meta included)</source>
+        <translation>entered MASKROM instead of Loader mode: not flashed in a fleet; flash it alone with `su-fw flash-soc --serial %1` only once `upgrade_tool LD` lists it as the ONLY device in download mode (MASKROM mode writes the whole image with UF: idblock, uboot, env and meta included)</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>reboot loader had no effect: board %1 is still on ADB after %2 s</source>
+        <translation>reboot loader had no effect: board %1 is still on ADB after %2 s</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>board %1 left ADB (port %2) but no Loader device appeared within %3 s; it may be rebooting: check it by hand</source>
+        <translation>board %1 left ADB (port %2) but no Loader device appeared within %3 s; it may be rebooting: check it by hand</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>a Loader device appeared on port %1 but upgrade_tool LD never listed it within %2 s: %3; board %4 is in Loader mode and must be power-cycled by hand</source>
+        <translation>a Loader device appeared on port %1 but upgrade_tool LD never listed it within %2 s: %3; board %4 is in Loader mode and must be power-cycled by hand</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>a Loader device on port %1 still lists an ADB device after %2 s: cannot tell whose it is</source>
+        <translation>a Loader device on port %1 still lists an ADB device after %2 s: cannot tell whose it is</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>upgrade_tool LD lists LocationID %1 but no download-mode device appeared on the bus within %2 s: cannot tell whose it is; board %3 is still on ADB</source>
+        <translation>upgrade_tool LD lists LocationID %1 but no download-mode device appeared on the bus within %2 s: cannot tell whose it is; board %3 is still on ADB</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>while rebooting %1: adb could not confirm that the board left ADB (%2)</source>
+        <translation>while rebooting %1: adb could not confirm that the board left ADB (%2)</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>board %1 is still on ADB although a Loader device appeared on port %2: not this board</source>
+        <translation>board %1 is still on ADB although a Loader device appeared on port %2: not this board</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>in Loader mode on port %1, LocationID %2 (%3 s)</source>
+        <translation>in Loader mode on port %1, LocationID %2 (%3 s)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source> (moved: expected %1)</source>
+        <translation> (moved: expected %1)</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>mapping stopped: resetting the board back to ADB</source>
+        <translation>mapping stopped: resetting the board back to ADB</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <location line="+335"/>
+        <location line="+483"/>
+        <source>cancelled before its write started; reset back to ADB</source>
+        <translation>cancelled before its write started; reset back to ADB</translation>
+    </message>
+    <message>
+        <location line="-817"/>
+        <location line="+335"/>
+        <location line="+483"/>
+        <source>cancelled: resetting the board back to ADB</source>
+        <translation>cancelled: resetting the board back to ADB</translation>
+    </message>
+    <message>
+        <location line="-769"/>
+        <source>reconciled: %1 devices in download mode, every one a mapped board</source>
+        <translation>reconciled: %1 devices in download mode, every one a mapped board</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>reconciled: %1 devices in download mode: %2 mapped boards, %3 in MASKROM mode (not written)</source>
+        <translation>reconciled: %1 devices in download mode: %2 mapped boards, %3 in MASKROM mode (not written)</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>mapping done: %1 of %2 boards in Loader mode; writing starts (up to %3 at once)</source>
+        <translation>mapping done: %1 of %2 boards in Loader mode; writing starts (up to %3 at once)</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>on port %1 (LocationID %2)</source>
+        <translation>on port %1 (LocationID %2)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>on port %1 (no LocationID yet)</source>
+        <translation>on port %1 (no LocationID yet)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>(LocationID %1)</source>
+        <translation>(LocationID %1)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+851"/>
+        <source>; it is in Loader mode now (port %1, LocationID %2)</source>
+        <translation>; it is in Loader mode now (port %1, LocationID %2)</translation>
+    </message>
+    <message>
+        <location line="-850"/>
+        <location line="+857"/>
+        <source>; it is in Loader mode now (port %1)</source>
+        <translation>; it is in Loader mode now (port %1)</translation>
+    </message>
+    <message>
+        <location line="-853"/>
+        <source>a Loader device appeared late %1 and belongs to no mapped board</source>
+        <translation>a Loader device appeared late %1 and belongs to no mapped board</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>reset back to ADB; nothing was written</source>
+        <translation>reset back to ADB; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`</source>
+        <translation>%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+514"/>
+        <source>no output</source>
+        <translation>no output</translation>
+    </message>
+    <message>
+        <location line="-412"/>
+        <location line="+409"/>
+        <source>timed out</source>
+        <translation>timed out</translation>
+    </message>
+    <message>
+        <location line="-330"/>
+        <location line="+294"/>
+        <source>an ADB device</source>
+        <translation>an ADB device</translation>
+    </message>
+    <message>
+        <location line="-294"/>
+        <location line="+294"/>
+        <source>nothing</source>
+        <translation>nothing</translation>
+    </message>
+    <message>
+        <location line="-287"/>
+        <source>LD lists LocationID %1</source>
+        <translation>LD lists LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LD lists LocationID %1 in MASKROM mode</source>
+        <translation>LD lists LocationID %1 in MASKROM mode</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LD does not list LocationID %1</source>
+        <translation>LD does not list LocationID %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>LD not run: %1 writes in flight</source>
+        <translation>LD not run: %1 writes in flight</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>checked: LD lists LocationID %1 in Loader mode; port %2 shows %3</source>
+        <translation>checked: LD lists LocationID %1 in Loader mode; port %2 shows %3</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>checked: port %1 shows %2 (%3)</source>
+        <translation>checked: port %1 shows %2 (%3)</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>port %1 shows %2; %3</source>
+        <translation>port %1 shows %2; %3</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>port %1 showed %2; %3</source>
+        <translation>port %1 showed %2; %3</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>left Loader mode before %1 was written (%2): nothing written for it</source>
+        <translation>left Loader mode before %1 was written (%2): nothing written for it</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>partitions written, but upgrade_tool LD could not run before the reset: %1; reset it by hand with `%2`</source>
+        <translation>partitions written, but upgrade_tool LD could not run before the reset: %1; reset it by hand with `%2`</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>upgrade_tool LD could not run before %1: %2; nothing written for it</source>
+        <translation>upgrade_tool LD could not run before %1: %2; nothing written for it</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>partitions written, but the board left Loader mode before its reset (%1): not reset by the fleet; check it by hand</source>
+        <translation>partitions written, but the board left Loader mode before its reset (%1): not reset by the fleet; check it by hand</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Writing %1 (%2 of %3)</source>
+        <translation>Writing %1 (%2 of %3)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>cannot create the working folder %1: nothing written for it</source>
+        <translation>cannot create the working folder %1: nothing written for it</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>writing %1 (%2 of %3): %4 (%5 bytes) at sector %6, partition of %7 sectors</source>
+        <translation>writing %1 (%2 of %3): %4 (%5 bytes) at sector %6, partition of %7 sectors</translation>
+    </message>
+    <message>
+        <location line="+80"/>
+        <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
+        <translation>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>writing %1 failed: %2</source>
+        <translation>writing %1 failed: %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>no output (exit code %1)</source>
+        <translation>no output (exit code %1)</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 written: %2 bytes in %3 s</source>
+        <translation>%1 written: %2 bytes in %3 s</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</source>
+        <translation>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+334"/>
+        <source>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
+        <translation>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</translation>
+    </message>
+    <message>
+        <location line="-322"/>
+        <source>partitions written; resetting the board</source>
+        <translation>partitions written; resetting the board</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>partitions written, but upgrade_tool RD did not reset the board (%1); replug it</source>
+        <translation>partitions written, but upgrade_tool RD did not reset the board (%1); replug it</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>ADB not waited for (--no-wait)</source>
+        <translation>ADB not waited for (--no-wait)</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>waiting for ADB (up to %1 s)</source>
+        <translation>waiting for ADB (up to %1 s)</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>partitions written and the board reset, but ADB did not come back within %1 s; check the serial console</source>
+        <translation>partitions written and the board reset, but ADB did not come back within %1 s; check the serial console</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>back on ADB</source>
+        <translation>back on ADB</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>; rfmcu: %1</source>
+        <translation>; rfmcu: %1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>partitions written; the board left Loader mode before its reset (%1) and came back on ADB by itself</source>
+        <translation>partitions written; the board left Loader mode before its reset (%1) and came back on ADB by itself</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>still waiting for %1 write(s) to finish; the writes are never interrupted</source>
+        <translation>still waiting for %1 write(s) to finish; the writes are never interrupted</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>cancel: the boards not started are reset and skipped; %1 write(s) in progress finish first (every row and the reset)</source>
+        <translation>cancel: the boards not started are reset and skipped; %1 write(s) in progress finish first (every row and the reset)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>cancel: the boards not started are reset and skipped</source>
+        <translation>cancel: the boards not started are reset and skipped</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>the ADB wait was cancelled; the partitions were written</source>
+        <translation>the ADB wait was cancelled; the partitions were written</translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>the end-of-run check could not run: %1</source>
+        <translation>the end-of-run check could not run: %1</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>a device in download mode on port %1 that upgrade_tool LD does not list belongs to no board of the run</source>
+        <translation>a device in download mode on port %1 that upgrade_tool LD does not list belongs to no board of the run</translation>
+    </message>
+    <message>
+        <location line="+175"/>
+        <source>port mapping not available on this platform</source>
+        <translation>port mapping not available on this platform</translation>
+    </message>
+</context>
+<context>
+    <name>FleetReport</name>
+    <message>
+        <location filename="../src/firmware/FleetReport.cpp" line="+90"/>
+        <source>; 1 Loader device left unattributed</source>
+        <translation>; 1 Loader device left unattributed</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>; %1 Loader devices left unattributed</source>
+        <translation>; %1 Loader devices left unattributed</translation>
+    </message>
+    <message>
+        <location line="+98"/>
+        <source>; nothing was written</source>
+        <translation>; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>; 1 board reset back to ADB</source>
+        <translation>; 1 board reset back to ADB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>; %1 boards reset back to ADB</source>
+        <translation>; %1 boards reset back to ADB</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>dry run: %1 of %2 boards ready</source>
+        <translation>dry run: %1 of %2 boards ready</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+15"/>
+        <source>; %1 skipped</source>
+        <translation>; %1 skipped</translation>
+    </message>
+    <message>
+        <location line="-11"/>
+        <source>%1 of %2 boards flashed in %3 s (mapping %4 s, writing %5 s)</source>
+        <translation>%1 of %2 boards flashed in %3 s (mapping %4 s, writing %5 s)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>; %1 not back on ADB</source>
+        <translation>; %1 not back on ADB</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>; %1 failed</source>
+        <translation>; %1 failed</translation>
     </message>
 </context>
 <context>
@@ -4331,7 +5157,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+198"/>
+        <location line="+259"/>
         <source>no firmware image selected</source>
         <translation>no firmware image selected</translation>
     </message>
@@ -5159,7 +5985,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+245"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+234"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -6785,8 +7611,8 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>UsbProbe</name>
     <message>
-        <location filename="../src/firmware/UsbProbe.cpp" line="+87"/>
-        <location line="+56"/>
+        <location filename="../src/firmware/UsbProbe.cpp" line="+116"/>
+        <location line="+58"/>
         <source>Unknown device</source>
         <translation>Unknown device</translation>
     </message>
@@ -6804,6 +7630,21 @@ You will be asked for it when connecting.</translation>
         <location line="+9"/>
         <source>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</source>
         <translation>%1: driver %2 is bound, but neither adb nor upgrade_tool lists the board. Replug the cable; if it stays hidden, reinstall the Rockchip USB drivers (DriverAssistant).</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>USB bus: no Rockchip device</source>
+        <translation>USB bus: no Rockchip device</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>USB bus: 1 Rockchip device (%1 ADB, %2 in download mode)</source>
+        <translation>USB bus: 1 Rockchip device (%1 ADB, %2 in download mode)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>USB bus: %1 Rockchip devices (%2 ADB, %3 in download mode)</source>
+        <translation>USB bus: %1 Rockchip devices (%2 ADB, %3 in download mode)</translation>
     </message>
 </context>
 <context>

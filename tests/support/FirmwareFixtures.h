@@ -12,6 +12,7 @@
 
 class FakeToolInvocation;
 class FakeToolRunner;
+class FakeUsbBus;
 
 /**
  * What the firmware suites (tst_firmwaretab: the tab, tst_firmwarejob: the chain without widgets)
@@ -64,6 +65,20 @@ const QRegularExpression& exfPattern();
 /// `killall`, a forward that points at a FakeMcuServer (the stand-in for `rfmcu bridge`), the
 /// bridge itself (prints "bridging", then runs until cancelled) and the forward removal.
 void scriptMcuBridge(FakeToolRunner& runner, quint16 bridgePort);
+
+/// (v0.7.0) The seven Node boards of the owner's bench (prompt_parallel_soc_flash.md), the port
+/// keys as Windows prints them: A..G, serial, port.
+struct FleetBench
+{
+    const char* tag;
+    const char* serial;
+    const char* port;
+};
+extern const FleetBench kFleetBench[7];
+/// The seven bench boards on ADB in `bus`, every one Reboot::ToLoader, scripted into `runner`
+/// (FakeUsbBus::script()) together with nodeExtractor for `upgrade_tool EXF`. A test that needs a
+/// handler of its own registers it first (the first matching handler wins).
+void scriptFleet(FakeUsbBus& bus, FakeToolRunner& runner);
 
 /// The in-process build machine: TestSshServer serving `<root>/image/update.img`, a stored profile
 /// with a test key (never the developer's ~/.ssh keys) and a known_hosts file holding the server.

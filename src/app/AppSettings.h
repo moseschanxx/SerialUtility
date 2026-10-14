@@ -168,6 +168,14 @@ public:
     /// already in Loader mode; "" when unknown. An empty serial keys the entry "*".
     QString firmwareMtdParts(const QString& serial) const;
     void setFirmwareMtdParts(const QString& serial, const QString& mtdparts);
+    /// (v0.7.0) "firmware/boardPorts" (QVariantMap serial -> UsbDeviceInfo::portKey(), e.g.
+    /// "6&38635FDB&0&2"): the USB port a board was last found on by a fleet flash's mapping
+    /// (FirmwareJob::boardPortLearned(), stored by su-fw), so the next `su-fw flash-soc --dry-run`
+    /// prints the expected port and the next real run reports a board that moved. Advisory only:
+    /// every real run learns the port again and never addresses a board by this memory. "" when
+    /// unknown; "" as the value removes the entry. Not shown in Preferences.
+    QString firmwareBoardPort(const QString& serial) const;
+    void setFirmwareBoardPort(const QString& serial, const QString& port);
 
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()

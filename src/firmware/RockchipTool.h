@@ -4,6 +4,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <optional>
 
 #include "firmware/ToolRunner.h"
 
@@ -93,6 +94,21 @@ struct RkFirmwareInfo
  * stage text and, when the segment carries "(nn%)", the percentage; a segment without a
  * percentage is a stage change with percent -1. reportsSuccess() is true once the output contains
  * "Upgrade firmware ok" (case-insensitive, like usb_update.sh's grep -qi).
+ *
+ * Addressed commands (v0.7.0, the fleet flash; docs/DESIGN.md 4.13): `upgrade_tool LD` lists every
+ * rockusb device with a LocationID the tool assigns per USB location ("DevNo=1\tVid=0x2207,
+ * Pid=0x110e,LocationID=112\tMode=Loader\tSerialNo=" - 112 and 154 on this PC; its encoding is
+ * not documented and is never decoded, only learned from `LD`), and `upgrade_tool -s <LocationID>
+ * <command>` addresses exactly that device, which is what SocToolKit does with every command when
+ * several boards are in download mode (its device string is "<mode> <serialno> <locationid>").
+ * Measured 2026-10-14: a wrong id answers "No found specific rockusb device!" with exit 255;
+ * WITHOUT `-s` a WL / RD with two devices present silently takes one of them (exit 0) - the hazard
+ * the owner's rule names, so the fleet never issues an unaddressed write. writeLbaOn() /
+ * resetDeviceOn() carry the id in their signature: there is no state on this object that could
+ * leak an address into, or drop it from, a command. The plain listDevices() / firmwareInfo() /
+ * extractFirmware() / upgradeFirmware() / writeLba() / resetDevice() are untouched (the 0.6.0
+ * single-board path is byte for byte what it was); `LD` lists every device and takes no `-s`,
+ * `EXF` and `SFI` read a file and take none either.
  */
 class RockchipTool : public QObject
 {
@@ -128,14 +144,56 @@ public:
     /// (`wl <offset / 512> <size / 512> <file>`; progress lines "Write LBA from file (nn%)"; no
     /// chip check). The size is required: without it upgrade_tool v2.37 refuses a jffs2 image
     /// ("Image is jffs format,please tell the size!" for userdata.img, seen 2026-10-13). Never
-    /// cancelled by SocFlasher.
+    /// cancelled by SocFlasher. UNADDRESSED: with two devices in download mode upgrade_tool
+    /// silently takes one of them (measured 2026-10-14), and SocFlasher's detection takes the first
+    /// Loader device `LD` lists - so the single-board flow is right only while `LD` lists ONE
+    /// device; a fleet board left in Loader mode is retried by hand through `-s` (the retry lines
+    /// FleetFlasher logs), never through `su-fw flash-soc --serial` while another device is in
+    /// download mode.
     ToolInvocation* writeLba(quint64 startSector, quint64 sectorCount, const QString& file);
-    ToolInvocation* resetDevice();                       ///< upgrade_tool RD ("Reset Device OK.")
+    ToolInvocation* resetDevice();                       ///< upgrade_tool RD ("Reset Device OK."); unaddressed, as writeLba()
+
+    // ---- Addressed commands (v0.7.0, the fleet): `upgrade_tool -s <LocationID> <command>` ------
+    /// `upgrade_tool -s <locationId> WL <startSector> <sectorCount> <file>`: writeLba() for one
+    /// device among several - `-s <id>` right before the command, as SocToolKit passes it
+    /// (`upgrade_tool -s 112 WL 8064 10240 rootfs.img`); the count rule (-1 for 0) and the native
+    /// path as writeLba(). No timeout, never cancelled, like writeLba(). The command runs in
+    /// `workingDirectory` when given, else in the file's folder: upgrade_tool writes a Log folder
+    /// into its working directory, and N processes must not share one (FleetFlasher gives every
+    /// board a folder of its own). `locationId` must not be empty: Q_ASSERT in a debug build, and
+    /// in a release build NOTHING runs and null is returned (the only method of this class that
+    /// can return null) - the caller fails the board instead of writing it; the fleet's tests
+    /// assert that no WL ever leaves without `-s`.
+    ToolInvocation* writeLbaOn(const QString& locationId, quint64 startSector, quint64 sectorCount, const QString& file,
+                               const QString& workingDirectory = QString());
+    /// `upgrade_tool -s <locationId> RD`: resetDevice() for one device among several (the LD
+    /// timeout applies, as for resetDevice()). An empty id: Q_ASSERT, and null in a release build
+    /// (nothing runs), as writeLbaOn().
+    ToolInvocation* resetDeviceOn(const QString& locationId);
 
     // ---- Parsers -------------------------------------------------------------------------
     static QList<RockusbDevice> parseDeviceList(const QString& output);
     static RkFirmwareInfo parseFirmwareInfo(const QString& output);
     static bool reportsSuccess(const QString& output);
+    /// (v0.7.0) The device `LD` listed at `locationId` (parseDeviceList()'s entries), std::nullopt
+    /// when none has that id.
+    static std::optional<RockusbDevice> deviceAt(const QList<RockusbDevice>& devices, const QString& locationId);
+    /// (v0.7.0) upgrade_tool's answer to a `-s <id>` that matches no device: the output carries
+    /// "No found specific rockusb device" (case-insensitive; exit 255 comes with it). The id is
+    /// gone (the board left Loader mode, or re-enumerated with another id): nothing was written.
+    static bool reportsNoSuchDevice(const QString& output);
+    /// (v0.7.0; hoisted from SocFlasher.cpp, behaviour unchanged) A WL that went wrong says so:
+    /// "Write LBA failed!", "Error:...->Fail to write lba,...", "Write LBA quit, creating comm
+    /// object failed!" (the texts of v2.37) - `\bfail`, `\bquit\b` or `\berror\b`, case-insensitive,
+    /// in the output without its banner lines (stripBanner() is applied here: "please upgrade it to
+    /// enjoy fast download" has none of these words either way). Its exit status has not been seen
+    /// for every failure, so the text counts as well; SocFlasher and FleetFlasher share this one
+    /// definition of a failed WL.
+    static bool reportsWriteFailure(const QString& output);
+    /// (v0.7.0; hoisted from SocFlasher.cpp, behaviour unchanged) `RD` reported "Reset Device OK"
+    /// (case-insensitive). A reset counts as done when the command exited 0 or printed this: the
+    /// one rule SocFlasher's resetBoard() and FleetFlasher use.
+    static bool reportsResetOk(const QString& output);
     static QString stripBanner(const QString& output);   ///< without the "rockusb driver = ..." line(s)
     /// The last meaningful lines of a UF output for an error message (usb_update.sh: without
     /// "Using ..." lines, '\r' as line breaks, blank lines dropped, the last `count` lines).

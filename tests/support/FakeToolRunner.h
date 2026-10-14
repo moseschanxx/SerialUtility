@@ -34,6 +34,9 @@ public:
     void finish(int exitCode, int delayMs = 0);
     /// End as "could not start" with `message`.
     void failToStart(const QString& message);
+    /// (v0.7.0) End as "timed out" (what ToolRunner::Options::timeoutMs does to a real process;
+    /// the fake runner applies no timeout of its own) after `delayMs`.
+    void timeOut(int delayMs = 0);
     /// Mark as started without ending it; it ends only through cancel() (or a later finish()).
     void hang();
 

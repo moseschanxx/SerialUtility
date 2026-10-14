@@ -13,6 +13,10 @@
 #include <windows.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
+// DEVPKEY_Device_LocationPaths is a DEFINE_DEVPROPKEY: only with INITGUID defined first does this
+// translation unit give the key its storage (without it su_core fails to link on the key).
+#include <initguid.h>
+#include <devpkey.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "cfgmgr32.lib")   // CM_Get_DevNode_Status; setupapi is linked by CMake
 #endif
@@ -29,6 +33,17 @@ QString UsbDeviceInfo::serial() const
     }
     const QString last = parts.last();
     return last.contains(QLatin1Char('&')) ? QString() : last;
+}
+
+QString UsbDeviceInfo::portKey() const
+{
+    // A device without a USB serial string is named by its bus address, the same for the board's
+    // ADB gadget and its Loader / MASKROM device ("6&38635FDB&0&2"): kept exactly as printed.
+    const QStringList parts = instanceId.split(QLatin1Char('\\'));
+    if (parts.size() >= 3 && parts.last().contains(QLatin1Char('&'))) {
+        return parts.last();
+    }
+    return locationPath;
 }
 
 namespace UsbProbe {
@@ -49,6 +64,20 @@ QString stringProperty(HDEVINFO set, SP_DEVINFO_DATA* device, DWORD property)
         return QString();
     }
     return QString::fromWCharArray(buffer).trimmed();
+}
+
+/// The first entry of DEVPKEY_Device_LocationPaths ("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(1)#USB(2)"),
+/// a string list; "" when the device has none. Log only: nothing depends on it.
+QString locationPathProperty(HDEVINFO set, SP_DEVINFO_DATA* device)
+{
+    wchar_t buffer[1024] = {};
+    DEVPROPTYPE type = 0;
+    if (!SetupDiGetDevicePropertyW(set, device, &DEVPKEY_Device_LocationPaths, &type, reinterpret_cast<PBYTE>(buffer),
+                                   static_cast<DWORD>(sizeof(buffer) - 2 * sizeof(wchar_t)), nullptr, 0)
+        || (type != DEVPROP_TYPE_STRING_LIST && type != DEVPROP_TYPE_STRING)) {
+        return QString();
+    }
+    return QString::fromWCharArray(buffer).trimmed();   // a REG_MULTI_SZ: the first string ends at its NUL
 }
 
 QList<UsbDeviceInfo> enumerateWindows(quint16 vid)
@@ -87,6 +116,7 @@ QList<UsbDeviceInfo> enumerateWindows(quint16 vid)
             info.description = QCoreApplication::translate("UsbProbe", "Unknown device");
         }
         info.driverClass = stringProperty(set, &device, SPDRP_CLASS);
+        info.locationPath = locationPathProperty(set, &device);
         ULONG status = 0;
         ULONG problem = 0;
         if (CM_Get_DevNode_Status(&status, &problem, device.DevInst, 0) == CR_SUCCESS) {
@@ -138,6 +168,7 @@ QList<UsbDeviceInfo> scanSysfs(const QString& sysfsRoot, quint16 vid)
                               .arg(info.pid, 4, 16, QLatin1Char('0'))
                               .arg(serial.isEmpty() ? QStringLiteral("bus&") + name : serial)
                               .toUpper();
+        info.locationPath = name;   // "1-2.3": the port path, like Windows' LocationPaths
         info.description = readSysfsText(base + QStringLiteral("/product"));
         if (info.description.isEmpty()) {
             info.description = QCoreApplication::translate("UsbProbe", "Unknown device");
@@ -192,6 +223,25 @@ QString driverHint(const QList<UsbDeviceInfo>& devices)
     }
     sentences.removeDuplicates();
     return sentences.join(QLatin1Char(' '));
+}
+
+QString describe(const QList<UsbDeviceInfo>& devices)
+{
+    if (devices.isEmpty()) {
+        return QCoreApplication::translate("UsbProbe", "USB bus: no Rockchip device");
+    }
+    int adb = 0;
+    int download = 0;
+    for (const UsbDeviceInfo& device : devices) {
+        adb += device.isAdbGadget() ? 1 : 0;
+        download += device.isDownloadMode() ? 1 : 0;
+    }
+    return devices.size() == 1
+               ? QCoreApplication::translate("UsbProbe", "USB bus: 1 Rockchip device (%1 ADB, %2 in download mode)").arg(adb).arg(download)
+               : QCoreApplication::translate("UsbProbe", "USB bus: %1 Rockchip devices (%2 ADB, %3 in download mode)")
+                     .arg(devices.size())
+                     .arg(adb)
+                     .arg(download);
 }
 
 } // namespace UsbProbe

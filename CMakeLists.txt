@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # ctest on Windows). CMakePresets.json (schema v6) separately requires 3.25.
 
 project(SerialUtility
-    VERSION 0.6.0
+    VERSION 0.7.0
     DESCRIPTION "BuildAI Serial Utility - a serial-port terminal for Rockchip Linux boards and MCU shells"
     HOMEPAGE_URL "https://build.ai"
     LANGUAGES CXX)
@@ -227,8 +227,8 @@ set(SU_CORE_SOURCES
     src/ssh/SshWorker.cpp
 
     # Firmware tab core (v0.5): external tools, Rockchip flashing, the CC1310 updater, the image pull,
-    # (v0.5.1) FirmwareJob, the whole chain without widgets, and (v0.6.0) FirmwareCli, the su-fw
-    # command line on top of it
+    # (v0.5.1) FirmwareJob, the whole chain without widgets, (v0.6.0) FirmwareCli, the su-fw
+    # command line on top of it, and (v0.7.0) FleetFlasher / FleetReport, several boards at once
     src/firmware/ToolRunner.h
     src/firmware/ToolRunner.cpp
     src/firmware/AdbTool.h
@@ -247,6 +247,10 @@ set(SU_CORE_SOURCES
     src/firmware/McuLink.cpp
     src/firmware/SocFlasher.h
     src/firmware/SocFlasher.cpp
+    src/firmware/FleetFlasher.h
+    src/firmware/FleetFlasher.cpp
+    src/firmware/FleetReport.h
+    src/firmware/FleetReport.cpp
     src/firmware/ImagePuller.h
     src/firmware/ImagePuller.cpp
     src/firmware/FirmwareJob.h

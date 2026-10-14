@@ -61,6 +61,7 @@ constexpr auto kFirmwareAdbReturnSeconds = "firmware/adbReturnSeconds";
 constexpr auto kFirmwareGitDescribe = "firmware/gitDescribe";
 constexpr auto kFirmwareExtraFiles = "firmware/extraFiles";
 constexpr auto kFirmwareMtdParts = "firmware/mtdparts";
+constexpr auto kFirmwareBoardPorts = "firmware/boardPorts";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -834,6 +835,23 @@ void AppSettings::setFirmwareMtdParts(const QString& serial, const QString& mtdp
         layouts.insert(mtdPartsKey(serial), value);
     }
     SU_WRITE_SETTING(kFirmwareMtdParts, layouts);
+}
+
+QString AppSettings::firmwareBoardPort(const QString& serial) const
+{
+    return readValue(kFirmwareBoardPorts).toMap().value(mtdPartsKey(serial)).toString().trimmed();
+}
+
+void AppSettings::setFirmwareBoardPort(const QString& serial, const QString& port)
+{
+    QVariantMap ports = readValue(kFirmwareBoardPorts).toMap();
+    const QString value = port.trimmed();
+    if (value.isEmpty()) {
+        ports.remove(mtdPartsKey(serial));
+    } else {
+        ports.insert(mtdPartsKey(serial), value);
+    }
+    SU_WRITE_SETTING(kFirmwareBoardPorts, ports);
 }
 
 #undef SU_WRITE_SETTING

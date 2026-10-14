@@ -810,6 +810,167 @@ the console and dies of it; on POSIX the child leads its own process group and i
 Not testable here: a real terminal, a real `WL` - one check on the board before an unattended run
 (Ctrl+C, Ctrl+Break and closing the window during a `WL`).
 
+**Several boards at once** (`--serials` / `--all-boards`, v0.7.0) are a separate operation of the
+job and a class of their own: 4.13. The single-board path above is unchanged byte for byte.
+
+### 4.13 Parallel SoC flashing (v0.7.0)
+
+The owner's request (`Firmware/cc1310-firmware/analysis/node_inventory/prompt_parallel_soc_flash.md`):
+seven Node boards on two hubs, one board takes ~35 s (mostly the reboot into Loader mode and back),
+seven one after the other ~4 min; in parallel it should be 40-60 s. Hard rules: only complete
+writes (a `WL` is never killed, timed out or cancelled; a cancel waits for the writes in progress),
+idblock / uboot / env / meta only when named, a board that does not show up in Loader mode on its
+port in time is skipped and reported - never guessed, a dry run first, never two upgrade_tool
+processes on one device, every per-board command addressed, the single-board path unchanged.
+
+**Facts it rests on** (measured 2026-10-14 on the bench PC, read-only commands): `adb devices -l`
+prints no `usb:` path and `adb get-devpath` answers `unknown` - ADB cannot tell a serial's port.
+Windows names the Node board's ADB gadget `USB\VID_2207&PID_0006\<hub>&0&<port>` (no USB serial
+string, so a bus address) and the same board in Loader mode `USB\VID_2207&PID_110E\<same hub>&0&<same
+port>`: the suffix is the one name of a board across modes (`UsbDeviceInfo::portKey()`).
+`upgrade_tool LD` lists every rockusb device with a `LocationID` per USB location (112, 154 here;
+opaque - learned, never decoded); `upgrade_tool -s <LocationID> <command>` addresses exactly that
+device (SocToolKit passes `-s` with every command); a wrong id answers `No found specific rockusb
+device!` with exit 255; **without `-s` a WL / RD with two devices present silently takes one of
+them**. `-s <id> RD` brought exactly that board back on ADB in 2-3 s. One rootfs `WL` ~27 s.
+
+**The mapping method** (`FleetFlasher`, one board at a time): a *snapshot* is `LD` and the USB
+enumeration, read in that order - `LD` is started first and the enumeration is read when its result
+arrives, never before (`LD` takes ~1 s and a board enters Loader mode within ~1 s of `reboot loader`:
+an older enumeration would show its ADB instance next to its own new LocationID and read as a foreign
+device). Per board: `cat /proc/version`, `cat /proc/cmdline` (the layout gate, below), `before :=
+snapshot`, `adb -s X reboot loader`, then a snapshot every poll until `compare(before, after)` decides
+or the Loader wait (30 s) runs out. `compare()` is pure and table-driven (vanished = ADB ports gone,
+appeared = download ports new, newIds = LocationIDs new; whatever was there before is excluded by the
+differences themselves):
+
+| vanished | appeared | newIds | verdict |
+|---|---|---|---|
+| {} | {} | {} | Pending / StillOnAdb (at the timeout: skipped "reboot loader had no effect") |
+| more than one in any | | | Ambiguous: stop ("two boards changed at once") |
+| {} | {P}, P still has an ADB instance | | Pending / GhostOnPort (timeout: stop) |
+| {} | {Q}, no ADB instance there | | ForeignLoader: stop |
+| {} | {} | {n} | Pending / LdOnly (timeout: stop, n never reset) |
+| {P} | {Q}, Q != P | | PortMismatch: stop |
+| {P} | {} | | Pending / LoaderNotEnumerated (timeout: skipped, "it may be rebooting") |
+| {P} | {P} | {} | Pending / LdNotListing (timeout: stop with the driver hint) |
+| {P} | {P} | {n} Loader | Mapped (then `adb devices` must no longer list X, else stop) |
+| {P} | {P} | {n} Maskrom | Maskrom: that board fails ("not flashed in a fleet") |
+
+A **stop** writes nothing: every mapped board is reset with its own `-s <id> RD`, the board being
+mapped fails, the later ones are skipped, and a LocationID nobody can name is listed with the way out
+(`upgrade_tool -s <n> RD`) but never reset - an identity the fleet did not learn. After the last
+board, the **reconciliation**: one more snapshot; every download-mode port and LocationID must be a
+mapped board, a MASKROM board or the baseline's - a board skipped as LoaderNotEnumerated that entered
+Loader mode later (during the next board's reads, or after the last mapping) is otherwise absorbed
+into a later `before` and invisible; it stops the run like Ambiguous. The same snapshot closes every
+run that rebooted a board: whatever sits in download mode and belongs to nobody is reported as
+`unattributed` (the summary says so; the boards' results stay), and the run's own failed / not-back
+boards found in Loader mode get `leftInLoader` and their addressed retry lines.
+
+**Before any reboot.** `adb devices` selects (unauthorized / offline / absent: skipped with
+`AdbTool::selectDevice()`'s words; an adb that cannot run selects nobody, exit 1; nobody on ADB, exit
+3). The baseline snapshot: a Loader / MASKROM device already on the bus that no selected board
+accounts for **refuses a real run** (the message names `upgrade_tool -s <n> RD`); the dry run lists it
+and goes on. `--all-boards` refuses when adb lists more entries than the bus shows Rockchip ADB
+gadgets (a phone would otherwise be told `reboot loader`), and skips a board whose `/proc/cmdline`
+reports no layout (another Rockchip product passes the count; it is rebooted only when named with
+`--serials`). The **layout gate**: a board whose layout parses and differs from the plan's is skipped
+before its reboot, unless `env` is among the rows (the env written defines the next layout) - stricter
+than the single board's warning, inert on a bench that runs the image's own layout. The rows are
+checked once with `SocFlasher::writePartitions()`'s rules (file, fits, sector-aligned).
+
+**Writing.** Up to `--max-parallel` boards at once (0 = all), each its rows in order, one
+`upgrade_tool -s <id> WL <sector> <count> <file>` at a time in a working folder of its own
+(`<extract folder>/.fleet/<serial>`: upgrade_tool writes a Log folder into its cwd); the files are the
+plan's unpacked images, shared read-only (EXF ran once, in the job's plan). A slot that frees starts
+the next mapped board. Before every WL and before the RD the board is **re-checked**: the enumeration
+must show a download-mode instance on its port and no ADB instance; and - **the LD gate** - whenever
+no WL / RD of the run is in flight, `LD` must list its id in Loader mode. The gate keeps a
+single-flight listing of its own (it answers every board that asks while it runs and for 500 ms after
+its result; the mapping's and the reconciliation's LDs never answer a re-check). `LD` opens every
+rockusb device and its effect on a running WL is unmeasured, so the two never overlap in either
+direction: no LD while a WL / RD runs, and no WL / RD (a check's, a reset's, a stop's or a drain's)
+while the gate's LD runs. Mid-wave the enumeration alone re-checks; a re-enumerated id then fails the
+next WL with exit 255 and nothing written. `LdPolicy::BeforeEveryWrite` (an LD before every write,
+the brief's wording) exists for the bench measurement only - not a CLI option in 0.7.0.
+
+A failed check before a WL fails that board ("left Loader mode before <name> was written (port P
+shows ...; LD ...): nothing written for it"); before the RD every row is already on the board, so it
+is not reset and the ADB wait decides (back: done with a warning; not back: NotBack). A gate LD that
+could not run is no evidence: the board fails with its retry lines. **A failing WL leaves the board
+in Loader mode** (no RD: nothing else is written to it) and its lines name the only safe retry -
+addressed: one `upgrade_tool -s <id> WL ...` per missing row, then `upgrade_tool -s <id> RD`
+(`FleetBoard::retry`, the JSON `retry`); `su-fw flash-soc --serial X` only once `LD` lists X as the
+only device in download mode, because the single-board flow writes without `-s` and takes the first
+Loader device `LD` lists (after a hub brown-out several boards sit in Loader mode at once). A board
+whose rows are written is reset at once with `-s <id> RD` (the LD timeout applies: a timed-out RD is a
+failed reset, never a cut write) and waited for on ADB (`adb -s X get-state` from one timer, at most
+one per board), then `cat /proc/version; uptime` and `rfmcu status` (recorded, never judged).
+
+**Cancel = drain** (`FleetFlasher::cancel()`, Ctrl+C / `--timeout`; `FirmwareJob::isCancellable()`
+stays true): selecting - the run ends after the command in flight; mapping - the board already told
+`reboot loader` has its wait finished (mapped, skipped or a stop), then every mapped board is reset;
+writing - nothing new starts, mapped boards not started are reset (their RDs wait for a gate LD in
+flight), a board that has started finishes **every** row and its reset, ADB waits in progress end
+(NotBack, "the ADB wait was cancelled; the partitions were written"). A second cancel only says how
+many writes are still waited for. **NotBack is a failure** in a fleet (exit 1): the owner's acceptance
+is "every board back on ADB", unlike the single board's "flashed, ADB did not come back" (0).
+
+**Classes.**
+
+| Class | What |
+|---|---|
+| `FleetFlasher` (`src/firmware/FleetFlasher.{h,cpp}`) | The run above: `FleetBoard` (one board as the table and the JSON show it), `Snapshot`, `Verdict` / `compare()`, `UnattributedDevice`; `start()`, `cancel()`, the per-board signals, `report()`. SocFlasher's shape: a run id in every callback, one tool process per board, every line mirrored to `lcFirmware`. `SU_FLEET_SILENCE_MS` (environment, read by the constructor) shortens the 5-minute silence line for the tests. |
+| `FleetReport` (`FleetReport.{h,cpp}`) | A value class: the boards, the timing, the stop, the unattributed devices -> `summary()`, `tableLines()`, `json()` / `boardJson()`, `exitCode()` (0 / 1 / 3 / 5, decided from the record alone). |
+| `RockchipTool` | `writeLbaOn(id, ...)` / `resetDeviceOn(id)`: the address is in the signature, never state on the object; an empty id is a `Q_ASSERT` and, in a release build, null (nothing runs: the board fails "internal: unaddressed write refused"). `deviceAt()`, `reportsNoSuchDevice()`, and `reportsWriteFailure()` / `reportsResetOk()` hoisted from SocFlasher.cpp (one definition; SocFlasher calls them, behaviour unchanged). The plain `writeLba()` / `resetDevice()` are untouched. |
+| `UsbProbe` | `UsbDeviceInfo::portKey()`, `locationPath` (Windows `DEVPKEY_Device_LocationPaths`, Linux the sysfs name; log only), `isAdbGadget()` / `isDownloadMode()`, `Enumerator`, `hasPlatformProbe()`, `describe()`. |
+| `FirmwareJob` | Operation `fleet-flash` (`flashFleet()`, "Flash fleet"): its inputs in order (a Ready plan of the image, a known layout - before the selection, which is empty while the layout is unknown -, named rows that can be written, boards, `maxParallel` 0..64, a platform that maps ports), then the flasher with the plan's rows; `FleetOptions`, `PortProvider`, `fleetReport()`, the four board signals. The lock frames it like every operation. |
+| `FirmwareCli` | `flash-soc --serials` / `--all-boards` / `--max-parallel` / `--dry-run`: the usage rules (exit 2), the default tags around the explicit ones, the bootloader warning, the one question on a terminal (before the operation, no adb of its own), the board lines and the table, `exit = opOk ? 0 : aborted ? 5 : report.exitCode()`. |
+| `AppSettings` | `firmwareBoardPort()` / `setFirmwareBoardPort()` ("firmware/boardPorts"): advisory - the next dry run's "expected port", a real run's "(moved)" note; never addresses a board. |
+
+**Decisions, with their reasons.** `-s` is a signature, never a state (a forgotten reset of a
+"current device" would leak an address into the single-board path). One definition of a failed WL
+and a done RD. Foreign download-mode devices refuse a real run (nothing is written next to a device
+the fleet cannot name). The difference method is a pure table, unit-tested without an event loop,
+plus the one cross-check it cannot make (`adb devices` must no longer list X). The snapshot's two
+reads are ordered (an LD line without a bus change is polled through as LdOnly, never a foreign
+device). The LD gate is the default; mid-wave the enumeration alone re-checks. A failed WL is not
+reset and its retry is addressed - never "retry with --serial" alone. A board not back on ADB fails
+the run; `--no-wait` ends a board right after its RD. Timeouts: StillOnAdb / LoaderNotEnumerated skip
+the board and go on; LdNotListing (a driver problem hits every board) and GhostOnPort stop. Unknown
+LocationIDs are never reset. `--max-parallel` defaults to every board. A terminal is asked once; a
+pipe is not. The dry run's banner is the operation's own. A board left Loader mode between its last
+WL and its RD is fully written: no RD, the ADB wait decides.
+
+**Tests.** `tst_fleetflasher` (49 functions, 67 results with the data rows): `compare()` row by row,
+`Snapshot::from()`, `tagFor()`, `FleetReport` (table, JSON, summaries, exit codes) by hand, and runs
+on `FakeToolRunner` + `FakeUsbBus` (tests/support: the seven bench boards with their Windows port
+keys; every misbehaviour - stays on ADB, vanishes, MASKROM, drags the next board, ghost, no LD line,
+another port, adb keeps listing, LD line only, re-enumeration, failing WL / RD, no ADB return, a
+phone, a foreign Loader device - and the counters a fleet must keep at zero: unaddressed writes,
+LD / write overlaps, cancelled writes): the happy path (one addressed WL and RD per board, a folder of
+its own, no EXF), waves and slots, the LD gate (exactly one LD for the first wave), every skip and stop,
+the reconciliation and the end-of-run report, the re-checks before a WL, between rows and before the
+RD, failing WL / RD with the retry lines, cancel in every phase (RDs wait for the gate's LD), the dry
+run, `--all-boards`, the silence line. `tst_firmwarecli` (+18): the usage errors, dry run, two boards,
+`--all-boards`, a phone, JSON lines, not back, Ctrl+C drain, `--timeout` while mapping, a stop, a
+foreign device, the bootloader warning, the lock, an unknown layout (exit 1, not 2), the question,
+`--log` / `--quiet`, and the single-board command lines compared byte for byte with literal lists.
+`tst_firmwaretools` (+5): `portKey()`, `describe()`, the addressed command lines, `deviceAt()` /
+`reportsNoSuchDevice()`, the hoisted parsers.
+
+**Unmeasured** (decided on the bench, not here): `upgrade_tool LD` next to a running WL (hence the
+gate); upgrade_tool's own per-process state with seven instances at once (the Log folder per board is
+handled; a shared config file or named mutex is unknown until two run at once - the F+G log shows
+whether the two WLs overlapped); USB bandwidth and hub power with seven WLs on two hubs (a brown-out
+looks like a failing WL: that board is left in Loader mode with its retry lines); LocationID
+stability on a re-enumeration of the same port (mid-wave only the port is re-checked; a changed id
+fails the next WL with exit 255 and nothing written); a skipped board entering Loader mode late costs
+the run (a stop, exit 1, rerun); a concurrent adb user on the PC shows only as Ambiguous /
+ForeignLoader verdicts; Linux (sysfs port keys, the Linux upgrade_tool's `-s` and numbering) is
+tested with fakes only.
+
 ## 5. Build, run, test
 
 ```powershell

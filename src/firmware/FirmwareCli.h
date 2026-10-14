@@ -65,6 +65,66 @@ class ToolRunner;
  * password from stdin) is remembered: nothing starts. All exit with 5. Another firmware operation
  * on the PC (the tab, another su-fw: FirmwareJob's lock) makes an operation fail at once and the
  * status query stop ("another firmware operation is running (...)", exit 1).
+ *
+ * flash-soc, a fleet (v0.7.0; FirmwareJob::flashFleet(), FleetFlasher, FleetReport; docs/DESIGN.md
+ * 4.13): `--serials S1,S2,...` (repeatable, entries add up; `TAG=SERIAL` names a board for the
+ * lines and the table, a tag is 1-8 of [A-Za-z0-9_-]; the untagged entries get the default tags
+ * A, B, ... Z, AA, ... in the order given, SKIPPING every tag given explicitly anywhere in the
+ * list - `--serials B=62ec...,5a33...` is B and A, `--serials A=..,..,C=..` gives the middle one B -
+ * and the "used twice" check runs on the final list, so it fires only for two explicit equal tags)
+ * or `--all-boards` (every board `adb devices` lists as "device", in adb's order) make the command
+ * a fleet run; `--serial` without them is the 0.6.0 single-board path, byte for byte. A fleet
+ * requires `--partitions NAMES` (`--all` is refused: every row would include idblock, uboot, env
+ * and meta, which are written only when named; a named bootloader partition is logged "Warning:
+ * idblock is a bootloader partition; written because --partitions names it"), takes
+ * `--max-parallel N` (1..64; default: every board at once) and `--dry-run` (the selection, the
+ * remembered ports and the plan; no reboot, no write), and `--layout` / `--no-wait` as the single
+ * board. The plan is made first as cmdFlashSoc() does; the name check differs from the single
+ * board's in one point: a name the image does not have is a usage error (2), a row that cannot be
+ * written (no file, does not fit, not in the layout) is a usage error (2) only when the layout is
+ * known, and an UNKNOWN layout is left to the job's step - "flash layout unknown: pass --layout, or
+ * run su-fw status once with a board running; the Node image carries its own", exit 1 - because
+ * FirmwareJob::partitionProblem()'s "connect the board running once" is the single board's advice,
+ * not the fleet's. On a terminal without `--yes` a real fleet run asks once, on stderr, after the
+ * plan and BEFORE the operation (nothing has talked to a board yet, so the question can only name
+ * what the command line gave it): with `--serials` "Write rootfs on 7 boards (A, B, C, D, E, F, G)?
+ * [y/N] " (the names joined ", "; N and the tags from the list), with `--all-boards` "Write rootfs
+ * on every board adb lists (--all-boards)? [y/N] " - no `adb devices` runs outside the operation
+ * (it would talk to the boards outside the firmware lock). Anything but y / yes: exit 5 "cancelled
+ * before anything ran"; a non-terminal stdin asks nothing. The dry run's banner is the operation's
+ * own "--- Flash fleet ---" (no " (dry run)" suffix: beginOperation() is untouched), followed by
+ * the flasher's "Dry run: the selection, the remembered ports and the plan; no reboot, no write".
+ * Text: one line per board per event, "HH:MM:SS [B 62ecfc6ddeb3f579] in Loader mode on port
+ * 6&38635FDB&0&2, LocationID 112 (1.2 s)", the run's own lines, progress every 10 % per board, and
+ * last the table of FleetReport::tableLines() before the result line. --json: a board event carries
+ * "board" (the serial), "tag" and "stage" (the "in Loader mode" line also "port" and "loader"); a
+ * board's end is an "event":"step" object with those fields plus "result", "ok", "seconds",
+ * "mappingSeconds", "writingSeconds", "written", "retry", "adbBack"; the operation's own "step"
+ * object comes without a board field, as today; the "done" object carries FleetReport::json()
+ * ("fleet":true, "dryRun", "image", "partitions", "maxParallel", "seconds", "mappingSeconds",
+ * "writingSeconds", "stop", "unattributed", "summary", "boards"). Exit codes of a fleet (the
+ * mapping is `opOk ? 0 : aborted() ? 5 : report.exitCode()`, nothing else: FleetReport::exitCode()
+ * knows an empty report): 0 every selected board flashed, reset AND back on ADB (with --no-wait:
+ * reset); 1 a board not back on ADB in time, failed (no Loader mode on its port in time, left
+ * Loader mode before a write, a failing WL - the board is then left in Loader mode and its lines
+ * name the retry: one addressed `upgrade_tool -s <LocationID> WL ...` per missing row, then
+ * `upgrade_tool -s <LocationID> RD`; `su-fw flash-soc --serial X` only once `upgrade_tool LD` lists
+ * X as the ONLY device in download mode, since the single-board flow writes without -s and takes
+ * any Loader device - or RD, MASKROM instead of Loader: such a board is flashed alone with
+ * `su-fw flash-soc --serial X` only once `upgrade_tool LD` lists it as the ONLY device in download
+ * mode, and MASKROM mode writes the whole image with UF, idblock, uboot, env and meta included),
+ * skipped (not on ADB, a differing layout, with --all-boards no layout in /proc/cmdline, the
+ * mapping stopped), the mapping stopped (two boards changed at once, a foreign device, a late
+ * arrival) or the run could not start (another firmware operation, port mapping not available on
+ * this platform, flash layout unknown, adb could not be run, upgrade_tool LD could not be run,
+ * `--all-boards` with more adb entries than Rockchip ADB gadgets on the bus - a phone: "name the
+ * boards with --serials" - or a Loader / MASKROM device nobody accounts for on the bus); 2 usage; 3 no selected board on
+ * ADB; 5 --timeout or Ctrl+C - boards whose write had not started are skipped and reset, writes in
+ * progress are completed whole (every row and the reset of that board), the table says which; a
+ * second Ctrl+C only logs how many writes are still being waited for. The learned port of every
+ * mapped board is stored per serial (AppSettings::firmwareBoardPort()) so the next dry run prints
+ * it as the expected port and the next real run reports a board that moved; the memory never
+ * addresses a board.
  */
 class FirmwareCli : public QObject
 {

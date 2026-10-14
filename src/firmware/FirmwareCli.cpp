@@ -15,6 +15,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
+#include <QMap>
 #include <QPair>
 #include <QPointer>
 #include <QRegularExpression>
@@ -28,6 +29,8 @@
 #include "app/AppSettings.h"
 #include "firmware/CcPackage.h"
 #include "firmware/FirmwareJob.h"
+#include "firmware/FleetFlasher.h"
+#include "firmware/FleetReport.h"
 #include "firmware/ImagePuller.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/SocFlasher.h"
@@ -65,6 +68,7 @@ QString optionValueName(const QString& option)
         {QLatin1String("remote-folder"), QLatin1String("FOLDER")}, {QLatin1String("identity"), QLatin1String("FILE")},
         {QLatin1String("password-env"), QLatin1String("VAR")},    {QLatin1String("partitions"), QLatin1String("NAMES")},
         {QLatin1String("package"), QLatin1String("FILE")},        {QLatin1String("role"), QLatin1String("ROLE")},
+        {QLatin1String("serials"), QLatin1String("SERIALS")},     {QLatin1String("max-parallel"), QLatin1String("N")},
     };
     for (const auto& entry : values) {
         if (option == entry.first) {
@@ -99,8 +103,9 @@ QStringList specificOptionNames(const QString& command)
         return pullOptionNames();
     }
     if (command == kFlashSoc) {
-        return {QStringLiteral("image"), QStringLiteral("cache"), QStringLiteral("all"), QStringLiteral("partitions"),
-                QStringLiteral("serial"), QStringLiteral("layout"), QStringLiteral("no-wait")};
+        return {QStringLiteral("image"),   QStringLiteral("cache"),      QStringLiteral("all"),          QStringLiteral("partitions"),
+                QStringLiteral("serial"),  QStringLiteral("layout"),     QStringLiteral("no-wait"),      QStringLiteral("serials"),
+                QStringLiteral("all-boards"), QStringLiteral("max-parallel"), QStringLiteral("dry-run")};
     }
     if (command == kMcuInfo) {
         return {QStringLiteral("serial")};
@@ -155,7 +160,8 @@ const char* const kExitCodesHelp = R"HELP(Exit codes:
   1  the operation failed; the last log lines say why (also when another firmware operation
      runs on this PC: "another firmware operation is running (<program>, pid <n>)")
   2  usage: an unknown command or option, a missing or invalid value, a file that cannot be used
-  3  no board, or the board in a mode the command cannot use (e.g. mcu-info in Loader mode)
+  3  no board, or the board in a mode the command cannot use (e.g. mcu-info in Loader mode);
+     flash-soc with --serials / --all-boards: no selected board is on ADB
   4  SSH: the build machine could not be reached, its host key was refused, or the
      authentication failed
   5  --timeout passed, or Ctrl+C (also SIGTERM, SIGHUP, Ctrl+Break). It ends the waiting phases,
@@ -163,6 +169,8 @@ const char* const kExitCodesHelp = R"HELP(Exit codes:
      wait for ADB the result says "interrupted after the image was written; the ADB wait was
      cancelled". The tools run without su-fw's console (Windows) or in a process group of
      their own (Linux): no keystroke, closed window or signal meant for su-fw reaches them.
+     flash-soc with --serials / --all-boards: the boards not started are skipped and reset
+     back to ADB, a board being written finishes all its partitions and its reset first.
 )HELP";
 
 const char* const kGlobalHelp = R"HELP(su-fw - flash the BuildAI Node board (RV1106 SoC + CC1310 RF MCU) from a command shell
@@ -188,7 +196,8 @@ Commands:
   pull          Download update.img from the build machine over SSH (skipped when unchanged;
                 the previous image is kept).
   flash-soc     Flash the SoC: in Loader mode the chosen partitions (--all or --partitions), in
-                MASKROM mode the whole image. A running board is put into Loader mode over ADB.
+                MASKROM mode the whole image. A running board is put into Loader mode over ADB;
+                several boards at once with --serials / --all-boards.
   mcu-info      Read the running CC1310's firmware version and role through the board.
   mcu-update    Update the CC1310 with a .pkg package (--role rx|tx).
   mcu-set-role  Set the CC1310's role (rx or tx) without updating it.
@@ -316,6 +325,8 @@ const char* const kFlashSocHelp = R"HELP(su-fw flash-soc - flash the RV1106 SoC
 
 Usage: su-fw flash-soc [--image FILE] (--all | --partitions NAMES) [--serial SERIAL]
                        [--layout MTDPARTS] [--no-wait] [options]
+       su-fw flash-soc (--serials S1,S2,... | --all-boards) --partitions NAMES [--image FILE]
+                       [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait] [options]
 
 Finds the board: already in Loader / Maskrom mode, or running on ADB (its /proc/version and
 flash layout are read, then "adb reboot loader" - no question asked); with no board at all it
@@ -326,6 +337,25 @@ logs how to enter MASKROM mode and waits (30 s, Preferences > Firmware). Then it
                 log says so).
 Last it waits for the board to come back on ADB and prints its kernel version and uptime.
 Ctrl+C and --timeout cancel the waiting, never the write.
+
+Several boards at once (a fleet: --serials or --all-boards): the boards running on ADB are put
+into Loader mode one after the other, and each one's USB port is learned by difference - the one
+ADB device that vanished, the one Loader device that appeared on that same port and the one new
+upgrade_tool LocationID; anything else stops the run before a byte is written, never guessed.
+Then the named partitions are written on up to --max-parallel boards at once, every upgrade_tool
+command addressed with -s <LocationID> and every board re-checked before each write; each board
+is reset (-s <LocationID> RD), waited for on ADB, and its kernel, uptime and "rfmcu status" are
+printed; last a table: board, serial, port, LocationID, result, seconds. A fleet takes
+--partitions only (idblock, uboot, env and meta are written only when named; --all is refused).
+A board not in Loader mode on its port in time is skipped; a Loader / MASKROM device nobody
+accounts for refuses the run (the message names the "upgrade_tool -s <n> RD" that clears it).
+Ctrl+C skips and resets the boards not started; a board being written finishes all its
+partitions and its reset. A board left in Loader mode by a failing write is retried by hand with
+the addressed "  retry: upgrade_tool -s <LocationID> ..." lines of its log (one WL per missing
+partition, then RD) - su-fw flash-soc --serial only once upgrade_tool LD lists it as the ONLY
+device in download mode. The ports learned are remembered per board. Look first, touching no
+board (the selection, the remembered ports and the plan):
+    su-fw flash-soc --all-boards --partitions rootfs --image update.img --dry-run --json
 
 Options:
   --image FILE         The Rockchip update.img. Default: the cached image of the last pull.
@@ -340,6 +370,19 @@ Options:
                        whose layout is not remembered, flashed with an image without one of its
                        own (the image's layout always wins).
   --no-wait            Do not wait for the board to come back on ADB after the flash.
+  --serials SERIALS    A fleet: the ADB serials, comma separated, repeatable (entries add up).
+                       TAG=SERIAL names a board for every line and the table
+                       (B=62ecfc6ddeb3f579); the untagged entries get A, B, ... Z, AA, AB in the
+                       order given, skipping every tag given explicitly anywhere in the list
+                       (B=aaa,bbb is B and A). A tag is 1 to 8 letters, digits, - or _.
+  --all-boards         A fleet: every board adb devices lists as "device", tagged A, B, ... in
+                       adb's order. Refused next to a non-Rockchip ADB device (a phone): name the
+                       boards with --serials then. A board whose /proc/cmdline carries no flash
+                       layout is skipped (name it with --serials to write it anyway).
+  --max-parallel N     A fleet: boards written at once, 1..64. Default: all of them.
+  --dry-run            A fleet: the selection, the remembered ports and the plan; no reboot, no
+                       write (adb devices, the USB enumeration and upgrade_tool LD are the only
+                       reads; the image is unpacked locally for the plan).
 )HELP";
 
 const char* const kFlashSocTail = R"HELP(
@@ -351,9 +394,31 @@ Exit codes:
   3  no board entered Loader / Maskrom mode in time
   5  --timeout or Ctrl+C while waiting
 
+Exit codes of a fleet (--serials / --all-boards):
+  0  every selected board flashed, reset and back on ADB (with --no-wait: reset)
+  1  a board not back on ADB in time, failed (no Loader mode on its port in time, left Loader mode
+     before a write, a failing WL - the board is then left in Loader mode and its lines name the
+     addressed retry: upgrade_tool -s <LocationID> WL ... per missing partition, then
+     upgrade_tool -s <LocationID> RD; --serial only once upgrade_tool LD lists it as the ONLY
+     device in download mode - or RD, MASKROM instead of Loader: flashed alone with --serial only
+     once upgrade_tool LD lists it as the ONLY device in download mode, and MASKROM mode writes
+     the whole image with UF, idblock, uboot, env and meta included) or skipped (not on ADB, a
+     differing flash layout, --all-boards: no layout in its /proc/cmdline, the mapping stopped);
+     the mapping stopped (two boards changed at once, a Loader device nobody can name, a late
+     arrival); or the run could not start (another firmware operation, port mapping not
+     available on this platform, flash layout unknown, adb or upgrade_tool LD could not be run,
+     --all-boards next to a non-Rockchip ADB device, a Loader / MASKROM device on the bus that no
+     selected board accounts for)
+  2  usage: --serials with --all-boards or --serial, --all, no --partitions, a bad serial or tag,
+     --max-parallel outside 1..64, --dry-run / --max-parallel without a fleet
+  3  no selected board is on ADB (--all-boards: no board at all)
+  5  --timeout or Ctrl+C: boards whose write had not started are skipped and reset back to ADB; a
+     board being written finishes every one of its partitions and its reset first; the table
+     says which
+
 Examples:
   su-fw flash-soc --image update.img --all
-  su-fw flash-soc --partitions boot,rootfs --json
+  su-fw flash-soc --serials F=c4130950110960e0,G=5a33c81a6e996266 --partitions rootfs --image update.img --json
 )HELP";
 
 const char* const kMcuInfoHelp = R"HELP(su-fw mcu-info - the CC1310's firmware version and role
@@ -604,6 +669,12 @@ struct FirmwareCli::Private
         QString package;            ///< checked; "" = none
         quint32 role = 0;
         QString toolsDir;           ///< --tools; "" = the app's paths / the bundled tools
+        // ---- flash-soc, a fleet (v0.7.0) ----
+        bool fleet = false;         ///< --serials or --all-boards
+        QList<QPair<QString, QString>> taggedSerials;   ///< (tag, serial), the default tags assigned
+        bool allBoards = false;
+        int maxParallel = 0;        ///< 0 = every board at once
+        bool dryRun = false;
     };
 
     FirmwareCli* q;
@@ -650,6 +721,7 @@ struct FirmwareCli::Private
 
     QString progressKey;
     int progressBucket = -1;
+    QMap<QString, int> boardBuckets;   ///< a fleet's progress per board and stage -> tens of percent
 
     std::optional<QString> secretValue;
     QString secretSource;            ///< "--password-env" / "--password-stdin" (never the variable's name)
@@ -665,6 +737,8 @@ struct FirmwareCli::Private
     int usageError(const QString& message);
     QString parseCommon(const QCommandLineParser& parser);
     QString parseInputs(const QCommandLineParser& parser);
+    QString parseFleet(const QCommandLineParser& parser, bool partitionsGiven);
+    QString parseSerials(const QCommandLineParser& parser);
     QString parseTarget(const QCommandLineParser& parser);
     QString parseSecret(const QCommandLineParser& parser);
     QString openLog(const QCommandLineParser& parser);
@@ -682,6 +756,9 @@ struct FirmwareCli::Private
     void onProgress(const QString& stage, int percent);
     void onStepFinished(const QString& step, bool ok, const QString& message);
     void finish(int code, const QString& message);
+    void logBoard(const FleetBoard& board, const QString& text);
+    void onBoardProgress(const FleetBoard& board, const QString& stage, int percent);
+    void onBoardFinished(const FleetBoard& board);
 
     // ---- The job ---------------------------------------------------------------------------------------
     void createJob();
@@ -705,6 +782,7 @@ struct FirmwareCli::Private
     int cmdPartitions();
     int cmdPull();
     int cmdFlashSoc();
+    int cmdFlashFleet();
     int cmdMcu();
     int cmdPullFlash();
 
@@ -748,6 +826,7 @@ void FirmwareCli::Private::beginRun(QIODevice* out, QIODevice* err)
     layoutReadDone = false;
     progressKey.clear();
     progressBucket = -1;
+    boardBuckets.clear();
     secretValue.reset();
     secretSource.clear();
     secretUsed = false;
@@ -967,19 +1046,17 @@ QString FirmwareCli::Private::parseInputs(const QCommandLineParser& parser)
                                   "su-fw pull, then su-fw flash-soc --partitions NAMES");
         }
         if (commandName == kFlashSoc) {
-            if (opts.all == some) {
+            // The fleet's rules come first; the single board's --all / --partitions rule is
+            // bypassed for a fleet (which takes --partitions only).
+            const QString fleetProblem = parseFleet(parser, some);
+            if (!fleetProblem.isEmpty()) {
+                return fleetProblem;
+            }
+            if (!opts.fleet && opts.all == some) {
                 return opts.all ? QStringLiteral("choose either --all or --partitions NAMES, not both")
                                 : QStringLiteral("choose what to write: --all, or --partitions NAMES (su-fw partitions lists them)");
             }
-            for (const QString& word : parser.values(QStringLiteral("partitions"))) {
-                for (const QString& name : word.split(QLatin1Char(','))) {
-                    const QString trimmed = name.trimmed();
-                    if (!trimmed.isEmpty() && !opts.partitionNames.contains(trimmed)) {
-                        opts.partitionNames << trimmed;
-                    }
-                }
-            }
-            if (some && opts.partitionNames.isEmpty()) {
+            if (!opts.fleet && some && opts.partitionNames.isEmpty()) {
                 return QStringLiteral("--partitions needs names, comma separated (e.g. boot,rootfs)");
             }
         }
@@ -1014,6 +1091,121 @@ QString FirmwareCli::Private::parseInputs(const QCommandLineParser& parser)
             problem = parseSecret(parser);
         }
         return problem;
+    }
+    return QString();
+}
+
+QString FirmwareCli::Private::parseFleet(const QCommandLineParser& parser, bool partitionsGiven)
+{
+    for (const QString& word : parser.values(QStringLiteral("partitions"))) {
+        for (const QString& name : word.split(QLatin1Char(','))) {
+            const QString trimmed = name.trimmed();
+            if (!trimmed.isEmpty() && !opts.partitionNames.contains(trimmed)) {
+                opts.partitionNames << trimmed;
+            }
+        }
+    }
+    const bool serialsGiven = parser.isSet(QStringLiteral("serials"));
+    const bool allBoardsGiven = parser.isSet(QStringLiteral("all-boards"));
+    const bool maxGiven = parser.isSet(QStringLiteral("max-parallel"));
+    opts.fleet = serialsGiven || allBoardsGiven;
+    opts.allBoards = allBoardsGiven;
+    opts.dryRun = parser.isSet(QStringLiteral("dry-run"));
+    if (opts.fleet) {
+        if (serialsGiven && allBoardsGiven) {
+            return QStringLiteral("--serials and --all-boards: choose one");
+        }
+        if (parser.isSet(QStringLiteral("serial"))) {
+            return QStringLiteral("--serial is for one board; for a fleet use --serials S1,S2,... or --all-boards");
+        }
+        if (opts.all) {
+            return QStringLiteral("--all is refused for a fleet: name the partitions with --partitions NAMES (idblock, uboot, "
+                                  "env and meta are written only when named)");
+        }
+        if (!partitionsGiven || opts.partitionNames.isEmpty()) {
+            return QStringLiteral("--partitions NAMES is required for a fleet (su-fw partitions lists them)");
+        }
+        if (serialsGiven) {
+            const QString problem = parseSerials(parser);
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+        }
+    }
+    if (maxGiven) {
+        bool ok = false;
+        const int boards = parser.value(QStringLiteral("max-parallel")).trimmed().toInt(&ok);
+        if (!ok || boards < 1 || boards > 64) {
+            return QStringLiteral("--max-parallel needs a whole number from 1 to 64");
+        }
+        opts.maxParallel = boards;
+    }
+    if (!opts.fleet && (opts.dryRun || maxGiven)) {
+        QStringList given;
+        if (opts.dryRun) {
+            given << QStringLiteral("--dry-run");
+        }
+        if (maxGiven) {
+            given << QStringLiteral("--max-parallel");
+        }
+        return QStringLiteral("%1: a fleet option (--serials or --all-boards)").arg(given.join(QStringLiteral(", ")));
+    }
+    return QString();
+}
+
+QString FirmwareCli::Private::parseSerials(const QCommandLineParser& parser)
+{
+    static const QRegularExpression serialPattern(QStringLiteral("^[A-Za-z0-9]+$"));
+    static const QRegularExpression tagPattern(QStringLiteral("^[A-Za-z0-9_-]{1,8}$"));
+    QList<QPair<QString, QString>> entries;   // (the explicit tag or "", serial)
+    for (const QString& word : parser.values(QStringLiteral("serials"))) {
+        for (const QString& part : word.split(QLatin1Char(','))) {
+            const QString entry = part.trimmed();
+            if (entry.isEmpty()) {
+                continue;
+            }
+            const qsizetype equals = entry.indexOf(QLatin1Char('='));
+            const QString tag = equals < 0 ? QString() : entry.left(equals).trimmed();
+            const QString serial = equals < 0 ? entry : entry.mid(equals + 1).trimmed();
+            if (!serialPattern.match(serial).hasMatch()) {
+                return QStringLiteral("--serials: \"%1\" is not a serial").arg(serial);
+            }
+            if (equals >= 0 && !tagPattern.match(tag).hasMatch()) {
+                return QStringLiteral("--serials: tag \"%1\" must be 1 to 8 letters, digits, - or _").arg(tag);
+            }
+            entries.append({tag, serial});
+        }
+    }
+    if (entries.isEmpty()) {
+        return QStringLiteral("--serials needs serials, comma separated (e.g. 62ecfc6ddeb3f579,5a33c81a6e996266; TAG=SERIAL "
+                              "names a board)");
+    }
+    QStringList serials;
+    QStringList explicitTags;
+    for (const auto& [tag, serial] : std::as_const(entries)) {
+        if (serials.contains(serial)) {
+            return QStringLiteral("--serials: %1 is listed twice").arg(serial);
+        }
+        serials << serial;
+        if (!tag.isEmpty()) {
+            explicitTags << tag;
+        }
+    }
+    // The untagged entries get A, B, ... in the order given, skipping every explicit tag; "used
+    // twice" is checked on the final list, so only two explicit equal tags trip it.
+    int next = 0;
+    QStringList tags;
+    for (auto& [tag, serial] : entries) {
+        if (tag.isEmpty()) {
+            do {
+                tag = FleetFlasher::tagFor(next++);
+            } while (explicitTags.contains(tag));
+        }
+        if (tags.contains(tag)) {
+            return QStringLiteral("--serials: tag \"%1\" is used twice").arg(tag);
+        }
+        tags << tag;
+        opts.taggedSerials.append({tag, serial});
     }
     return QString();
 }
@@ -1273,6 +1465,83 @@ void FirmwareCli::Private::finish(int code, const QString& message)
     } else {
         writeLine(QStringLiteral("%1 su-fw: exit %2 (%3): %4").arg(clockText()).arg(code).arg(meaning, message), /*force=*/true);
     }
+}
+
+// ---- A fleet's board lines (v0.7.0) -------------------------------------------------------------
+
+void FirmwareCli::Private::logBoard(const FleetBoard& board, const QString& text)
+{
+    if (!jsonOutput) {
+        writeLine(clockText() + QLatin1Char(' ') + board.label() + QLatin1Char(' ') + text);
+        return;
+    }
+    JsonFields fields{{QStringLiteral("time"), isoNow()},
+                      {QStringLiteral("step"), currentStep()},
+                      {QStringLiteral("event"), QStringLiteral("log")},
+                      {QStringLiteral("board"), board.serial},
+                      {QStringLiteral("tag"), board.tag},
+                      {QStringLiteral("stage"), board.stageText()},
+                      {QStringLiteral("text"), text}};
+    if (text.startsWith(QLatin1String("in Loader mode on port "))) {
+        fields.append({QStringLiteral("port"), board.port});
+        fields.append({QStringLiteral("loader"), board.locationId});
+    }
+    writeLine(jsonLine(fields));
+}
+
+void FirmwareCli::Private::onBoardProgress(const FleetBoard& board, const QString& stage, int percent)
+{
+    if (percent < 0) {
+        return;
+    }
+    // Every 10 % per board, in text and JSON alike; a new stage (the next partition) starts over.
+    const QString key = board.serial + QLatin1Char('\n') + stage;
+    const int bucket = qBound(0, percent, 100) / 10;
+    if (boardBuckets.value(key, -1) == bucket) {
+        return;
+    }
+    boardBuckets.insert(key, bucket);
+    if (jsonOutput) {
+        writeLine(jsonLine({{QStringLiteral("time"), isoNow()},
+                            {QStringLiteral("step"), currentStep()},
+                            {QStringLiteral("event"), QStringLiteral("progress")},
+                            {QStringLiteral("board"), board.serial},
+                            {QStringLiteral("tag"), board.tag},
+                            {QStringLiteral("stage"), board.stageText()},
+                            {QStringLiteral("text"), stage},
+                            {QStringLiteral("percent"), percent}}));
+    } else {
+        writeLine(QStringLiteral("%1 %2 %3 %4 %").arg(clockText(), board.label(), stage).arg(percent));
+    }
+}
+
+void FirmwareCli::Private::onBoardFinished(const FleetBoard& board)
+{
+    if (!jsonOutput) {
+        return;   // the board's own end line said it
+    }
+    const auto seconds = [](double value) { return QJsonValue(qRound(value * 10.0) / 10.0); };
+    const QString text = board.result == FleetBoard::Result::Done
+                             ? QStringLiteral("done in %1 s (mapping %2 s, writing %3 s)")
+                                   .arg(QString::number(board.seconds, 'f', 1), QString::number(board.mappingSeconds, 'f', 1),
+                                        QString::number(board.writingSeconds, 'f', 1))
+                         : board.result == FleetBoard::Result::Ready ? QStringLiteral("ready")
+                                                                      : board.detail;
+    writeLine(jsonLine({{QStringLiteral("time"), isoNow()},
+                        {QStringLiteral("step"), currentStep()},
+                        {QStringLiteral("event"), QStringLiteral("step")},
+                        {QStringLiteral("board"), board.serial},
+                        {QStringLiteral("tag"), board.tag},
+                        {QStringLiteral("stage"), board.stageText()},
+                        {QStringLiteral("result"), board.resultText()},
+                        {QStringLiteral("ok"), board.ok()},
+                        {QStringLiteral("seconds"), seconds(board.seconds)},
+                        {QStringLiteral("mappingSeconds"), seconds(board.mappingSeconds)},
+                        {QStringLiteral("writingSeconds"), seconds(board.writingSeconds)},
+                        {QStringLiteral("written"), QJsonArray::fromStringList(board.written)},
+                        {QStringLiteral("retry"), QJsonArray::fromStringList(board.retry)},
+                        {QStringLiteral("adbBack"), board.adbBack},
+                        {QStringLiteral("text"), text}}));
 }
 
 // =======================================================================================
@@ -1761,6 +2030,9 @@ int FirmwareCli::Private::cmdPull()
 
 int FirmwareCli::Private::cmdFlashSoc()
 {
+    if (opts.fleet) {
+        return cmdFlashFleet();
+    }
     applyLayout();
     selectImage();
     if (opts.noWait) {
@@ -1828,6 +2100,107 @@ int FirmwareCli::Private::cmdFlashSoc()
         resultFields.insert(QStringLiteral("boardInfo"), job->boardInfo());
     }
     return code;
+}
+
+int FirmwareCli::Private::cmdFlashFleet()
+{
+    applyLayout();
+    selectImage();
+    if (opts.noWait) {
+        job->socFlasher()->setWaitForAdb(false);   // the job hands it to the fleet
+    }
+    if (!waitForPlan() && aborted()) {
+        resultMessage = timedOut ? QStringLiteral("timeout after %1 s").arg(timeoutSeconds) : QStringLiteral("interrupted");
+        return ExitCancelled;
+    }
+    // The names against the image's list. A row that cannot be written is a usage error only
+    // while the layout is known; an unknown layout is the job's refusal (exit 1) with the fleet's
+    // advice, not partitionProblem()'s single-board one.
+    if (job->planState() == FirmwareJob::PlanState::Ready) {
+        QStringList available;
+        for (const PartitionImage& row : job->partitions()) {
+            available << row.name;
+        }
+        const bool known = job->layoutKnown();
+        for (const QString& name : std::as_const(opts.partitionNames)) {
+            const qsizetype index = available.indexOf(name);
+            if (index < 0) {
+                return usageError(QStringLiteral("--partitions: %1 has no partition \"%2\"; it has %3")
+                                      .arg(QFileInfo(job->plannedImage()).fileName(), name, available.join(QStringLiteral(", "))));
+            }
+            if (known) {
+                const QString problem = FirmwareJob::partitionProblem(job->partitions().at(index), true);
+                if (!problem.isEmpty()) {
+                    return usageError(QStringLiteral("--partitions: %1 cannot be written: %2").arg(name, problem));
+                }
+            }
+        }
+    }
+    job->setSelectedPartitions(opts.partitionNames);
+    for (const QString& name : std::as_const(opts.partitionNames)) {
+        if (FleetFlasher::bootloaderPartitions().contains(name)) {
+            log(QStringLiteral("Warning: %1 is a bootloader partition; written because --partitions names it").arg(name));
+        }
+    }
+    if (!opts.dryRun && canAsk()) {
+        // Before the operation and without any adb of its own (that would talk to the boards
+        // outside the firmware lock): the question names what the command line gave.
+        const QString names = opts.partitionNames.join(QStringLiteral(", "));
+        QString question;
+        if (opts.allBoards) {
+            question = QStringLiteral("Write %1 on every board adb lists (--all-boards)? [y/N] ").arg(names);
+        } else {
+            QStringList tags;
+            for (const auto& entry : std::as_const(opts.taggedSerials)) {
+                tags << entry.first;
+            }
+            question = QStringLiteral("Write %1 on %2 boards (%3)? [y/N] ").arg(names).arg(opts.taggedSerials.size()).arg(tags.join(QStringLiteral(", ")));
+        }
+        writeErr(question);
+        asking = true;
+        const std::optional<QString> typed = lineReader(/*secret=*/false);
+        asking = false;
+        const QString answer = typed ? typed->trimmed().toLower() : QString();
+        if (answer != QLatin1String("y") && answer != QLatin1String("yes")) {
+            resultMessage = QStringLiteral("cancelled before anything ran");
+            return ExitCancelled;
+        }
+    }
+
+    FirmwareJob::FleetOptions options;
+    options.boards = opts.taggedSerials;
+    options.allBoards = opts.allBoards;
+    options.maxParallel = opts.maxParallel;
+    options.dryRun = opts.dryRun;
+    job->setFleetOptions(options);
+    job->setPortProvider([](const QString& serial) { return AppSettings::instance().firmwareBoardPort(serial); });
+    FirmwareJob* j = job.get();
+    QObject::connect(j, &FirmwareJob::boardPortLearned, q, [](const QString& serial, const QString& port) {
+        AppSettings& settings = AppSettings::instance();
+        if (settings.firmwareBoardPort(serial) != port) {
+            settings.setFirmwareBoardPort(serial, port);
+        }
+    });
+    QObject::connect(j, &FirmwareJob::boardEvent, q, [this](const FleetBoard& board, const QString& text) { logBoard(board, text); });
+    QObject::connect(j, &FirmwareJob::boardProgress, q,
+                     [this](const FleetBoard& board, const QString& stage, int percent) { onBoardProgress(board, stage, percent); });
+    QObject::connect(j, &FirmwareJob::boardFinished, q, [this](const FleetBoard& board) { onBoardFinished(board); });
+
+    runOperation(QString(FirmwareJob::kOpFleetFlash), [this]() { job->flashFleet(); });
+
+    // The report decides: the table before the result line, its fields in the done object, and
+    // the exit code (an empty report - the run never selected a board - is 1; none on ADB is 3).
+    FleetReport report = job->fleetReport();
+    report.setAborted(aborted());
+    for (const QString& line : report.tableLines()) {
+        log(line);
+    }
+    const QJsonObject fields = report.json();
+    for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
+        resultFields.insert(it.key(), it.value());
+    }
+    resultMessage = operationResultMessage();
+    return opOk ? ExitOk : aborted() ? ExitCancelled : report.exitCode();
 }
 
 int FirmwareCli::Private::cmdMcu()

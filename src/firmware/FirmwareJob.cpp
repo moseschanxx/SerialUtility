@@ -17,6 +17,7 @@
 #include "app/AppSettings.h"
 #include "app/Logging.h"
 #include "firmware/CcProtocol.h"
+#include "firmware/FleetReport.h"
 #include "firmware/McuLink.h"
 #include "firmware/McuUpdater.h"
 #include "firmware/ToolRunner.h"
@@ -98,6 +99,7 @@ struct FirmwareJob::Private
     QPointer<SshProfileStore> profiles;
     ToolRunner* runner = nullptr;
     SocFlasher* flasher = nullptr;
+    FleetFlasher* fleet = nullptr;          ///< (v0.7.0) flashFleet()
     McuLink* link = nullptr;
     McuUpdater* updater = nullptr;
     ImagePuller* puller = nullptr;
@@ -177,6 +179,12 @@ struct FirmwareJob::Private
     std::unique_ptr<QLockFile> operationLock;   ///< held from beginOperation() to endOperation()
     QString statusPaused;           ///< statusPausedReason(); logged when it starts
 
+    // ---- Fleet (v0.7.0) -----------------------------------------------------------------------
+    FleetOptions fleetOptions;
+    PortProvider portProvider;
+    bool fleetActive = false;       ///< the fleet flasher runs for the current operation
+    bool fleetRan = false;          ///< the last flashFleet() started the flasher (fleetReport() is its)
+
     // ---- Construction ------------------------------------------------------------------------
     void wire();
     void log(const QString& line);
@@ -224,6 +232,9 @@ struct FirmwareJob::Private
     void askDownloadMode();
     void showMaskromInstructions();
 
+    void startFleet();
+    void fleetProgress();
+
     void startMcuUpdate(const QString& stepName);
     void onLinkOpened();
     void mcuDone(bool ok, const QString& message);
@@ -251,6 +262,7 @@ FirmwareJob::FirmwareJob(ToolRunner* runner, QObject* parent)
     auto* ownRunner = runner ? nullptr : new ProcessToolRunner;
     d->runner = runner ? runner : ownRunner;
     d->flasher = new SocFlasher(d->runner, this);
+    d->fleet = new FleetFlasher(d->runner, this);
     d->link = new McuLink(d->runner, this);
     d->updater = new McuUpdater(this);
     d->puller = new ImagePuller(this);
@@ -401,6 +413,40 @@ void FirmwareJob::Private::wire()
         }
     });
 
+    // ---- Fleet flasher (v0.7.0): the run's own lines are log lines, the boards' are forwarded ----
+    connect(fleet, &FleetFlasher::logLine, q, [this](const QString& line) { log(line); });
+    connect(fleet, &FleetFlasher::boardEvent, q, [this](const FleetBoard& board, const QString& text) {
+        qCInfo(lcFirmware).noquote() << board.label() << text;
+        emit q->boardEvent(board, text);
+    });
+    connect(fleet, &FleetFlasher::boardProgress, q, [this](const FleetBoard& board, const QString& stage, int percent) {
+        emit q->boardProgress(board, stage, percent);
+    });
+    connect(fleet, &FleetFlasher::boardFinished, q, [this](const FleetBoard& board) {
+        qCInfo(lcFirmware).noquote() << board.label() << board.resultText() << board.detail;
+        emit q->boardFinished(board);
+    });
+    connect(fleet, &FleetFlasher::boardChanged, q, [this](const FleetBoard&) {
+        if (fleetActive) {
+            fleetProgress();
+        }
+    });
+    connect(fleet, &FleetFlasher::toolOutput, q,
+            [this](const FleetBoard& board, const QString& line) { emit q->toolOutput(board.label() + QLatin1Char(' ') + line); });
+    connect(fleet, &FleetFlasher::portLearned, q,
+            [this](const QString& serial, const QString& port) { emit q->boardPortLearned(serial, port); });
+    // Stored for the owner; the plan is not redone while the fleet writes from it.
+    connect(fleet, &FleetFlasher::mtdPartsRead, q,
+            [this](const QString& serial, const QString& mtdparts) { storeLayout(serial, mtdparts); });
+    connect(fleet, &FleetFlasher::finished, q, [this](bool ok, const QString& message) {
+        if (fleetActive) {
+            fleetActive = false;
+            stepFinished(kOpFleetFlash, ok, message);
+        } else {
+            log(FirmwareJob::tr("Fleet flasher: %1").arg(message));   // a late report of a step already ended
+        }
+    });
+
     // ---- MCU link / updater ----
     connect(link, &McuLink::serialSelected, q,
             [this](const QString& serial) { log(FirmwareJob::tr("MCU link: board %1").arg(serial)); });
@@ -510,6 +556,7 @@ void FirmwareJob::Private::pushToolPaths()
 {
     flasher->upgradeTool()->setToolPath(upgradeToolPath);
     flasher->adb()->setAdbPath(adbPath);
+    fleet->setToolPaths(upgradeToolPath, adbPath);
     link->adb()->setAdbPath(adbPath);
 }
 
@@ -519,6 +566,7 @@ void FirmwareJob::Private::pushToolPaths()
 
 ToolRunner* FirmwareJob::toolRunner() const { return d->runner; }
 SocFlasher* FirmwareJob::socFlasher() const { return d->flasher; }
+FleetFlasher* FirmwareJob::fleetFlasher() const { return d->fleet; }
 McuLink* FirmwareJob::mcuLink() const { return d->link; }
 McuUpdater* FirmwareJob::mcuUpdater() const { return d->updater; }
 ImagePuller* FirmwareJob::imagePuller() const { return d->puller; }
@@ -733,6 +781,9 @@ QString FirmwareJob::operationTitle(const QString& op)
     }
     if (op == kOpPullFlash) {
         return tr("Pull & Flash");
+    }
+    if (op == kOpFleetFlash) {
+        return tr("Flash fleet");
     }
     return op;
 }
@@ -1028,7 +1079,9 @@ void FirmwareJob::Private::storeLayout(const QString& serial, const QString& mtd
     }
     rememberedLayouts.insert(QString(), mtdparts);   // the layout for a board met in Loader mode
     emit q->mtdPartsRead(serial, mtdparts);           // before the plan: the owner stores it first
-    requestPlan(false);
+    if (!fleetActive) {
+        requestPlan(false);   // never under a running fleet: it writes from the plan it was given
+    }
 }
 
 QString FirmwareJob::partitionProblem(const PartitionImage& row, bool layoutIsKnown)
@@ -1164,6 +1217,9 @@ bool FirmwareJob::Private::cancellable() const
 {
     if (operation.isEmpty()) {
         return false;
+    }
+    if (step == kOpFleetFlash || operation == kOpFleetFlash) {
+        return true;   // a drain: the writes in progress finish, nothing is cut (FleetFlasher::cancel())
     }
     if (step == kOpFlash) {
         return flashCancellable;   // never while upgrade_tool writes the flash
@@ -1665,6 +1721,137 @@ void FirmwareJob::Private::showMaskromInstructions()
 }
 
 // =======================================================================================
+// Fleet (v0.7.0)
+// =======================================================================================
+
+void FirmwareJob::Private::startFleet()
+{
+    step = kOpFleetFlash;
+    fleetRan = false;
+    updateCancellable();
+    // The inputs, in the order of the class comment: each refusal is the step's result.
+    const QString image = q->imagePath();
+    if (image.isEmpty() || planState != PlanState::Ready || plannedImage != image) {
+        const QString why = image.isEmpty()           ? FirmwareJob::tr("no image: pull one or choose a local image first")
+                            : planMessage.isEmpty()   ? FirmwareJob::tr("no plan")
+                                                      : planMessage;
+        stepFinished(kOpFleetFlash, false, FirmwareJob::tr("the fleet needs the image's partition list: %1").arg(why));
+        return;
+    }
+    if (!q->layoutKnown()) {
+        // Before the selection: selectedPartitions() is empty while the layout is unknown.
+        stepFinished(kOpFleetFlash, false,
+                     FirmwareJob::tr("flash layout unknown: pass --layout, or run su-fw status once with a board running; the "
+                                     "Node image carries its own"));
+        return;
+    }
+    if (checkAll || checkedNames.isEmpty()) {
+        stepFinished(kOpFleetFlash, false,
+                     FirmwareJob::tr("a fleet writes named partitions only: --partitions NAMES; every partition would include "
+                                     "idblock, uboot, env and meta"));
+        return;
+    }
+    for (const QString& name : std::as_const(checkedNames)) {
+        for (const PartitionImage& row : std::as_const(partitionRows)) {
+            if (row.name != name) {
+                continue;
+            }
+            const QString problem = FirmwareJob::partitionProblem(row, true);
+            if (!problem.isEmpty()) {
+                stepFinished(kOpFleetFlash, false, FirmwareJob::tr("%1 cannot be written: %2; nothing was written").arg(name, problem));
+                return;
+            }
+        }
+    }
+    const QStringList selected = q->selectedPartitions();
+    if (selected.isEmpty()) {
+        stepFinished(kOpFleetFlash, false,
+                     FirmwareJob::tr("none of the named partitions (%1) is in %2; nothing was written")
+                         .arg(checkedNames.join(QStringLiteral(", ")), QFileInfo(image).fileName()));
+        return;
+    }
+    if (!fleetOptions.allBoards && fleetOptions.boards.isEmpty()) {
+        stepFinished(kOpFleetFlash, false,
+                     FirmwareJob::tr("no board selected: name the boards (--serials) or take every board on ADB (--all-boards)"));
+        return;
+    }
+    if (fleetOptions.maxParallel < 0 || fleetOptions.maxParallel > 64) {
+        stepFinished(kOpFleetFlash, false,
+                     FirmwareJob::tr("boards written at once must be 0 (all of them) to 64, not %1").arg(fleetOptions.maxParallel));
+        return;
+    }
+    const QString platform = fleet->platformRefusal();
+    if (!platform.isEmpty()) {
+        stepFinished(kOpFleetFlash, false, platform);
+        return;
+    }
+
+    QList<PartitionImage> rows;
+    for (const PartitionImage& row : std::as_const(partitionRows)) {
+        if (selected.contains(row.name)) {
+            rows << row;   // table order
+        }
+    }
+    pushToolPaths();
+    fleet->setImagePath(image);
+    fleet->setPartitions(rows);
+    fleet->setLayout(q->flashLayout(), q->usingImageLayout());
+    fleet->setBoards(fleetOptions.boards);
+    fleet->setAllBoards(fleetOptions.allBoards);
+    fleet->setMaxParallel(fleetOptions.maxParallel);
+    fleet->setDryRun(fleetOptions.dryRun);
+    fleet->setLoaderWaitSeconds(q->loaderWaitSeconds());
+    fleet->setAdbReturnTimeoutSeconds(q->adbReturnSeconds());
+    fleet->setWaitForAdb(flasher->waitForAdb());
+    fleet->setPortProvider(portProvider);
+    const QString text = FirmwareJob::tr("Flashing fleet: starting...");
+    setProgressBusy(text);
+    setPersistent(text);
+    fleetActive = true;
+    fleetRan = true;
+    if (!fleet->start()) {
+        // A refusal reports its reason through finished() from the event loop (handled in wire());
+        // one that stays silent (already running) ends the step here.
+        QTimer::singleShot(kSilentRefusalMs, q, [this]() {
+            if (fleetActive && !fleet->isRunning()) {
+                fleetActive = false;
+                stepFinished(kOpFleetFlash, false, FirmwareJob::tr("the fleet flasher did not start"));
+            }
+        });
+    }
+}
+
+void FirmwareJob::Private::fleetProgress()
+{
+    const QList<FleetBoard> list = fleet->boards();
+    int done = 0;
+    int writing = 0;
+    for (const FleetBoard& board : list) {
+        done += board.result == FleetBoard::Result::Done ? 1 : 0;
+        writing += board.stage == FleetBoard::Stage::Writing || board.stage == FleetBoard::Stage::Resetting ? 1 : 0;
+    }
+    const QString text =
+        FirmwareJob::tr("Flashing fleet: %1 of %2 boards done, %3 writing").arg(done).arg(list.size()).arg(writing);
+    setProgressBusy(text);
+    setPersistent(text);
+}
+
+void FirmwareJob::setFleetOptions(const FleetOptions& options) { d->fleetOptions = options; }
+FirmwareJob::FleetOptions FirmwareJob::fleetOptions() const { return d->fleetOptions; }
+void FirmwareJob::setPortProvider(PortProvider provider) { d->portProvider = std::move(provider); }
+
+QList<FleetBoard> FirmwareJob::fleetBoards() const
+{
+    return d->fleetRan ? d->fleet->boards() : QList<FleetBoard>();
+}
+
+FleetReport FirmwareJob::fleetReport() const
+{
+    // A flashFleet() refused before the flasher started leaves the report empty (exit 1).
+    return d->fleetRan ? d->fleet->report() : FleetReport();
+}
+
+// =======================================================================================
 // MCU
 // =======================================================================================
 
@@ -2000,9 +2187,30 @@ void FirmwareJob::pullAndFlash()
     d->startPull();
 }
 
+void FirmwareJob::flashFleet()
+{
+    if (d->refuseIfBusy()) {
+        return;   // the running operation (a fleet, maybe) keeps its report
+    }
+    d->fleetRan = false;   // a refusal before the flasher starts leaves the report empty
+    if (!d->beginOperation(kOpFleetFlash)) {
+        return;
+    }
+    d->startFleet();
+}
+
 void FirmwareJob::cancel()
 {
     if (!isBusy()) {
+        return;
+    }
+    if (d->step == kOpFleetFlash || d->operation == kOpFleetFlash) {
+        // Always accepted: a drain, never a cut. A second one only says what it still waits for.
+        if (!d->fleet->isDraining()) {
+            d->cancelRequested = true;
+            d->log(tr("Cancelling %1").arg(operationTitle(kOpFleetFlash)));
+        }
+        d->fleet->cancel();
         return;
     }
     if (d->step == kOpFlash && !d->flashCancellable) {

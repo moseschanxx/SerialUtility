@@ -45,7 +45,9 @@ qt_add_library(su_testsupport STATIC
     support/FakeMcu.h
     support/FakeMcu.cpp
     support/FirmwareFixtures.h
-    support/FirmwareFixtures.cpp)
+    support/FirmwareFixtures.cpp
+    support/FakeUsbBus.h
+    support/FakeUsbBus.cpp)
 target_include_directories(su_testsupport PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(su_testsupport PUBLIC su_core Qt6::Network)
 su_set_compile_options(su_testsupport)
@@ -90,6 +92,11 @@ target_link_libraries(tst_firmwarecli PRIVATE su_testsupport)
 add_dependencies(tst_firmwarecli su_fw)
 target_compile_definitions(tst_firmwarecli PRIVATE SU_FW_EXECUTABLE="$<TARGET_FILE:su_fw>")
 set_tests_properties(tst_mcuupdater tst_imagepuller tst_firmwarejob tst_firmwarecli PROPERTIES TIMEOUT 600)
+# (v0.7.0) Parallel SoC flashing: FleetFlasher / FleetReport on FakeToolRunner and FakeUsbBus (the
+# seven bench boards, every misbehaviour of the mapping; no adb, no upgrade_tool, no board).
+su_add_test(tst_fleetflasher      tst_fleetflasher.cpp)
+target_link_libraries(tst_fleetflasher PRIVATE su_testsupport)
+set_tests_properties(tst_fleetflasher PROPERTIES TIMEOUT 600)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

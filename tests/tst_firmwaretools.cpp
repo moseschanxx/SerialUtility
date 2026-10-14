@@ -494,6 +494,10 @@ private slots:
     void rockchip_parsePackageFile();
     void rockchip_planPartitions();
     void rockchip_partitionCommandLines();
+    // ---- RockchipTool: addressed commands (v0.7.0, the fleet) ---------------------------------
+    void rockchip_addressedCommandLines();
+    void rockchip_deviceAtAndNoSuchDevice();
+    void rockchip_writeFailureAndResetOk();
 
     // ---- AdbTool ----------------------------------------------------------------------------
     void adb_parseDevices();
@@ -508,6 +512,8 @@ private slots:
     void usb_driverHint();
     void usb_presentDevices();
     void usb_sysfsScan();
+    void usb_portKey();
+    void usb_describe();
 
     // ---- McuLink ----------------------------------------------------------------------------
     void link_openAndClose();
@@ -1942,6 +1948,89 @@ void tst_firmwaretools::rockchip_partitionCommandLines()
 }
 
 // =============================================================================================
+// RockchipTool: addressed commands (v0.7.0)
+// =============================================================================================
+
+void tst_firmwaretools::rockchip_addressedCommandLines()
+{
+    QTemporaryDir dir;
+    FakeToolRunner runner;
+    RockchipTool tool(&runner);
+    tool.setToolPath(QStringLiteral("upgrade_tool"));
+    tool.setTimeoutMs(2500);
+    const QString file = dir.filePath(QStringLiteral("my images/update.extracted/rootfs.img"));
+    QVERIFY(tool.writeLbaOn(QStringLiteral("112"), 8064, 10240, file) != nullptr);
+    QCOMPARE(runner.lastInvocation(),
+             ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                           {QStringLiteral("-s"), QStringLiteral("112"), QStringLiteral("WL"), QStringLiteral("8064"),
+                                            QStringLiteral("10240"), QDir::toNativeSeparators(file)}));
+    QCOMPARE(runner.lastOptions().timeoutMs, 0);                       // a write is never stopped
+    QCOMPARE(runner.lastOptions().workingDirectory, QFileInfo(file).absolutePath());
+    const QString folder = dir.filePath(QStringLiteral("work/.fleet/62ecfc6ddeb3f579"));
+    tool.writeLbaOn(QStringLiteral("112"), 8064, 10240, file, folder);
+    QCOMPARE(runner.lastOptions().workingDirectory, folder);           // a folder of the board's own
+    tool.writeLbaOn(QStringLiteral("154"), 18304, 0, QStringLiteral("D:/x/userdata.img"));
+#ifdef Q_OS_WIN
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool -s 154 WL 18304 -1 D:\\x\\userdata.img"));   // "to the end"
+#endif
+    QVERIFY(runner.lastInvocation().startsWith(QStringLiteral("upgrade_tool -s 154 WL 18304 -1 ")));
+    QVERIFY(tool.resetDeviceOn(QStringLiteral("154")) != nullptr);
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool -s 154 RD"));
+    QCOMPARE(runner.lastOptions().timeoutMs, 2500);                    // the LD timeout, as RD
+#ifdef QT_NO_DEBUG
+    // Release: an unaddressed write is refused - nothing runs and null comes back.
+    const int before = static_cast<int>(runner.invocations().size());
+    QCOMPARE(tool.writeLbaOn(QString(), 8064, 10240, file), nullptr);
+    QCOMPARE(tool.resetDeviceOn(QString()), nullptr);
+    QCOMPARE(static_cast<int>(runner.invocations().size()), before);
+#endif
+    // The plain commands are the 0.6.0 ones, byte for byte (no -s).
+    tool.writeLba(1920, 6144, file);
+    QCOMPARE(runner.lastInvocation(),
+             ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"), {QStringLiteral("WL"), QStringLiteral("1920"), QStringLiteral("6144"),
+                                                                           QDir::toNativeSeparators(file)}));
+    tool.resetDevice();
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool RD"));
+    tool.listDevices();
+    QCOMPARE(runner.lastInvocation(), QStringLiteral("upgrade_tool LD"));
+}
+
+void tst_firmwaretools::rockchip_deviceAtAndNoSuchDevice()
+{
+    const QList<RockusbDevice> devices = RockchipTool::parseDeviceList(
+        QString::fromLatin1(kBanner + "List of rockusb connected(2)\r\n"
+                                      "DevNo=1\tVid=0x2207,Pid=0x110e,LocationID=112\tMode=Loader\tSerialNo=\r\n"
+                                      "DevNo=2\tVid=0x2207,Pid=0x110c,LocationID=154\tMode=Maskrom\tSerialNo=\r\n"));
+    QCOMPARE(devices.size(), qsizetype(2));
+    const std::optional<RockusbDevice> found = RockchipTool::deviceAt(devices, QStringLiteral("154"));
+    QVERIFY(found.has_value());
+    QCOMPARE(found->devNo, 2);
+    QCOMPARE(found->mode, RockusbDevice::Mode::Maskrom);
+    QVERIFY(!RockchipTool::deviceAt(devices, QStringLiteral("113")).has_value());
+    QVERIFY(!RockchipTool::deviceAt(devices, QString()).has_value());
+    QVERIFY(!RockchipTool::deviceAt({}, QStringLiteral("112")).has_value());
+    QVERIFY(RockchipTool::reportsNoSuchDevice(QString::fromLatin1(kBanner + "No found specific rockusb device!\r\n")));
+    QVERIFY(RockchipTool::reportsNoSuchDevice(QStringLiteral("no found specific ROCKUSB device")));
+    QVERIFY(!RockchipTool::reportsNoSuchDevice(QString::fromLatin1(kBanner)));
+    QVERIFY(!RockchipTool::reportsNoSuchDevice(QStringLiteral("Reset Device OK.")));
+}
+
+void tst_firmwaretools::rockchip_writeFailureAndResetOk()
+{
+    QVERIFY(RockchipTool::reportsWriteFailure(QStringLiteral("Write LBA failed!")));
+    QVERIFY(RockchipTool::reportsWriteFailure(QStringLiteral("Error:...->Fail to write lba,ret=-1")));
+    QVERIFY(RockchipTool::reportsWriteFailure(QStringLiteral("Write LBA quit, creating comm object failed!")));
+    QVERIFY(RockchipTool::reportsWriteFailure(QString::fromLatin1(kBanner) + QStringLiteral("Write LBA failed!\r\n")));
+    QVERIFY(!RockchipTool::reportsWriteFailure(QString::fromLatin1(kBanner)));          // the banner alone
+    QVERIFY(!RockchipTool::reportsWriteFailure(QStringLiteral("Write LBA from file (100%)")));
+    QVERIFY(!RockchipTool::reportsWriteFailure(QString()));
+    QVERIFY(RockchipTool::reportsResetOk(QStringLiteral("Reset Device OK.")));
+    QVERIFY(RockchipTool::reportsResetOk(QString::fromLatin1(kBanner) + QStringLiteral("reset device ok\r\n")));
+    QVERIFY(!RockchipTool::reportsResetOk(QStringLiteral("Reset Device Fail!")));
+    QVERIFY(!RockchipTool::reportsResetOk(QString::fromLatin1(kBanner)));
+}
+
+// =============================================================================================
 // AdbTool
 // =============================================================================================
 
@@ -2238,6 +2327,51 @@ void tst_firmwaretools::usb_sysfsScan()
     QVERIFY(found.at(1).driverClass.isEmpty());
     QCOMPARE(UsbProbe::scanSysfs(root.path(), 0x1d6b).size(), 1);
     QVERIFY(UsbProbe::scanSysfs(root.filePath(QStringLiteral("nowhere")), UsbProbe::kRockchipVid).isEmpty());
+}
+
+void tst_firmwaretools::usb_portKey()
+{
+    // The Node board: no USB serial string, so Windows names both instances by their bus address.
+    const UsbDeviceInfo adb = usbDevice(QStringLiteral("USB\\VID_2207&PID_0006\\6&38635FDB&0&2"), QStringLiteral("AndroidUsbDeviceClass"));
+    QCOMPARE(adb.portKey(), QStringLiteral("6&38635FDB&0&2"));
+    UsbDeviceInfo loader = usbDevice(QStringLiteral("USB\\VID_2207&PID_110E\\6&38635FDB&0&2"), QStringLiteral("USB"), 0,
+                                     QStringLiteral("Rockusb Device"));
+    loader.pid = 0x110e;
+    QCOMPARE(loader.portKey(), adb.portKey());   // the same board on the same port
+    // A device with a serial string: its location, when known.
+    UsbDeviceInfo serialOnly = usbDevice(QStringLiteral("USB\\VID_2207&PID_0006\\0225CE3C8D8D6E44"), QStringLiteral("AndroidUsbDeviceClass"));
+    QCOMPARE(serialOnly.portKey(), QString());
+    serialOnly.locationPath = QStringLiteral("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(1)#USB(2)");
+    QCOMPARE(serialOnly.portKey(), serialOnly.locationPath);
+    QCOMPARE(UsbDeviceInfo().portKey(), QString());
+    // scanSysfs()'s shape on Linux.
+    const UsbDeviceInfo sysfs = usbDevice(QStringLiteral("USB\\VID_2207&PID_0006\\BUS&1-2.3"), QStringLiteral("usb"));
+    QCOMPARE(sysfs.portKey(), QStringLiteral("BUS&1-2.3"));
+
+    QVERIFY(adb.isAdbGadget());
+    QVERIFY(!adb.isDownloadMode());
+    QVERIFY(loader.isDownloadMode());
+    QVERIFY(!loader.isAdbGadget());
+    UsbDeviceInfo maskrom = loader;
+    maskrom.pid = 0x110c;
+    QVERIFY(maskrom.isDownloadMode());
+    UsbDeviceInfo other = adb;
+    other.vid = 0x18d1;   // another vendor's ADB
+    QVERIFY(!other.isAdbGadget());
+    QVERIFY(!other.isDownloadMode());
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+    QVERIFY(UsbProbe::hasPlatformProbe());
+#endif
+}
+
+void tst_firmwaretools::usb_describe()
+{
+    QCOMPARE(UsbProbe::describe({}), QStringLiteral("USB bus: no Rockchip device"));
+    UsbDeviceInfo loader = usbDevice(QStringLiteral("USB\\VID_2207&PID_110E\\6&38635FDB&0&2"), QStringLiteral("USB"));
+    loader.pid = 0x110e;
+    const UsbDeviceInfo adb = usbDevice(QStringLiteral("USB\\VID_2207&PID_0006\\6&38635FDB&0&3"), QStringLiteral("AndroidUsbDeviceClass"));
+    QCOMPARE(UsbProbe::describe({adb}), QStringLiteral("USB bus: 1 Rockchip device (1 ADB, 0 in download mode)"));
+    QCOMPARE(UsbProbe::describe({adb, adb, loader}), QStringLiteral("USB bus: 3 Rockchip devices (2 ADB, 1 in download mode)"));
 }
 
 // =============================================================================================

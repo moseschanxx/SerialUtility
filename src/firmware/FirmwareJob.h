@@ -10,11 +10,13 @@
 #include <optional>
 
 #include "firmware/CcPackage.h"
+#include "firmware/FleetFlasher.h"
 #include "firmware/ImagePuller.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/SocFlasher.h"
 #include "ssh/SshConnection.h"
 
+class FleetReport;
 class McuLink;
 class McuUpdater;
 class SshProfileStore;
@@ -63,6 +65,40 @@ class ToolRunner;
  *    <title>: <message>"). The build-machine connection stays open across the chain (keepSsh) and
  *    is closed when it ends. stepFinished() is emitted for the single step of the other operations
  *    too, right before their operationFinished().
+ *  - flashFleet() ("fleet-flash", v0.7.0; FleetFlasher): several boards at once - the Loader-mode
+ *    partition writes of flashSoc() on every board of fleetOptions() (tagged serials, or every
+ *    board on ADB), every upgrade_tool addressed with `-s <LocationID>`, the image unpacked once by
+ *    this job's plan and shared. Inputs, checked first in this order and refused as a step framed
+ *    like every result: imagePath() with a Ready plan of that very image ("the fleet needs the
+ *    image's partition list: <plan message>"), a known layout (layoutKnown(): else "flash layout
+ *    unknown: pass --layout, or run su-fw status once with a board running; the Node image carries
+ *    its own" - before the selection, because selectedPartitions() is empty while the layout is
+ *    unknown), a selection that names rows - the raw selection: not allPartitionsSelected() and
+ *    setSelectedPartitions() given names ("a fleet writes named partitions only: --partitions
+ *    NAMES; every partition would include idblock, uboot, env and meta") - with every named row
+ *    writable (partitionProblem() empty: else "<name> cannot be written: <problem>; nothing was
+ *    written") and selectedPartitions() then non-empty, boards or allBoards, maxParallel 0..64,
+ *    and a platform that can map ports (FleetFlasher::platformRefusal()). Then the
+ *    FleetFlasher run with the tool paths, the selected rows, flashLayout() / usingImageLayout(),
+ *    the ports remembered per serial (setPortProvider(); the tab / su-fw answer from
+ *    AppSettings::firmwareBoardPort()), loaderWaitSeconds() and adbReturnSeconds() and the
+ *    flasher's waitForAdb(). Its per-board lines come as boardEvent() / boardProgress() /
+ *    boardFinished() (mirrored to lcFirmware with the board's label; not through logLine(), which
+ *    carries only the run's own lines), its learned ports as boardPortLearned(serial, port) and its
+ *    layouts as mtdPartsRead(serial, mtdparts), for the owner to store. progress(): "Flashing fleet:
+ *    <k> of <n> boards done, <w> writing" (kProgressBusy). The result is the fleet's summary ("7 of
+ *    7 boards flashed in 48.3 s (mapping 9.8 s, writing 31.2 s)"; FleetReport::summary()), the
+ *    operation title "Flash fleet" - beginOperation() is untouched, so a dry run's banner is the
+ *    same "--- Flash fleet ---" and the flasher's "Dry run: ..." line says what it is. A
+ *    flashFleet() refused before the flasher started (the lock, the inputs above) leaves
+ *    fleetReport() empty (no boards, stop ""), which FleetReport::exitCode() maps to 1; the
+ *    flasher's own refusals carry their text as the stop. cancel() is accepted at any moment (isCancellable() stays true
+ *    for the whole fleet; never cancelRefused()): the FleetFlasher drains - boards not started are
+ *    skipped and reset, a board that is being written finishes all its rows and its reset, the ADB
+ *    waits end - and the operation ends with the drained summary; a second cancel() only logs how
+ *    many writes are still being waited for. The lock, busyChanged(), stepFinished() and
+ *    operationFinished() frame it like the other operations; one fleet per PC, by the same lock as
+ *    one flash. flashSoc(), SocFlasher and the tab are untouched; the tab never calls flashFleet().
  * Every operation also checks its inputs first and fails as a step ("no image: pull one or choose a
  * local image first", "choose a valid .pkg package first", ...), framed like any other result.
  *
@@ -143,6 +179,7 @@ public:
     static constexpr QLatin1StringView kOpSetRole{"set-role"};
     static constexpr QLatin1StringView kOpInfo{"info"};
     static constexpr QLatin1StringView kOpPullFlash{"pull-flash"};
+    static constexpr QLatin1StringView kOpFleetFlash{"fleet-flash"};   ///< (v0.7.0) flashFleet(); title "Flash fleet"
 
     // ---- progress() values that are no percentage --------------------------------------------
     static constexpr int kProgressBusy = -1;       ///< a stage without a percentage (an indeterminate bar)
@@ -182,6 +219,18 @@ public:
     /// whose serial is unknown (one met in Loader mode: rockusb reports no ADB serial).
     using LayoutProvider = std::function<QString(const QString& serial)>;
 
+    /// (v0.7.0) What a fleet flash writes and on which boards (flashFleet()).
+    struct FleetOptions
+    {
+        QList<QPair<QString, QString>> boards;   ///< (tag, serial) in selection order, tags and serials unique (the CLI assigns the default tags: FirmwareCli.h); ignored with allBoards
+        bool allBoards = false;                  ///< every board `adb devices` lists as "device", tagged A, B, ... in that order
+        int maxParallel = 0;                     ///< boards written at once; 0 = all of them (1..64 otherwise)
+        bool dryRun = false;                     ///< the selection, the port memory and the plan only: no reboot, no write
+    };
+    /// (v0.7.0) The USB port remembered per serial ("" = none): the tab / su-fw answer from
+    /// AppSettings::firmwareBoardPort(), as setLayoutProvider() does for the layout.
+    using PortProvider = std::function<QString(const QString& serial)>;
+
     /// What a pull fills in where the profile leaves it open (the tab: Preferences > SSH): the
     /// known_hosts file for every profile without one; identity file, terminal type and keep-alive
     /// for an ad-hoc user@host target.
@@ -201,6 +250,9 @@ public:
     // ---- Collaborators (owned; the same objects for the job's whole life) ---------------------
     ToolRunner* toolRunner() const;
     SocFlasher* socFlasher() const;
+    /// (v0.7.0) The fleet's flasher, created with the job on the same runner; the tests reach its
+    /// enumerator, polls and LD policy through it (FirmwareCli::setJobSetup()).
+    FleetFlasher* fleetFlasher() const;
     McuLink* mcuLink() const;
     McuUpdater* mcuUpdater() const;
     ImagePuller* imagePuller() const;
@@ -284,6 +336,13 @@ public:
     /// is not in the board's partition layout", ...); empty = it can.
     static QString partitionProblem(const PartitionImage& row, bool layoutIsKnown);
 
+    // ---- Fleet (v0.7.0) --------------------------------------------------------------------------
+    void setFleetOptions(const FleetOptions& options);
+    FleetOptions fleetOptions() const;
+    void setPortProvider(PortProvider provider);
+    QList<FleetBoard> fleetBoards() const;       ///< the boards of the last flashFleet() (FleetFlasher::boards(); empty before one ran)
+    FleetReport fleetReport() const;             ///< FleetFlasher::report() of the last flashFleet(): the table, the JSON fields, the exit code
+
     // ---- State -------------------------------------------------------------------------------------
     bool isBusy() const;
     QString currentOperation() const;               ///< a kOp* name while busy, else ""
@@ -298,7 +357,7 @@ public:
     void setAuthPromptHandler(AuthPromptHandler handler);
     void setDownloadModeHandler(DownloadModeHandler handler);
 
-    static QString operationTitle(const QString& op);   ///< "Pull", "Flash SoC", "Update MCU", "Set role", "Read MCU", "Pull & Flash"
+    static QString operationTitle(const QString& op);   ///< "Pull", "Flash SoC", "Update MCU", "Set role", "Read MCU", "Pull & Flash", "Flash fleet"
     static QString resultText(const QString& op, bool ok, const QString& message);   ///< "<title> done: <message>" / "<title> failed: <message>"
     static QString roleText(quint32 role);          ///< "rx" / "tx" / ""
     static quint32 roleFromText(const QString& text);
@@ -310,6 +369,7 @@ public slots:
     void setMcuRole();
     void readMcuInfo();
     void pullAndFlash();
+    void flashFleet();                              ///< (v0.7.0) the fleet flash of the class comment; refused while busy like every operation
     void cancel();
     /// Swaps update.img and update.prev.img in the cache (ImagePuller::rollBack()); refused while busy
     /// (busyRefused(), false, *message untouched). Logged; *message = the line; the cache image is
@@ -346,6 +406,11 @@ signals:
     void mtdPartsRead(const QString& serial, const QString& mtdparts);
     /// The status's /proc/cmdline read of `serial` ended: ok = a layout was read (mtdPartsRead() came first).
     void layoutReadFinished(const QString& serial, bool ok);
+    // ---- Fleet (v0.7.0): FleetFlasher's per-board signals, forwarded while flashFleet() runs ----
+    void boardEvent(const FleetBoard& board, const QString& text);                   ///< one line per board per event (the owner prefixes board.label())
+    void boardProgress(const FleetBoard& board, const QString& stage, int percent);  ///< 0..100 over the board's bytes
+    void boardFinished(const FleetBoard& board);                                     ///< its result is final
+    void boardPortLearned(const QString& serial, const QString& port);               ///< store it (AppSettings::setFirmwareBoardPort)
 
 private:
     struct Private;

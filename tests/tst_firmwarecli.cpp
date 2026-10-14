@@ -18,6 +18,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -33,6 +34,8 @@
 #include "firmware/CcProtocol.h"
 #include "firmware/FirmwareCli.h"
 #include "firmware/FirmwareJob.h"
+#include "firmware/FleetFlasher.h"
+#include "firmware/FleetReport.h"
 #include "firmware/McuLink.h"
 #include "firmware/SocFlasher.h"
 #include "firmware/ToolRunner.h"
@@ -40,6 +43,7 @@
 #include "ssh/SshProfile.h"
 #include "support/FakeMcu.h"
 #include "support/FakeToolRunner.h"
+#include "support/FakeUsbBus.h"
 #include "support/FirmwareFixtures.h"
 #include "support/TestSshServer.h"
 
@@ -180,6 +184,65 @@ void scriptNoBoard(FakeToolRunner& runner)
     runner.addHandler(exfPattern(), &nodeExtractor);
 }
 
+/// (v0.7.0) A fleet on CliRig: the seven bench boards on a FakeUsbBus whose enumeration and polls
+/// the job's FleetFlasher gets (`extraSetup` adds the case's own settings).
+struct FleetCliRig
+{
+    /// `bench` false: the test composes the bus (and its own handlers) and calls script() itself.
+    explicit FleetCliRig(bool bench = true)
+    {
+        rig.setup = [this](FirmwareJob& job) {
+            job.fleetFlasher()->setUsbEnumerator([this](quint16 vid) { return bus.enumerate(vid); });
+            job.fleetFlasher()->setPollIntervalMs(10);
+            if (extraSetup) {
+                extraSetup(job);
+            }
+        };
+        if (bench) {
+            scriptFleet(bus, rig.runner);
+        }
+    }
+
+    /// The bench without scriptFleet(): `absent` boards are not attached.
+    void addBench(const QSet<int>& absent = {})
+    {
+        for (int k = 0; k < 7; ++k) {
+            bus.addBoard(QLatin1String(kFleetBench[k].serial), QLatin1String(kFleetBench[k].port),
+                         absent.contains(k) ? FakeUsbBus::State::Absent : FakeUsbBus::State::Adb);
+        }
+        script();
+    }
+
+    void script()
+    {
+        rig.runner.addHandler(exfPattern(), &nodeExtractor);
+        bus.script(rig.runner);
+    }
+
+    CliResult run(const QStringList& arguments) { return rig.run(arguments); }
+
+    CliRig rig;
+    FakeUsbBus bus;
+    std::function<void(FirmwareJob&)> extraSetup;
+};
+
+QString benchSerial(int k)
+{
+    return QLatin1String(kFleetBench[k].serial);
+}
+
+QString benchPort(int k)
+{
+    return QLatin1String(kFleetBench[k].port);
+}
+
+/// The commands that talk to a board (everything but the plan's EXF).
+const QRegularExpression& boardTools()
+{
+    static const QRegularExpression pattern(QStringLiteral("^upgrade_tool (LD|WL|RD|UF|-s)|^adb"));
+    return pattern;
+}
+
 QString readAll(const QString& path)
 {
     QFile file(path);
@@ -270,6 +333,26 @@ private slots:
     void flashLogFileHoldsTheSameLines();
     void anotherOperationRunningExits1();
 
+    // ---- flash-soc, a fleet (v0.7.0) ----------------------------------------------------------
+    void fleetUsageErrors();
+    void fleetDryRun();
+    void fleetTwoBoards();
+    void fleetAllBoardsAndMaxParallelOne();
+    void fleetAllBoardsNextToAPhoneExits1();
+    void fleetJsonLines();
+    void fleetNotBackExits1();
+    void fleetInterruptDrains();
+    void fleetTimeoutDuringMapping();
+    void fleetMappingStopResetsAndReports();
+    void fleetForeignLoaderRefused();
+    void fleetBootloaderPartitionWarns();
+    void fleetLockHeldExits1();
+    void fleetLayoutUnknownExits1();
+    void fleetQuestionOnATerminal();
+    void fleetLogAndQuiet();
+    void singleBoardPathUnchanged();
+    void fleetHelp();
+
     // ---- MCU -----------------------------------------------------------------------------------------
     void mcuInfo();
     void mcuInfoNoBoardExits3();
@@ -295,6 +378,12 @@ private:
     QString makeImage(const QString& relative) const
     {
         const QString path = caseDir(relative);
+        return writeFile(path, rkfwBytes()) ? path : QString();
+    }
+    /// An image under "withenv-<n>": its env.img carries the Node layout (the fleet's usual case).
+    QString withEnvImage(const QString& suffix = QString()) const
+    {
+        const QString path = tempPath(QStringLiteral("withenv-%1%2/update.img").arg(m_caseNumber).arg(suffix));
         return writeFile(path, rkfwBytes()) ? path : QString();
     }
 
@@ -397,7 +486,7 @@ void Tst_firmwarecli::versionText()
     QCOMPARE(version.code, 0);
     QCOMPARE(version.out, FirmwareCli::versionText() + QLatin1Char('\n'));
     QVERIFY(version.out.startsWith(QStringLiteral("su-fw " APP_VERSION " (BuildAI Serial Utility, ")));
-    QCOMPARE(QStringLiteral(APP_VERSION), QStringLiteral("0.6.0"));
+    QCOMPARE(QStringLiteral(APP_VERSION), QStringLiteral("0.7.0"));
 }
 
 void Tst_firmwarecli::usageErrorsGoToStderr()
@@ -1920,6 +2009,661 @@ void Tst_firmwarecli::passwordVariableLeavesTheEnvironment()
         QCOMPARE(seen, QStringLiteral("<unset>"));
     }
     QVERIFY(!qEnvironmentVariableIsSet(kSecretVariable));
+}
+
+// =======================================================================================
+// flash-soc, a fleet (v0.7.0)
+// =======================================================================================
+
+void Tst_firmwarecli::fleetUsageErrors()
+{
+    CliRig rig;
+    const QString image = makeImage(QStringLiteral("fleet/update.img"));
+    const QStringList base{QStringLiteral("flash-soc"), QStringLiteral("--image"), image};
+    const auto with = [&base](const QStringList& more) { return base + more; };
+    const struct
+    {
+        QStringList arguments;
+        QString message;
+    } cases[] = {
+        {with({QStringLiteral("--serials"), QStringLiteral("aaa"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials and --all-boards: choose one")},
+        {with({QStringLiteral("--serials"), QStringLiteral("aaa"), QStringLiteral("--serial"), QStringLiteral("bbb"), QStringLiteral("--partitions"),
+               QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serial is for one board; for a fleet use --serials S1,S2,... or --all-boards")},
+        {with({QStringLiteral("--all-boards"), QStringLiteral("--all")}),
+         QStringLiteral("su-fw: --all is refused for a fleet: name the partitions with --partitions NAMES (idblock, uboot, env and meta are "
+                        "written only when named)")},
+        {with({QStringLiteral("--all-boards")}), QStringLiteral("su-fw: --partitions NAMES is required for a fleet (su-fw partitions lists them)")},
+        {with({QStringLiteral("--serials"), QStringLiteral("aaa"), QStringLiteral("--partitions"), QStringLiteral(" , ")}),
+         QStringLiteral("su-fw: --partitions NAMES is required for a fleet")},
+        {with({QStringLiteral("--serials"), QStringLiteral(" , "), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials needs serials, comma separated (e.g. 62ecfc6ddeb3f579,5a33c81a6e996266; TAG=SERIAL names a board)")},
+        {with({QStringLiteral("--serials"), QStringLiteral("aa-bb"), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials: \"aa-bb\" is not a serial")},
+        {with({QStringLiteral("--serials"), QStringLiteral("aaa,bbb"), QStringLiteral("--serials"), QStringLiteral("aaa"), QStringLiteral("--partitions"),
+               QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials: aaa is listed twice")},
+        {with({QStringLiteral("--serials"), QStringLiteral("B=aaa,B=bbb"), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials: tag \"B\" is used twice")},
+        {with({QStringLiteral("--serials"), QStringLiteral("TOOLONGTAG=aaa"), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials: tag \"TOOLONGTAG\" must be 1 to 8 letters, digits, - or _")},
+        {with({QStringLiteral("--serials"), QStringLiteral("=aaa"), QStringLiteral("--partitions"), QStringLiteral("rootfs")}),
+         QStringLiteral("su-fw: --serials: tag \"\" must be 1 to 8 letters, digits, - or _")},
+        {with({QStringLiteral("--serials"), QStringLiteral("aaa"), QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--max-parallel"),
+               QStringLiteral("0")}),
+         QStringLiteral("su-fw: --max-parallel needs a whole number from 1 to 64")},
+        {with({QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--max-parallel"), QStringLiteral("65")}),
+         QStringLiteral("su-fw: --max-parallel needs a whole number from 1 to 64")},
+        {with({QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--max-parallel"), QStringLiteral("x")}),
+         QStringLiteral("su-fw: --max-parallel needs a whole number from 1 to 64")},
+        {with({QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--dry-run")}),
+         QStringLiteral("su-fw: --dry-run: a fleet option (--serials or --all-boards)")},
+        {with({QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--max-parallel"), QStringLiteral("3")}),
+         QStringLiteral("su-fw: --max-parallel: a fleet option (--serials or --all-boards)")},
+        {with({QStringLiteral("--all"), QStringLiteral("--dry-run"), QStringLiteral("--max-parallel"), QStringLiteral("3")}),
+         QStringLiteral("su-fw: --dry-run, --max-parallel: a fleet option (--serials or --all-boards)")},
+        {with({QStringLiteral("--dry-run")}), QStringLiteral("su-fw: --dry-run: a fleet option (--serials or --all-boards)")},
+    };
+    for (const auto& c : cases) {
+        const CliResult result = rig.run(c.arguments);
+        QVERIFY2(result.code == 2, qPrintable(result.dump()));
+        QVERIFY2(result.out.isEmpty(), qPrintable(result.dump()));
+        QVERIFY2(result.err.startsWith(c.message), qPrintable(result.dump()));
+        QVERIFY2(result.err.contains(QStringLiteral("--help")), qPrintable(result.dump()));
+    }
+    QVERIFY(rig.runner.invocations().isEmpty());
+
+    // The default tags skip the explicit ones (a dry run of serials nobody attached shows them).
+    FleetCliRig fleet;
+    const QString env = withEnvImage();
+    CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("B=aaa,bbb"), QStringLiteral("--partitions"),
+                                  QStringLiteral("rootfs"), QStringLiteral("--dry-run"), QStringLiteral("--image"), env});
+    QVERIFY2(result.code == 3, qPrintable(result.dump()));
+    QVERIFY2(result.hasTextStarting(QStringLiteral("[B aaa] not on ADB: board aaa is not attached; attached: ")), qPrintable(result.dump()));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[A bbb] not on ADB: board bbb is not attached; attached: ")));
+    result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("A=aaa,bbb,C=ccc"), QStringLiteral("--partitions"),
+                        QStringLiteral("rootfs"), QStringLiteral("--dry-run"), QStringLiteral("--image"), env});
+    QVERIFY(result.hasTextStarting(QStringLiteral("[B bbb] not on ADB: ")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[C ccc] not on ADB: ")));
+}
+
+void Tst_firmwarecli::fleetDryRun()
+{
+    {
+        FleetCliRig fleet;
+        const QString image = withEnvImage();
+        const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                            QStringLiteral("--dry-run"), QStringLiteral("--image"), image});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        const QStringList texts = result.texts();
+        const qsizetype banner = texts.indexOf(QStringLiteral("--- Flash fleet ---"));
+        QVERIFY2(banner >= 0 && banner + 1 < texts.size(), qPrintable(result.dump()));
+        QCOMPARE(texts.at(banner + 1), QStringLiteral("Dry run: the selection, the remembered ports and the plan; no reboot, no write"));
+        QVERIFY(!result.out.contains(QStringLiteral("(dry run)")));
+        for (const FleetBench& b : kFleetBench) {
+            QVERIFY2(result.hasText(QStringLiteral("[%1 %2] on ADB; expected port unknown (first run)").arg(QLatin1String(b.tag), QLatin1String(b.serial))),
+                     qPrintable(result.dump()));
+        }
+        QVERIFY(result.hasText(QStringLiteral("Plan: write rootfs (3830272 bytes, sector 8064, 10240 sectors) on 7 boards, up to 7 at once")));
+        const qsizetype header = texts.indexOf(QRegularExpression(QStringLiteral("^board  serial .*expected port.*")));
+        QVERIFY2(header >= 0, qPrintable(result.dump()));
+        int ready = 0;
+        for (qsizetype i = header + 1; i < texts.size(); ++i) {
+            ready += texts.at(i).contains(QStringLiteral("  ready")) ? 1 : 0;
+        }
+        QCOMPARE(ready, 7);
+        QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("reboot loader| WL | RD$"))), 0);
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): dry run: 7 of 7 boards ready"));
+    }
+    {
+        FleetCliRig fleet(false);
+        fleet.addBench({2});
+        const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                            QStringLiteral("--dry-run"), QStringLiteral("--image"), withEnvImage(QStringLiteral("b"))});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));   // --all-boards: an absent board is not selected at all
+        FleetCliRig named(false);
+        named.addBench({2});
+        const CliResult skipped = named.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"),
+                                             QStringLiteral("%1,%2,%3").arg(benchSerial(0), benchSerial(1), benchSerial(2)), QStringLiteral("--partitions"),
+                                             QStringLiteral("rootfs"), QStringLiteral("--dry-run"), QStringLiteral("--image"), withEnvImage(QStringLiteral("c"))});
+        QVERIFY2(skipped.code == 1, qPrintable(skipped.dump()));
+        bool skippedRow = false;
+        for (const QString& text : skipped.texts()) {
+            skippedRow = skippedRow || (text.startsWith(QStringLiteral("C  ")) && text.contains(QStringLiteral("  skipped  ")));
+        }
+        QVERIFY2(skippedRow, qPrintable(skipped.dump()));
+        QCOMPARE(skipped.lastText(), QStringLiteral("su-fw: exit 1 (failed): dry run: 2 of 3 boards ready; 1 skipped"));
+    }
+    {
+        FleetCliRig fleet(false);
+        fleet.script();   // no board at all
+        const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                            QStringLiteral("--dry-run"), QStringLiteral("--image"), withEnvImage(QStringLiteral("d"))});
+        QVERIFY2(result.code == 3, qPrintable(result.dump()));
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 3 (no board): no selected board is on ADB (attached: none)"));
+    }
+    {
+        FleetCliRig fleet;
+        const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                            QStringLiteral("--dry-run"), QStringLiteral("--image"), withEnvImage(QStringLiteral("e")), QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        bool allParse = false;
+        const QList<QJsonObject> objects = jsonLines(result, &allParse);
+        QVERIFY2(allParse, qPrintable(result.out));
+        const QJsonObject done = objects.last();
+        QCOMPARE(done.value(QStringLiteral("event")).toString(), QStringLiteral("done"));
+        QCOMPARE(done.value(QStringLiteral("dryRun")).toBool(), true);
+        QCOMPARE(done.value(QStringLiteral("fleet")).toBool(), true);
+        QCOMPARE(done.value(QStringLiteral("boards")).toArray().size(), qsizetype(7));
+        QCOMPARE(done.value(QStringLiteral("summary")).toObject().value(QStringLiteral("ready")).toInt(), 7);
+    }
+}
+
+void Tst_firmwarecli::fleetTwoBoards()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                                QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--yes")};
+    CliResult result = fleet.run(arguments);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+    QVERIFY2(result.hasTextStarting(QStringLiteral("[F c4130950110960e0] in Loader mode on port 6&3A944CE5&0&1, LocationID ")), qPrintable(result.dump()));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[G 5a33c81a6e996266] in Loader mode on port 6&3A944CE5&0&4, LocationID ")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[F c4130950110960e0] rootfs written: 3830272 bytes in ")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[F c4130950110960e0] done in ")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[F c4130950110960e0] back on ADB: 5.10.209+, up 0 min; rfmcu: pid=412 uart=owned mcu=alive")));
+    QVERIFY(result.hasTextStarting(QStringLiteral("Flash fleet done: 2 of 2 boards flashed in ")));
+    const QStringList texts = result.texts();
+    const qsizetype header = texts.indexOf(QRegularExpression(QStringLiteral("^board  serial .*loader  result.*")));
+    QVERIFY2(header >= 0 && header + 3 == texts.size() - 1, qPrintable(result.dump()));   // two rows, then su-fw's line
+    QVERIFY(texts.at(header + 1).startsWith(QStringLiteral("F      c4130950110960e0  6&3A944CE5&0&1  ")));
+    QVERIFY(texts.at(header + 2).startsWith(QStringLiteral("G      5a33c81a6e996266  6&3A944CE5&0&4  ")));
+    QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 0 (done): 2 of 2 boards flashed in ")));
+    for (const QString& command : fleet.rig.runner.invocations()) {
+        if (command.contains(QStringLiteral(" WL ")) || command.endsWith(QStringLiteral(" RD"))) {
+            QVERIFY2(command.startsWith(QStringLiteral("upgrade_tool -s ")), qPrintable(command));
+        }
+    }
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool -s \\d+ WL "))), 2);
+    QCOMPARE(fleet.bus.unaddressedCommands(), 0);
+    // The learned ports are remembered per board, where the app keeps its settings.
+    QCOMPARE(AppSettings::instance().firmwareBoardPort(QStringLiteral("c4130950110960e0")), QStringLiteral("6&3A944CE5&0&1"));
+    QCOMPARE(AppSettings::instance().firmwareBoardPort(QStringLiteral("5a33c81a6e996266")), QStringLiteral("6&3A944CE5&0&4"));
+    AppSettings::instance().sync();
+    QCOMPARE(QSettings().value(QStringLiteral("firmware/boardPorts")).toMap().value(QStringLiteral("c4130950110960e0")).toString(),
+             QStringLiteral("6&3A944CE5&0&1"));
+    result = fleet.run(arguments);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("[F c4130950110960e0] on ADB; expected port 6&3A944CE5&0&1 (remembered)")));
+    QVERIFY(!result.out.contains(QStringLiteral("(moved")));
+}
+
+void Tst_firmwarecli::fleetAllBoardsAndMaxParallelOne()
+{
+    FleetCliRig fleet;
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage(), QStringLiteral("--max-parallel"), QStringLiteral("1")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    for (int k = 0; k < 7; ++k) {
+        QVERIFY(result.hasTextStarting(QStringLiteral("[%1 %2] done in ").arg(FleetFlasher::tagFor(k), benchSerial(k))));
+        QCOMPARE(fleet.bus.writesTo(benchSerial(k)).size(), qsizetype(1));
+    }
+    QCOMPARE(fleet.bus.maxConcurrentWrites(), 1);
+    QVERIFY(result.hasText(QStringLiteral("mapping done: 7 of 7 boards in Loader mode; writing starts (up to 1 at once)")));
+}
+
+void Tst_firmwarecli::fleetAllBoardsNextToAPhoneExits1()
+{
+    const QString refusal = QStringLiteral("adb lists 8 devices but the USB bus shows 7 Rockchip ADB gadgets: a non-Rockchip ADB device is attached; "
+                                           "name the boards with --serials");
+    FleetCliRig fleet;
+    fleet.bus.addForeignAdb(QStringLiteral("ZY22PHONE"));
+    const QString image = withEnvImage();
+    CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                  QStringLiteral("--image"), image});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + refusal);
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("reboot loader"))), 0);
+    result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                        QStringLiteral("--image"), image, QStringLiteral("--dry-run")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + refusal);
+    QStringList serials;
+    for (int k = 0; k < 7; ++k) {
+        serials << benchSerial(k);
+    }
+    result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), serials.join(QLatin1Char(',')), QStringLiteral("--partitions"),
+                        QStringLiteral("rootfs"), QStringLiteral("--image"), image});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("ZY22PHONE"))), 0);
+}
+
+void Tst_firmwarecli::fleetJsonLines()
+{
+    FleetCliRig fleet(false);
+    fleet.addBench({2});
+    QStringList serials;
+    for (int k = 0; k < 7; ++k) {
+        serials << benchSerial(k);
+    }
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), serials.join(QLatin1Char(',')),
+                                        QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), withEnvImage(),
+                                        QStringLiteral("--json")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    QVERIFY2(allParse, qPrintable(result.out));
+    QMap<QString, int> progressPerBoard;
+    int boardSteps = 0;
+    int operationSteps = 0;
+    int loaderLines = 0;
+    for (const QJsonObject& object : objects) {
+        const QString event = object.value(QStringLiteral("event")).toString();
+        const bool board = object.contains(QStringLiteral("board"));
+        if (board) {
+            QVERIFY(object.contains(QStringLiteral("tag")));
+            QVERIFY(object.contains(QStringLiteral("stage")));
+            QCOMPARE(object.value(QStringLiteral("step")).toString(), QStringLiteral("fleet-flash"));
+        }
+        if (event == QLatin1String("log") && board && object.value(QStringLiteral("text")).toString().startsWith(QStringLiteral("in Loader mode on port "))) {
+            ++loaderLines;
+            QVERIFY(!object.value(QStringLiteral("port")).toString().isEmpty());
+            QVERIFY(!object.value(QStringLiteral("loader")).toString().isEmpty());
+            QCOMPARE(object.value(QStringLiteral("stage")).toString(), QStringLiteral("loader"));
+        } else if (event == QLatin1String("progress") && board) {
+            ++progressPerBoard[object.value(QStringLiteral("board")).toString()];
+            QVERIFY(object.value(QStringLiteral("percent")).isDouble());
+            QCOMPARE(object.value(QStringLiteral("stage")).toString(), QStringLiteral("writing"));
+        } else if (event == QLatin1String("step") && board) {
+            ++boardSteps;
+            for (const char* key : {"result", "ok", "seconds", "mappingSeconds", "writingSeconds", "written", "retry", "adbBack", "text"}) {
+                QVERIFY2(object.contains(QLatin1String(key)), key);
+            }
+            if (object.value(QStringLiteral("result")).toString() == QLatin1String("done")) {
+                QCOMPARE(object.value(QStringLiteral("written")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+                QCOMPARE(object.value(QStringLiteral("adbBack")).toBool(), true);
+                QVERIFY(object.value(QStringLiteral("text")).toString().startsWith(QStringLiteral("done in ")));
+            }
+        } else if (event == QLatin1String("step")) {
+            ++operationSteps;
+            QCOMPARE(object.value(QStringLiteral("step")).toString(), QStringLiteral("fleet-flash"));
+            QCOMPARE(object.value(QStringLiteral("ok")).toBool(), false);
+        }
+    }
+    QCOMPARE(loaderLines, 6);
+    QCOMPARE(boardSteps, 7);
+    QCOMPARE(operationSteps, 1);
+    QCOMPARE(progressPerBoard.size(), qsizetype(6));
+    for (auto it = progressPerBoard.cbegin(); it != progressPerBoard.cend(); ++it) {
+        QVERIFY2(it.value() >= 2 && it.value() <= 11, qPrintable(it.key() + QStringLiteral(": ") + QString::number(it.value())));   // every 10 %
+    }
+    const QJsonObject done = objects.last();
+    QCOMPARE(done.value(QStringLiteral("event")).toString(), QStringLiteral("done"));
+    QCOMPARE(done.value(QStringLiteral("step")).toString(), QStringLiteral("flash-soc"));
+    QCOMPARE(done.value(QStringLiteral("exit")).toInt(), 1);
+    QCOMPARE(done.value(QStringLiteral("fleet")).toBool(), true);
+    QCOMPARE(done.value(QStringLiteral("dryRun")).toBool(), false);
+    QCOMPARE(done.value(QStringLiteral("partitions")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+    QCOMPARE(done.value(QStringLiteral("summary")).toObject(),
+             (QJsonObject{{QStringLiteral("selected"), 7}, {QStringLiteral("done"), 6}, {QStringLiteral("notBack"), 0}, {QStringLiteral("failed"), 0},
+                          {QStringLiteral("skipped"), 1}}));
+    QCOMPARE(done.value(QStringLiteral("stop")).toString(), QString());
+    QVERIFY(done.value(QStringLiteral("unattributed")).toArray().isEmpty());
+    const QJsonArray boards = done.value(QStringLiteral("boards")).toArray();
+    QCOMPARE(boards.size(), qsizetype(7));
+    const QJsonObject first = boards.first().toObject();
+    for (const char* key : {"tag", "serial", "adb", "expectedPort", "port", "loader", "stage", "result", "ok", "seconds", "mappingSeconds",
+                            "writingSeconds", "detail", "written", "retry", "adbBack", "leftInLoader", "kernel", "uptime", "boardInfo", "rfmcu"}) {
+        QVERIFY2(first.contains(QLatin1String(key)), key);
+    }
+    QCOMPARE(first.value(QStringLiteral("tag")).toString(), QStringLiteral("A"));
+    QCOMPARE(first.value(QStringLiteral("port")).toString(), benchPort(0));
+    QCOMPARE(first.value(QStringLiteral("rfmcu")).toString(), QStringLiteral("pid=412 uart=owned mcu=alive"));
+    QCOMPARE(boards.at(2).toObject().value(QStringLiteral("result")).toString(), QStringLiteral("skipped"));
+}
+
+void Tst_firmwarecli::fleetNotBackExits1()
+{
+    FleetCliRig fleet;
+    fleet.bus.setNoAdbReturn(benchSerial(1));
+    fleet.extraSetup = [](FirmwareJob& job) { job.setAdbReturnSeconds(1); };
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage()});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    bool row = false;
+    for (const QString& text : result.texts()) {
+        row = row || (text.startsWith(QStringLiteral("B      ") + benchSerial(1)) && text.contains(QStringLiteral("  not back  ")));
+    }
+    QVERIFY2(row, qPrintable(result.dump()));
+    QVERIFY2(result.lastText().endsWith(QStringLiteral("; 1 not back on ADB")), qPrintable(result.lastText()));
+}
+
+void Tst_firmwarecli::fleetInterruptDrains()
+{
+    FleetCliRig fleet;
+    fleet.bus.hangWrites(benchSerial(0));
+    fleet.bus.hangWrites(benchSerial(1));
+    qsizetype commandsAtTheEnd = -1;
+    fleet.extraSetup = [&fleet, &commandsAtTheEnd](FirmwareJob& job) {
+        QObject::connect(&job, &FirmwareJob::operationFinished, &fleet.rig.cli,
+                         [&fleet, &commandsAtTheEnd]() { commandsAtTheEnd = fleet.rig.runner.invocations().size(); });
+    };
+    bool interrupted = false;
+    bool released = false;
+    QTimer driver;
+    driver.setInterval(10);
+    QObject::connect(&driver, &QTimer::timeout, &fleet.rig.cli, [&]() {
+        if (!interrupted && fleet.bus.writesTo(benchSerial(0)).size() == 1 && fleet.bus.writesTo(benchSerial(1)).size() == 1) {
+            interrupted = true;
+            fleet.rig.cli.interrupt();
+        } else if (interrupted && !released) {
+            int reset = 0;
+            for (int k = 2; k < 7; ++k) {
+                reset += fleet.bus.resetsTo(benchSerial(k)).size() == 1 ? 1 : 0;
+            }
+            if (reset == 5) {
+                released = true;
+                fleet.rig.cli.interrupt();   // a second Ctrl+C: only what it still waits for
+                fleet.bus.releaseWrites();
+            }
+        }
+    });
+    driver.start();
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage(), QStringLiteral("--max-parallel"), QStringLiteral("2")});
+    driver.stop();
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QVERIFY(released);
+    QVERIFY(result.hasText(QStringLiteral("Cancelling Flash fleet")));
+    QVERIFY(result.hasText(QStringLiteral("still waiting for 2 write(s) to finish; the writes are never interrupted")));
+    for (int k = 0; k < 2; ++k) {
+        QVERIFY(result.hasTextStarting(QStringLiteral("[%1 %2] done in ").arg(FleetFlasher::tagFor(k), benchSerial(k))));
+        QCOMPARE(fleet.bus.resetsTo(benchSerial(k)).size(), qsizetype(1));
+    }
+    for (int k = 2; k < 7; ++k) {
+        QVERIFY(fleet.bus.writesTo(benchSerial(k)).isEmpty());
+        QVERIFY(result.hasText(QStringLiteral("[%1 %2] cancelled before its write started; reset back to ADB; skipped").arg(FleetFlasher::tagFor(k), benchSerial(k))));
+    }
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (cancelled): interrupted: 2 of 7 boards flashed in ")), qPrintable(result.lastText()));
+    QVERIFY(result.lastText().endsWith(QStringLiteral("; 5 skipped")));
+    QCOMPARE(fleet.rig.runner.invocations().size(), commandsAtTheEnd);   // nothing ran after the operation's result
+    QCOMPARE(fleet.bus.cancelledWrites(), 0);
+}
+
+void Tst_firmwarecli::fleetTimeoutDuringMapping()
+{
+    FleetCliRig fleet;
+    fleet.bus.setRebootDelayMs(400);
+    fleet.bus.setPnpLagMs(0);
+    fleet.extraSetup = [](FirmwareJob& job) { job.fleetFlasher()->setPollIntervalMs(50); };
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage(), QStringLiteral("--timeout"), QStringLiteral("1")});
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (timeout): timeout after 1 s: ")), qPrintable(result.lastText()));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral(" WL "))), 0);
+    int mapped = 0;
+    for (int k = 0; k < 7; ++k) {
+        const bool inLoader = result.hasTextStarting(QStringLiteral("[%1 %2] in Loader mode on port ").arg(FleetFlasher::tagFor(k), benchSerial(k)));
+        mapped += inLoader ? 1 : 0;
+        QCOMPARE(fleet.bus.resetsTo(benchSerial(k)).size(), qsizetype(inLoader ? 1 : 0));
+    }
+    QVERIFY(mapped >= 1 && mapped < 7);
+}
+
+void Tst_firmwarecli::fleetMappingStopResetsAndReports()
+{
+    FleetCliRig fleet;
+    fleet.bus.setReboot(benchSerial(2), FakeUsbBus::Reboot::DragsNext);
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage()});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral(" WL "))), 0);
+    QCOMPARE(fleet.bus.resetsTo(benchSerial(0)).size(), qsizetype(1));
+    QCOMPARE(fleet.bus.resetsTo(benchSerial(1)).size(), qsizetype(1));
+    QVERIFY(result.hasTextStarting(QStringLiteral("[A %1] $ upgrade_tool -s ").arg(benchSerial(0))));
+    bool hint = false;
+    int stoppedRows = 0;
+    for (const QString& text : result.texts()) {
+        hint = hint || (text.startsWith(QStringLiteral("LocationID ")) && text.contains(QStringLiteral(" is in Loader mode and belongs to no mapped board: reset it with `upgrade_tool -s ")));
+        stoppedRows += text.contains(QStringLiteral("  skipped  ")) && text.contains(QStringLiteral("mapping stopped: while rebooting ")) ? 1 : 0;
+    }
+    QVERIFY2(hint, qPrintable(result.dump()));
+    QCOMPARE(stoppedRows, 6);   // A, B reset; D..G never rebooted
+    QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): mapping stopped: while rebooting %1: two boards changed at once").arg(benchSerial(2))));
+}
+
+void Tst_firmwarecli::fleetForeignLoaderRefused()
+{
+    FleetCliRig fleet;
+    fleet.bus.addForeignLoader(QStringLiteral("9&FFFF0000&0&1"));
+    const QString image = withEnvImage();
+    CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                  QStringLiteral("--image"), image});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): a rockusb device is already in Loader mode on port 9&FFFF0000&0&1 (LocationID 100) "
+                                               "that no selected board accounts for; reset it with `upgrade_tool -s 100 RD` or replug it, then run again"));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("reboot loader"))), 0);
+    result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                        QStringLiteral("--image"), image, QStringLiteral("--dry-run")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("foreign Loader device on port 9&FFFF0000&0&1, LocationID 100: not part of the fleet; reset it with "
+                                          "`upgrade_tool -s 100 RD` or replug it")));
+}
+
+void Tst_firmwarecli::fleetBootloaderPartitionWarns()
+{
+    FleetCliRig fleet;
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), benchSerial(0), QStringLiteral("--partitions"),
+                                        QStringLiteral("idblock,rootfs"), QStringLiteral("--image"), withEnvImage()});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("Warning: idblock is a bootloader partition; written because --partitions names it")));
+    const QStringList writes = fleet.bus.writesTo(benchSerial(0));
+    QCOMPARE(writes.size(), qsizetype(2));
+    QVERIFY2(writes.first().contains(QStringLiteral(" WL 128 512 ")), qPrintable(writes.first()));   // named: written
+}
+
+void Tst_firmwarecli::fleetLockHeldExits1()
+{
+    FleetCliRig fleet;
+    QLockFile other(AppSettings::dataDirectory() + QStringLiteral("/firmware.lock"));
+    QVERIFY(other.tryLock(0));
+    qint64 pid = 0;
+    QString host;
+    QString program;
+    QVERIFY(other.getLockInfo(&pid, &host, &program));
+    const QString running = QStringLiteral("another firmware operation is running (%1)")
+                                .arg(program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid));
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), withEnvImage()});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("Flash fleet failed: ") + running));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + running);
+    QCOMPARE(fleet.rig.runner.count(boardTools()), 0);
+    other.unlock();
+}
+
+void Tst_firmwarecli::fleetLayoutUnknownExits1()
+{
+    FleetCliRig fleet;
+    const QString image = makeImage(QStringLiteral("plain/update.img"));   // its env.img carries no layout; none remembered
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                                        QStringLiteral("--image"), image});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): flash layout unknown: pass --layout, or run su-fw status once with a board running; "
+                                               "the Node image carries its own"));
+    QCOMPARE(fleet.rig.runner.count(boardTools()), 0);
+    // The single board keeps its own advice and exit 2.
+    CliRig single;
+    scriptSocFlash(single.runner, kLdLoader);
+    const CliResult one = single.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("rootfs")});
+    QVERIFY2(one.code == 2, qPrintable(one.dump()));
+    QVERIFY(one.err.startsWith(QStringLiteral("su-fw: --partitions: rootfs cannot be written: partition layout unknown: connect the board running once")));
+}
+
+void Tst_firmwarecli::fleetQuestionOnATerminal()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const QStringList two{QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                          QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image};
+    fleet.rig.setInput({QStringLiteral("n")}, /*interactive=*/true);
+    CliResult result = fleet.run(two);
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QCOMPARE(result.err, QStringLiteral("Write rootfs on 2 boards (F, G)? [y/N] "));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 5 (cancelled): cancelled before anything ran"));
+    QCOMPARE(fleet.rig.runner.invocations().size(), qsizetype(1));   // the plan's EXF only
+    QVERIFY(exfPattern().match(fleet.rig.runner.invocations().first()).hasMatch());
+
+    fleet.rig.setInput({QStringLiteral("no")}, true);
+    result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--all-boards"), QStringLiteral("--partitions"), QStringLiteral("rootfs"),
+                        QStringLiteral("--image"), image});
+    QCOMPARE(result.code, 5);
+    QCOMPARE(result.err, QStringLiteral("Write rootfs on every board adb lists (--all-boards)? [y/N] "));
+    QCOMPARE(fleet.rig.runner.count(boardTools()), 0);
+
+    fleet.rig.setInput({QStringLiteral("y")}, true);
+    result = fleet.run(two);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(result.err, QStringLiteral("Write rootfs on 2 boards (F, G)? [y/N] "));
+
+    fleet.rig.setInput({QStringLiteral("n")}, true);
+    result = fleet.run(two + QStringList{QStringLiteral("--yes")});   // --yes: nothing asked
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+    fleet.rig.setInput({QStringLiteral("n")}, false);                // a pipe: nothing asked
+    result = fleet.run(two);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+    fleet.rig.setInput({QStringLiteral("n")}, true);                 // a dry run is never asked about
+    result = fleet.run(two + QStringList{QStringLiteral("--dry-run")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+}
+
+void Tst_firmwarecli::fleetLogAndQuiet()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const QString logPath = caseDir(QStringLiteral("logs/fleet.log"));
+    QVERIFY(QDir().mkpath(QFileInfo(logPath).absolutePath()));
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                                QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--log"), logPath};
+    const CliResult result = fleet.run(arguments);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(readAll(logPath).split(QLatin1Char('\n'), Qt::SkipEmptyParts), result.lines());
+    const CliResult quiet = fleet.run(arguments + QStringList{QStringLiteral("--quiet")});
+    QCOMPARE(quiet.code, 0);
+    QCOMPARE(quiet.lines().size(), qsizetype(1));
+    QVERIFY(quiet.lastText().startsWith(QStringLiteral("su-fw: exit 0 (done): 2 of 2 boards flashed in ")));
+    QCOMPARE(readAll(logPath).split(QLatin1Char('\n'), Qt::SkipEmptyParts).last(), quiet.lines().first());
+}
+
+void Tst_firmwarecli::singleBoardPathUnchanged()
+{
+    // 0.6.0's command lines, byte for byte: --serial goes the single-board way (no -s on WL / RD).
+    const QString s = kBoardSerial;
+    {
+        CliRig rig;
+        scriptSocFlash(rig.runner, kLdLoader);
+        const QString image = makeImage(QStringLiteral("flash/update.img"));
+        const QString dir = extractDirOf(image);
+        const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--all"), QStringLiteral("--layout"),
+                                          kNodeMtdParts, QStringLiteral("--serial"), s});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QStringList expected{ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                                           {QStringLiteral("EXF"), QDir::toNativeSeparators(image), QDir::toNativeSeparators(dir)}),
+                             QStringLiteral("upgrade_tool LD"), QStringLiteral("upgrade_tool LD")};
+        for (int k = 0; k < kNodePartitionCount; ++k) {
+            expected << expectedWl(k, dir);
+        }
+        expected << QStringLiteral("upgrade_tool RD") << QStringLiteral("adb -s %1 get-state").arg(s)
+                 << QStringLiteral("adb -s %1 shell \"cat /proc/version; uptime\"").arg(s);
+        QCOMPARE(rig.runner.invocations().mid(0, expected.size()), expected);
+        for (const QString& text : result.texts()) {
+            QVERIFY2(!text.startsWith(QLatin1Char('[')), qPrintable(text));
+        }
+    }
+    {
+        CliRig rig;
+        auto inLoader = std::make_shared<bool>(false);
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+            i->emitOutput(*inLoader ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+            i->finish(0);
+        });
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(s)), [inLoader](FakeToolInvocation* i) {
+            *inLoader = true;
+            i->finish(0);
+        });
+        scriptSocFlash(rig.runner, kLdLoader);
+        const QString image = tempPath(QStringLiteral("withenv-%1-single/update.img").arg(m_caseNumber));
+        QVERIFY(writeFile(image, rkfwBytes()));
+        const QString dir = extractDirOf(image);
+        const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot"),
+                                          QStringLiteral("--serial"), s, QStringLiteral("--yes"), QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        const QStringList expected{
+            ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"), {QStringLiteral("EXF"), QDir::toNativeSeparators(image), QDir::toNativeSeparators(dir)}),
+            QStringLiteral("upgrade_tool LD"),
+            QStringLiteral("adb -s %1 devices").arg(s),
+            QStringLiteral("adb -s %1 shell \"cat /proc/version\"").arg(s),
+            QStringLiteral("adb -s %1 shell \"cat /proc/cmdline\"").arg(s),
+            QStringLiteral("adb -s %1 reboot loader").arg(s),
+            QStringLiteral("upgrade_tool LD"),
+            expectedWl(4, dir),
+            QStringLiteral("upgrade_tool RD"),
+            QStringLiteral("adb -s %1 get-state").arg(s),
+            QStringLiteral("adb -s %1 shell \"cat /proc/version; uptime\"").arg(s),
+        };
+        QCOMPARE(rig.runner.invocations().mid(0, expected.size()), expected);
+        bool allParse = false;
+        const QList<QJsonObject> objects = jsonLines(result, &allParse);
+        QVERIFY(allParse);
+        QVERIFY(!objects.last().contains(QStringLiteral("fleet")));
+        for (const QJsonObject& object : objects) {
+            QVERIFY(!object.contains(QStringLiteral("board")) || object.value(QStringLiteral("event")).toString() == QLatin1String("done"));
+        }
+    }
+}
+
+void Tst_firmwarecli::fleetHelp()
+{
+    const QString help = FirmwareCli::helpText(QStringLiteral("flash-soc"));
+    for (const char* option : {"serials", "all-boards", "max-parallel", "dry-run"}) {
+        QVERIFY2(FirmwareCli::commandOptions(QStringLiteral("flash-soc")).contains(QLatin1String(option)), option);
+        QVERIFY2(!FirmwareCli::commandOptions(QStringLiteral("partitions")).contains(QLatin1String(option)), option);
+    }
+    QVERIFY(help.contains(QStringLiteral("\n  --serials SERIALS ")));
+    QVERIFY(help.contains(QStringLiteral("\n  --max-parallel N ")));
+    QVERIFY(help.contains(QStringLiteral("\n       su-fw flash-soc (--serials S1,S2,... | --all-boards) --partitions NAMES")));
+    const qsizetype examples = help.indexOf(QStringLiteral("Examples:"));
+    const qsizetype dryRun = help.indexOf(QStringLiteral("\n    su-fw flash-soc --all-boards --partitions rootfs --image update.img --dry-run --json"));
+    QVERIFY(dryRun > 0 && dryRun < examples);   // in the fleet paragraph, not under Examples
+    QVERIFY(help.contains(QStringLiteral("Exit codes of a fleet (--serials / --all-boards):")));
+    QVERIFY(help.contains(QStringLiteral("  3  no selected board is on ADB (--all-boards: no board at all)")));
+    QVERIFY(help.mid(examples).contains(QStringLiteral("\n  su-fw flash-soc --serials F=")));
+    const QString global = FirmwareCli::helpText();
+    QVERIFY(global.contains(QStringLiteral("several boards at once with --serials / --all-boards")));
+    QVERIFY(global.contains(QStringLiteral("flash-soc with --serials / --all-boards: no selected board is on ADB")));
+    QVERIFY(global.contains(QStringLiteral("flash-soc with --serials / --all-boards: the boards not started are skipped and reset")));
+
+#ifdef Q_OS_WIN
+    const QString name = QStringLiteral("su-fw.exe");
+#else
+    const QString name = QStringLiteral("su-fw");
+#endif
+    QString program = QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    if (!QFileInfo(program).isFile()) {
+        program = QStringLiteral(SU_FW_EXECUTABLE);
+    }
+    QProcess process;
+    process.start(program, {QStringLiteral("flash-soc"), QStringLiteral("--help")});
+    QVERIFY(process.waitForFinished(30000));
+    QCOMPARE(process.exitCode(), 0);
+    QVERIFY(process.readAllStandardOutput().contains("--serials SERIALS"));
 }
 
 // =======================================================================================

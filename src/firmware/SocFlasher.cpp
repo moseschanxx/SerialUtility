@@ -57,17 +57,6 @@ QString normalizedLayout(const QString& mtdparts)
     return text;
 }
 
-/// A WL that went wrong says so ("Write LBA failed!", "Error:...->Fail to write lba,...", "Write
-/// LBA quit, creating comm object failed!" - the texts in upgrade_tool v2.37); its exit status has
-/// not been seen for every failure, so the text counts as well. The banner ("please upgrade it to
-/// enjoy fast download") has none of these words.
-bool reportsWriteFailure(const QString& output)
-{
-    static const QRegularExpression failure(QStringLiteral("\\bfail|\\bquit\\b|\\berror\\b"),
-                                            QRegularExpression::CaseInsensitiveOption);
-    return failure.match(output).hasMatch();
-}
-
 QString layoutUnknownMessage()
 {
     return QCoreApplication::translate("SocFlasher",
@@ -1268,7 +1257,7 @@ struct SocFlasher::Private
             return;
         }
         const QString output = result.outputText();
-        if (result.timedOut || result.exitCode != 0 || reportsWriteFailure(RockchipTool::stripBanner(output))) {
+        if (result.timedOut || result.exitCode != 0 || RockchipTool::reportsWriteFailure(output)) {
             const QString tail = RockchipTool::tailForMessage(output);
             endFlow(Phase::Failed, false,
                     QCoreApplication::translate("SocFlasher", "writing %1 failed: %2")
@@ -1304,7 +1293,7 @@ struct SocFlasher::Private
             flushToolLines();
             const QString output = result.outputText();
             const bool resetOk = result.started && !result.timedOut
-                                 && (result.exitCode == 0 || output.contains(QLatin1String("Reset Device OK"), Qt::CaseInsensitive));
+                                 && (result.exitCode == 0 || RockchipTool::reportsResetOk(output));
             if (!resetOk) {
                 const QString tail = result.started ? RockchipTool::tailForMessage(output) : result.error;
                 endFlow(Phase::Failed, false,
