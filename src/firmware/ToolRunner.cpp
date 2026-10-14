@@ -256,11 +256,11 @@ private:
     /// it: on Windows the tool gets no console of the caller's (CREATE_NO_WINDOW: a hidden console of
     /// its own), so Ctrl+C, Ctrl+Break and closing the console window of su-fw never reach it -
     /// exactly how the GUI, which has no console, always ran the tools (Qt sets the flag itself
-    /// then). On POSIX the tool leads a process group of its own, so the terminal's Ctrl+C / Ctrl+\
-    /// and a signal to su-fw's group are not delivered to it, and a write to a pipe whose reader
-    /// is gone fails instead of raising SIGPIPE (su-fw killed while upgrade_tool still writes). The
-    /// output still comes through the pipes either way. Only a kill of the whole process tree (or
-    /// of a job object) still takes the tool along.
+    /// then). On POSIX the tool leads a process group of its own, so the terminal's Ctrl+C and
+    /// Ctrl+backslash and a signal to su-fw's group are not delivered to it, and a write to a pipe
+    /// whose reader is gone fails instead of raising SIGPIPE (su-fw killed while upgrade_tool still
+    /// writes). The output still comes through the pipes either way. Only a kill of the whole
+    /// process tree (or of a job object) still takes the tool along.
     void configure(QProcess* process) const
     {
 #ifdef Q_OS_WIN
