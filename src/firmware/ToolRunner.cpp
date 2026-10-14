@@ -9,6 +9,12 @@
 #include <QStandardPaths>
 #include <QTimer>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "app/Logging.h"
 
 // ---------------------------------------------------------------------------------------------
@@ -244,9 +250,27 @@ public:
     }
 
 private:
-    /// Working directory and environment of Options, for a process started either way.
+    /// Working directory and environment of Options, for a process started either way, and the
+    /// child's separation from whatever reaches its caller (v0.6.0). upgrade_tool ended in the
+    /// middle of a write leaves a board that does not boot, so nothing aimed at the caller may end
+    /// it: on Windows the tool gets no console of the caller's (CREATE_NO_WINDOW: a hidden console of
+    /// its own), so Ctrl+C, Ctrl+Break and closing the console window of su-fw never reach it -
+    /// exactly how the GUI, which has no console, always ran the tools (Qt sets the flag itself
+    /// then). On POSIX the tool leads a process group of its own, so the terminal's Ctrl+C / Ctrl+\
+    /// and a signal to su-fw's group are not delivered to it, and a write to a pipe whose reader
+    /// is gone fails instead of raising SIGPIPE (su-fw killed while upgrade_tool still writes). The
+    /// output still comes through the pipes either way. Only a kill of the whole process tree (or
+    /// of a job object) still takes the tool along.
     void configure(QProcess* process) const
     {
+#ifdef Q_OS_WIN
+        process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* arguments) {
+            arguments->flags |= CREATE_NO_WINDOW;
+        });
+#else
+        process->setChildProcessModifier([] { ::setpgid(0, 0); });
+        process->setUnixProcessParameters(QProcess::UnixProcessFlags(QProcess::UnixProcessFlag::IgnoreSigPipe));
+#endif
         if (!m_options.workingDirectory.isEmpty()) {
             process->setWorkingDirectory(m_options.workingDirectory);
         }

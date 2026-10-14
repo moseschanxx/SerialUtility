@@ -54,10 +54,6 @@ constexpr int kLayoutReadWaitMs = 20000;   ///< `adb shell cat /proc/cmdline` (1
 constexpr int kPlanWaitMs = 300000;        ///< `upgrade_tool EXF` of an image takes seconds; a slow disk more
 constexpr int kMaxTimeoutSeconds = 7 * 24 * 3600;   ///< --timeout in ms must fit QTimer's int
 
-// The job's own wording for the end of a board-layout read that found nothing (FirmwareJob.cpp).
-const QLatin1String kLayoutReadFailed("Cannot read the flash layout of board ");
-const QLatin1String kLayoutReadEmpty(" reports no flash layout");
-
 /// The value an option takes, for the parser and the help ("" = a switch).
 QString optionValueName(const QString& option)
 {
@@ -132,8 +128,12 @@ const char* const kCommonOptionsHelp = R"HELP(  --tools DIR          Use upgrade
   --json               One JSON object per line instead of text (see Output in su-fw --help).
   --quiet              Print only the result line.
   --timeout SECONDS    Give up after SECONDS: the operation is cancelled at the next point where
-                       that is safe (never during a flash write) and su-fw exits with 5.
-                       Default 0: no limit.
+                       that is safe and su-fw exits with 5. Not a hard limit: a flash write in
+                       progress is always waited for, and an upgrade_tool that stays silent is
+                       never killed (the log says so every 5 min; end it by hand). A harness that
+                       kills the su-fw process tree on a timeout of its own still cuts the write:
+                       give it more than SECONDS plus the longest write (about two minutes for a
+                       full image). Default 0: no limit.
   --yes                Never ask anything: an unknown host key or a password prompt is refused
                        (exit 4). This is also what happens when stdin is not a terminal.
   -h, --help           This help.
@@ -152,13 +152,17 @@ const char* const kOutputHelp = R"HELP(Output:
 
 const char* const kExitCodesHelp = R"HELP(Exit codes:
   0  done
-  1  the operation failed; the last log lines say why
+  1  the operation failed; the last log lines say why (also when another firmware operation
+     runs on this PC: "another firmware operation is running (<program>, pid <n>)")
   2  usage: an unknown command or option, a missing or invalid value, a file that cannot be used
   3  no board, or the board in a mode the command cannot use (e.g. mcu-info in Loader mode)
   4  SSH: the build machine could not be reached, its host key was refused, or the
      authentication failed
-  5  --timeout passed, or Ctrl+C. Ctrl+C ends the waiting phases, never a flash write in
-     progress: su-fw then stops at the next safe point.
+  5  --timeout passed, or Ctrl+C (also SIGTERM, SIGHUP, Ctrl+Break). It ends the waiting phases,
+     never a flash write in progress: su-fw then stops at the next safe point - when that is the
+     wait for ADB the result says "interrupted after the image was written; the ADB wait was
+     cancelled". The tools run without su-fw's console (Windows) or in a process group of
+     their own (Linux): no keystroke, closed window or signal meant for su-fw reaches them.
 )HELP";
 
 const char* const kGlobalHelp = R"HELP(su-fw - flash the BuildAI Node board (RV1106 SoC + CC1310 RF MCU) from a command shell
@@ -172,7 +176,9 @@ su-fw runs the operations of the Serial Utility's Firmware tab without a window 
 steps, the same tools (upgrade_tool, adb, the CC1310 updater) and the same messages - for people
 in a shell and for scripts and AI agents. The log goes to stdout, the result is the exit code.
 It uses the app's settings: the SSH profiles and remembered passwords, Preferences > Firmware
-(tool paths, cache folder, waits) and the flash layouts remembered per board.
+(tool paths, cache folder, waits) and the flash layouts remembered per board. One firmware
+operation runs at a time on a PC: while the app's Firmware tab or another su-fw pulls, flashes or
+talks to the CC1310, su-fw refuses (exit 1) and status pauses, and the other way round.
 
 Commands:
   status        The board the PC sees (ADB / Loader / Maskrom / no board); --mcu adds the
@@ -630,6 +636,7 @@ struct FirmwareCli::Private
     bool interrupted = false;
     bool timedOut = false;
     bool cancelPending = false;      ///< a cancel the job refused (a write): sent again when it can be
+    bool asking = false;             ///< a question waits for stdin inside one of the job's callbacks
 
     QString startedOp;
     bool opFinished = false;
@@ -660,7 +667,9 @@ struct FirmwareCli::Private
     QString parseInputs(const QCommandLineParser& parser);
     QString parseTarget(const QCommandLineParser& parser);
     QString parseSecret(const QCommandLineParser& parser);
+    QString openLog(const QCommandLineParser& parser);
     bool aborted() const { return interrupted || timedOut; }
+    bool imageWrittenThenCancelled() const;
     void stopRun(const QString& why, bool* flag);
     void requestCancel();
 
@@ -727,6 +736,7 @@ void FirmwareCli::Private::beginRun(QIODevice* out, QIODevice* err)
     interrupted = false;
     timedOut = false;
     cancelPending = false;
+    asking = false;
     startedOp.clear();
     opFinished = false;
     opOk = false;
@@ -825,6 +835,16 @@ int FirmwareCli::Private::execute(const QStringList& arguments)
     if (problem.isEmpty()) {
         problem = parseInputs(parser);
     }
+    if (problem.isEmpty()) {
+        problem = openLog(parser);   // only a command line that is valid as a whole creates the file
+    }
+    if (aborted()) {
+        // Ctrl+C while the command line was read (the password from stdin): nothing has run, and
+        // nothing starts. Before a usage error too: the read may have failed because of it.
+        log(QStringLiteral("Interrupted (Ctrl+C)"));
+        finish(ExitCancelled, QStringLiteral("interrupted before anything ran"));
+        return ExitCancelled;
+    }
     if (!problem.isEmpty()) {
         return usageError(problem);
     }
@@ -864,14 +884,20 @@ QString FirmwareCli::Private::parseCommon(const QCommandLineParser& parser)
         }
         opts.toolsDir = QFileInfo(dir).absoluteFilePath();
     }
-    if (parser.isSet(QStringLiteral("log"))) {
-        const QString path = parser.value(QStringLiteral("log")).trimmed();
-        auto file = std::make_unique<QFile>(path);
-        if (path.isEmpty() || !file->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-            return QStringLiteral("--log: cannot write %1: %2").arg(nativePath(path), file->errorString());
-        }
-        logFile = std::move(file);
+    return QString();
+}
+
+QString FirmwareCli::Private::openLog(const QCommandLineParser& parser)
+{
+    if (!parser.isSet(QStringLiteral("log"))) {
+        return QString();
     }
+    const QString path = parser.value(QStringLiteral("log")).trimmed();
+    auto file = std::make_unique<QFile>(path);
+    if (path.isEmpty() || !file->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return QStringLiteral("--log: cannot write %1: %2").arg(nativePath(path), file->errorString());
+    }
+    logFile = std::move(file);
     return QString();
 }
 
@@ -1056,6 +1082,11 @@ QString FirmwareCli::Private::parseSecret(const QCommandLineParser& parser)
         // typed in the wrong place.
         const QString name = parser.value(QStringLiteral("password-env")).trimmed();
         const QString secret = name.isEmpty() ? QString() : qEnvironmentVariable(name.toLocal8Bit().constData());
+        if (!name.isEmpty()) {
+            // Out of the environment at once: every tool su-fw starts inherits it, and the adb
+            // server the first adb call starts outlives su-fw.
+            qunsetenv(name.toLocal8Bit().constData());
+        }
         if (secret.isEmpty()) {
             return QStringLiteral("--password-env: the environment variable it names is not set or empty");
         }
@@ -1252,12 +1283,7 @@ void FirmwareCli::Private::createJob()
 {
     job = std::make_unique<FirmwareJob>(runner);
     FirmwareJob* j = job.get();
-    QObject::connect(j, &FirmwareJob::logLine, q, [this](const QString& line) {
-        if (line.startsWith(kLayoutReadFailed) || line.contains(kLayoutReadEmpty)) {
-            layoutReadDone = true;
-        }
-        log(line);
-    });
+    QObject::connect(j, &FirmwareJob::logLine, q, [this](const QString& line) { log(line); });
     QObject::connect(j, &FirmwareJob::toolOutput, q, [this](const QString& line) { onToolOutput(line); });
     QObject::connect(j, &FirmwareJob::progress, q, [this](const QString& stage, int percent) { onProgress(stage, percent); });
     QObject::connect(j, &FirmwareJob::stepFinished, q,
@@ -1268,10 +1294,22 @@ void FirmwareCli::Private::createJob()
         opMessage = message;
     });
     QObject::connect(j, &FirmwareJob::cancellableChanged, q, [this](bool cancellable) {
-        if (cancellable && cancelPending && job && job->isBusy()) {
-            cancelPending = false;
-            job->cancel();
+        if (!cancellable || !cancelPending) {
+            return;
         }
+        // From the event loop, never inside this emission: it comes from the flasher entering its
+        // next phase (the ADB wait), which goes on with that phase once the signal returns - a
+        // cancel in here would end the operation in the middle of it and leave the flasher to
+        // start its first poll for an operation that has ended.
+        QMetaObject::invokeMethod(
+            q,
+            [this]() {
+                if (cancelPending && job && job->isBusy() && job->isCancellable()) {
+                    cancelPending = false;
+                    job->cancel();
+                }
+            },
+            Qt::QueuedConnection);
     });
     QObject::connect(j->sshConnection(), &Transport::stateChanged, q, [this](Transport::State state) {
         if (state == Transport::State::Connecting) {
@@ -1291,8 +1329,9 @@ void FirmwareCli::Private::createJob()
         if (settings.firmwareMtdParts(QString()) != mtdparts) {
             settings.setFirmwareMtdParts(QString(), mtdparts);
         }
-        layoutReadDone = true;
     });
+    // The end of the status's own layout read, whatever it found (queryBoard() waits for it).
+    QObject::connect(j, &FirmwareJob::layoutReadFinished, q, [this](const QString&, bool) { layoutReadDone = true; });
 
     const AppSettings& settings = AppSettings::instance();
     j->setLoaderWaitSeconds(settings.firmwareLoaderWaitSeconds());
@@ -1450,10 +1489,23 @@ int FirmwareCli::Private::operationExitCode() const
     return ExitFailed;
 }
 
+bool FirmwareCli::Private::imageWrittenThenCancelled() const
+{
+    // A flash step can only be cancelled while it waits: before the write (no method chosen yet)
+    // or for ADB after it (the write is done).
+    return failedStep == FirmwareJob::kOpFlash && job && job->socFlasher()->phase() == SocFlasher::Phase::Cancelled
+           && job->socFlasher()->flashMethod() != SocFlasher::FlashMethod::None;
+}
+
 QString FirmwareCli::Private::operationResultMessage() const
 {
     if (opOk || !aborted()) {
         return opMessage;
+    }
+    if (imageWrittenThenCancelled()) {
+        // Not "cancelled" alone: an agent would flash again, or report a failed update.
+        const QString why = timedOut ? QStringLiteral("timeout (%1 s)").arg(timeoutSeconds) : QStringLiteral("interrupted");
+        return QStringLiteral("%1 after the image was written; the ADB wait was cancelled").arg(why);
     }
     const QString why = timedOut ? QStringLiteral("timeout after %1 s").arg(timeoutSeconds) : QStringLiteral("interrupted");
     return QStringLiteral("%1: %2").arg(why, opMessage);
@@ -1478,6 +1530,13 @@ bool FirmwareCli::Private::queryBoard()
         });
     layoutReadDone = false;
     job->refreshStatus();
+    if (!job->statusPausedReason().isEmpty()) {
+        // The tab or another su-fw runs an operation on this PC: no tool may talk to the board now
+        // (the job logged it).
+        QObject::disconnect(connection);
+        resultMessage = job->statusPausedReason();
+        return false;
+    }
     const bool answered = waitUntil([&reported]() { return reported; }, kStatusWaitMs, /*abortable=*/true);
     QObject::disconnect(connection);
     if (!answered) {
@@ -1820,6 +1879,11 @@ int FirmwareCli::Private::cmdPullFlash()
     runOperation(QString(FirmwareJob::kOpPullFlash), [this]() { job->pullAndFlash(); });
     const int code = operationExitCode();
     resultMessage = operationResultMessage();
+    if (failedStep == FirmwareJob::kOpMcu && failedMessage.contains(QLatin1String("no role is confirmed"))) {
+        // The job's wording is the tab's ("choose rx or tx, then press Update MCU"); here it is an option.
+        log(QStringLiteral("The MCU cannot report its role (it may sit in its UART updater): pass --role rx|tx, the role it "
+                           "should run with"));
+    }
     const ImagePuller::CacheEntry entry = job->cacheEntry();
     if (entry.isValid()) {
         resultFields.insert(QStringLiteral("image"), imageJson(entry));
@@ -1851,7 +1915,9 @@ FirmwareJob::HostKeyDecision FirmwareCli::Private::decideHostKey(const SshConnec
         writeErr(changed ? QStringLiteral("Replace the stored host key of %1 and connect? [y] yes, once / [a] yes, and remember it / [N] no: ")
                                .arg(who)
                          : QStringLiteral("Trust this host key? [y] yes, once / [a] yes, and remember it in %1 / [N] no: ").arg(knownHosts));
+        asking = true;
         const std::optional<QString> typed = lineReader(/*secret=*/false);
+        asking = false;
         const QString answer = typed ? typed->trimmed().toLower() : QString();
         if (answer == QLatin1String("a") || answer == QLatin1String("always")) {
             log(QStringLiteral("Host key accepted and remembered in %1").arg(knownHosts));
@@ -1893,7 +1959,9 @@ std::optional<FirmwareJob::AuthAnswer> FirmwareCli::Private::answerPrompt(const 
         return std::nullopt;
     }
     writeErr(question + QLatin1Char(' '));
+    asking = true;
     const std::optional<QString> typed = lineReader(/*secret=*/!prompt.echo);
+    asking = false;
     if (!typed) {
         return std::nullopt;
     }
@@ -1958,7 +2026,18 @@ void FirmwareCli::setJobSetup(std::function<void(FirmwareJob& job)> setup)
 
 void FirmwareCli::interrupt()
 {
-    if (!d->running || !d->job) {
+    if (!d->running) {
+        return;
+    }
+    if (!d->job) {
+        // The command line is still being read (the password from stdin): remembered, and
+        // execute() starts nothing.
+        d->interrupted = true;
+        return;
+    }
+    if (d->asking) {
+        // A question inside one of the job's callbacks: the cancel goes after it, from the event loop.
+        QMetaObject::invokeMethod(this, &FirmwareCli::interrupt, Qt::QueuedConnection);
         return;
     }
     d->stopRun(QStringLiteral("Interrupted (Ctrl+C)"), &d->interrupted);

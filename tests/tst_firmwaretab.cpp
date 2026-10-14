@@ -22,6 +22,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QLockFile>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -311,6 +312,7 @@ private slots:
     void imageRefused();
     void appendLogTimestamps();
     void busyAroundFlash();
+    void anotherFirmwareOperationIsShown();
     void deviceStatusLine();
     void installDriversWithoutInstaller();
     void mcuNeedsPackageAndRole();
@@ -953,6 +955,45 @@ void Tst_firmwaretab::busyAroundFlash()
     // Cancel outside an operation does nothing.
     tab->cancel();
     QVERIFY(!tab->isBusy());
+}
+
+void Tst_firmwaretab::anotherFirmwareOperationIsShown()
+{
+    // su-fw flashes in the background (its lock; here a QLockFile of the test): Flash SoC is refused
+    // with who holds it - in the log and the status bar - and the status refresh runs no tool.
+    FakeToolRunner runner;
+    auto tab = makeTab(&runner);
+    const QString cache = tempPath(QStringLiteral("locked-cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    tab->setCacheDirectory(cache);
+    QTRY_VERIFY(runner.liveInvocations().isEmpty());   // the image's partition plan
+    const qsizetype before = runner.invocations().size();
+    QLockFile suFw(AppSettings::dataDirectory() + QStringLiteral("/firmware.lock"));
+    QVERIFY(suFw.tryLock(0));
+    qint64 pid = 0;
+    QString host;
+    QString program;
+    QVERIFY(suFw.getLockInfo(&pid, &host, &program));
+    const QString running = QStringLiteral("another firmware operation is running (%1)")
+                                .arg(program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid));
+
+    QSignalSpy status(tab.get(), &FirmwareTab::statusMessage);
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    tab->flashSocButton()->click();
+    QCOMPARE(finished.count(), qsizetype(1));
+    QCOMPARE(finished.at(0).at(2).toString(), running);
+    QVERIFY(!tab->isBusy());
+    QVERIFY(tab->flashSocButton()->isEnabled());
+    QVERIFY2(lastLogLine(*tab).endsWith(QStringLiteral("Flash SoC failed: ") + running), qPrintable(lastLogLine(*tab)));
+    QVERIFY(!status.isEmpty());
+    QCOMPARE(status.last().at(0).toString(), QStringLiteral("Flash SoC failed: ") + running);
+
+    tab->refreshStatus();
+    QVERIFY2(lastLogLine(*tab).endsWith(QStringLiteral("status paused: ") + running), qPrintable(lastLogLine(*tab)));
+    QCOMPARE(runner.invocations().size(), before);   // nothing reached a tool
+    suFw.unlock();
+    tab->refreshStatus();
+    QVERIFY(runner.invocations().size() > before);
 }
 
 void Tst_firmwaretab::deviceStatusLine()

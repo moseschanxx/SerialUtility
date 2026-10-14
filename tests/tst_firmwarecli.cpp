@@ -13,8 +13,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QPointer>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
@@ -34,6 +36,7 @@
 #include "firmware/McuLink.h"
 #include "firmware/SocFlasher.h"
 #include "firmware/ToolRunner.h"
+#include "ssh/SecretStore.h"
 #include "ssh/SshProfile.h"
 #include "support/FakeMcu.h"
 #include "support/FakeToolRunner.h"
@@ -209,12 +212,14 @@ private slots:
     void usageErrorsNeverEchoASecret();
     void inputChecksBeforeAnythingRuns();
     void logFileCannotBeOpened();
+    void logFileOnlyForAValidCommandLine();
 
     // ---- status ----------------------------------------------------------------------------------
     void statusAdbBoardReadsTheLayout();
     void statusLoaderBoard();
     void statusNoBoardExits3();
     void statusOtherSerialExits3();
+    void statusBoardWithoutLayoutEndsAtOnce();
     void statusWithMcu();
     void statusWithMcuJson();
     void statusMcuNeedsARunningBoard();
@@ -242,6 +247,9 @@ private slots:
     void pullInteractiveQuestions();
     void pullYesAsksNothing();
     void pullUnreachableExits4();
+    void pullWithTheSavedPassword();
+    void interruptBeforeTheJobExists();
+    void interruptDuringAQuestionWaitsForIt();
 
     // ---- flash-soc ---------------------------------------------------------------------------------
     void flashAllInLoaderMode();
@@ -254,9 +262,13 @@ private slots:
     void flashTimeoutExits5();
     void flashInterruptExits5();
     void flashInterruptWaitsForTheWrite();
+    void flashInterruptDuringAWriteStopsAfterIt();
+    void flashBoardOnAdbGoesThroughLoader();
+    void flashAdbNotBackIsStillDone();
     void flashNoWait();
     void flashJsonLines();
     void flashLogFileHoldsTheSameLines();
+    void anotherOperationRunningExits1();
 
     // ---- MCU -----------------------------------------------------------------------------------------
     void mcuInfo();
@@ -270,6 +282,8 @@ private slots:
     void pullFlashUpdatesMcuWhenDifferent();
     void pullFlashStopsAtTheFlash();
     void pullFlashStopsAtThePull();
+    void pullFlashSilentMcuNeedsTheRole();
+    void passwordVariableLeavesTheEnvironment();
 
     // ---- The executable ------------------------------------------------------------------------------
     void realExecutable();
@@ -502,6 +516,21 @@ void Tst_firmwarecli::logFileCannotBeOpened()
     QVERIFY(rig.runner.invocations().isEmpty());
 }
 
+void Tst_firmwarecli::logFileOnlyForAValidCommandLine()
+{
+    // --log FILE is created once the whole command line is valid: a usage error leaves no file.
+    CliRig rig;
+    const QString image = makeImage(QStringLiteral("log/update.img"));
+    const QString logPath = caseDir(QStringLiteral("usage.log"));
+    CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--log"), logPath});
+    QVERIFY2(result.code == 2, qPrintable(result.dump()));   // neither --all nor --partitions
+    QVERIFY(!QFileInfo::exists(logPath));
+    result = rig.run({QStringLiteral("pull"), QStringLiteral("--target"), QStringLiteral("not a target"), QStringLiteral("--log"), logPath});
+    QVERIFY2(result.code == 2, qPrintable(result.dump()));
+    QVERIFY(!QFileInfo::exists(logPath));
+    QVERIFY(rig.runner.invocations().isEmpty());
+}
+
 // =======================================================================================
 // status
 // =======================================================================================
@@ -565,6 +594,23 @@ void Tst_firmwarecli::statusOtherSerialExits3()
     QVERIFY2(result.code == 3, qPrintable(result.dump()));
     QVERIFY2(result.hasText(QStringLiteral("Board: no board (board c3d9 is not attached; attached: %1)").arg(kBoardSerial)),
              qPrintable(result.dump()));
+}
+
+void Tst_firmwarecli::statusBoardWithoutLayoutEndsAtOnce()
+{
+    // A board whose /proc/cmdline has no mtdparts: the end of the read comes as the job's
+    // layoutReadFinished() - no waiting for the 20 s cap, whatever the log says.
+    CliRig rig;
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), "List of rockusb connected(0)\r\n");
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    rig.runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 root=/dev/mtdblock5 rootwait\n");
+    QElapsedTimer clock;
+    clock.start();
+    const CliResult result = rig.run({QStringLiteral("status")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY2(clock.elapsed() < 10000, qPrintable(QString::number(clock.elapsed())));
+    QVERIFY(result.hasText(QStringLiteral("Board %1 reports no flash layout (no mtdparts in /proc/cmdline)").arg(kBoardSerial)));
+    QVERIFY(AppSettings::instance().firmwareMtdParts(kBoardSerial).isEmpty());
 }
 
 void Tst_firmwarecli::statusWithMcu()
@@ -1057,6 +1103,85 @@ void Tst_firmwarecli::pullUnreachableExits4()
     QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 4 (SSH): ")));
 }
 
+void Tst_firmwarecli::pullWithTheSavedPassword()
+{
+    // An agent's usual case: the profile's password was remembered in the app; no --password-*
+    // option, nothing asked - SshConnection answers from SecretStore (here the test's settings).
+    CliRig rig;
+    BuildMachine machine;
+    machine.passwordAuth = true;
+    machine.password = kSecret;
+    QVERIFY(machine.start(&rig.store, caseDir(QStringLiteral("work"))));
+    const QString key = QStringLiteral("ssh/%1/password").arg(machine.profile.id);
+    QVERIFY(SecretStore::store(key, kSecret));
+    QVERIFY2(QSettings().fileName().startsWith(m_tempDir.path()), qPrintable(QSettings().fileName()));
+    const CliResult result = rig.run({QStringLiteral("pull"), QStringLiteral("--target"), machine.profile.name, QStringLiteral("--remote-folder"),
+                                      machine.imageFolder, QStringLiteral("--cache"), caseDir(QStringLiteral("cache"))});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(machine.server->lastAuthMethod(), QStringLiteral("password"));
+    QVERIFY(!result.out.contains(QStringLiteral("nobody answered")));
+    QVERIFY(!result.out.contains(QStringLiteral("Answering")));
+    QVERIFY(!result.out.contains(kSecret));
+    QVERIFY(result.err.isEmpty());
+    QVERIFY(SecretStore::contains(key));   // it worked, so it stays
+    QVERIFY(SecretStore::remove(key));
+}
+
+void Tst_firmwarecli::interruptBeforeTheJobExists()
+{
+    // Ctrl+C at the --password-stdin prompt (no event loop runs during the read): remembered,
+    // and the pull never starts.
+    CliRig rig;
+    int reads = 0;
+    rig.cli.setInput(
+        [&rig, &reads](bool) -> std::optional<QString> {
+            ++reads;
+            rig.cli.interrupt();
+            return kSecret;
+        },
+        /*interactive=*/false);
+    const QString logPath = caseDir(QStringLiteral("interrupt.log"));
+    const CliResult result = rig.run({QStringLiteral("pull"), QStringLiteral("--target"), QStringLiteral("test@127.0.0.1:1"),
+                                      QStringLiteral("--remote-folder"), QStringLiteral("/srv/image"), QStringLiteral("--cache"),
+                                      caseDir(QStringLiteral("cache")), QStringLiteral("--password-stdin"), QStringLiteral("--log"), logPath});
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QCOMPARE(reads, 1);
+    QVERIFY(result.hasText(QStringLiteral("Interrupted (Ctrl+C)")));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 5 (cancelled): interrupted before anything ran"));
+    QVERIFY(!result.out.contains(QStringLiteral("Connecting to")));
+    QVERIFY(!result.out.contains(kSecret));
+    QCOMPARE(readAll(logPath).split(QLatin1Char('\n'), Qt::SkipEmptyParts), result.lines());
+    QVERIFY(!rig.cli.isRunning());
+}
+
+void Tst_firmwarecli::interruptDuringAQuestionWaitsForIt()
+{
+    // Ctrl+C while the password is typed: the reader passes it on at once (main.cpp does), but the
+    // cancel goes out after the question, from the event loop - not inside the job's callback.
+    CliRig rig;
+    BuildMachine machine;
+    machine.passwordAuth = true;
+    machine.password = kSecret;
+    QVERIFY(machine.start(&rig.store, caseDir(QStringLiteral("work"))));
+    int asked = 0;
+    rig.cli.setInput(
+        [&rig, &asked](bool) -> std::optional<QString> {
+            ++asked;
+            rig.cli.interrupt();
+            return kSecret;
+        },
+        /*interactive=*/true);
+    const CliResult result = rig.run({QStringLiteral("pull"), QStringLiteral("--target"), machine.profile.name, QStringLiteral("--remote-folder"),
+                                      machine.imageFolder, QStringLiteral("--cache"), caseDir(QStringLiteral("cache"))});
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QCOMPARE(asked, 1);
+    const QStringList texts = result.texts();
+    const qsizetype interrupted = texts.indexOf(QStringLiteral("Interrupted (Ctrl+C)"));
+    QVERIFY2(interrupted >= 0 && texts.indexOf(QStringLiteral("Cancelling Pull")) > interrupted, qPrintable(result.dump()));
+    QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 5 (cancelled): interrupted: ")));
+    QVERIFY(!result.out.contains(kSecret));
+}
+
 // =======================================================================================
 // flash-soc
 // =======================================================================================
@@ -1279,7 +1404,127 @@ void Tst_firmwarecli::flashInterruptWaitsForTheWrite()
     QVERIFY2(refused >= 0 && cancelling > refused, qPrintable(result.dump()));
     QVERIFY(result.hasText(QStringLiteral("su-fw stops at the next point where that is safe")));
     QVERIFY(finished);   // the write ended on its own before the cancel went through
-    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 5 (cancelled): interrupted: cancelled"));
+    // Not "cancelled" alone: the SoC was written, only the wait for ADB was cut short.
+    QCOMPARE(result.lastText(),
+             QStringLiteral("su-fw: exit 5 (cancelled): interrupted after the image was written; the ADB wait was cancelled"));
+}
+
+void Tst_firmwarecli::flashInterruptDuringAWriteStopsAfterIt()
+{
+    // Ctrl+C during a WL: refused; sent again from the event loop once the flasher waits for ADB -
+    // never inside the flasher's own phase change, so the wait starts and is then cancelled, and
+    // nothing runs or is logged after the operation's own result line.
+    CliRig rig;
+    QPointer<FakeToolInvocation> wl;
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool WL ")), [&wl](FakeToolInvocation* i) {
+        wl = i;
+        i->emitOutput("Write LBA from file (10%)\r");
+        i->hang();
+    });
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? get-state$")), "error: no devices/emulators found\n", 1);
+    scriptSocFlash(rig.runner, kLdLoader);
+    qsizetype commandsAtTheEnd = -1;
+    rig.setup = [&rig, &commandsAtTheEnd](FirmwareJob& job) {
+        QObject::connect(&job, &FirmwareJob::operationFinished, &rig.cli,
+                         [&rig, &commandsAtTheEnd]() { commandsAtTheEnd = rig.runner.invocations().size(); });
+    };
+    bool interrupted = false;
+    bool written = false;
+    QTimer driver;
+    driver.setInterval(20);
+    QObject::connect(&driver, &QTimer::timeout, &rig.cli, [&]() {
+        if (wl && !interrupted) {
+            interrupted = true;
+            rig.cli.interrupt();
+        } else if (wl && interrupted && !written) {
+            written = true;
+            wl->emitOutput("Write LBA from file (100%)\r\n");
+            wl->finish(0);
+        }
+    });
+    driver.start();
+    const QString image = makeImage(QStringLiteral("flash/update.img"));
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                                      QStringLiteral("boot"), QStringLiteral("--layout"), kNodeMtdParts});
+    driver.stop();
+    QVERIFY2(result.code == 5, qPrintable(result.dump()));
+    QVERIFY(written);
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedWl(4, extractDirOf(image))});
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool RD$"))), 1);
+    const QStringList texts = result.texts();
+    const qsizetype refused = texts.indexOf(QStringLiteral("Cannot cancel while upgrade_tool writes the flash"));
+    const qsizetype waiting = texts.indexOf(QRegularExpression(QStringLiteral("^waiting for the board to come back on ADB.*")));
+    const qsizetype cancelling = texts.indexOf(QStringLiteral("Cancelling Flash SoC"));
+    QVERIFY2(refused >= 0 && waiting > refused && cancelling > waiting, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("stopped waiting for ADB; the image was already written")));
+    // The operation's result line is the last one before su-fw's own.
+    QCOMPARE(texts.at(texts.size() - 2), QStringLiteral("Flash SoC failed: cancelled"));
+    QCOMPARE(result.lastText(),
+             QStringLiteral("su-fw: exit 5 (cancelled): interrupted after the image was written; the ADB wait was cancelled"));
+    QCOMPARE(rig.runner.invocations().size(), commandsAtTheEnd);   // no adb started after the end
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("get-state"))), 1);
+}
+
+void Tst_firmwarecli::flashBoardOnAdbGoesThroughLoader()
+{
+    // The bench's usual case: the board runs (ADB). flash-soc reads its kernel and flash layout over
+    // ADB (the layout is stored for that board in the app's settings, as the tab does), sends
+    // `adb -s <serial> reboot loader` without a question and writes in Loader mode.
+    CliRig rig;
+    auto inLoader = std::make_shared<bool>(false);
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+        i->emitOutput(*inLoader ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+        i->finish(0);
+    });
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(kBoardSerial)), [inLoader](FakeToolInvocation* i) {
+        *inLoader = true;   // the board restarts in Loader mode
+        i->finish(0);
+    });
+    scriptSocFlash(rig.runner, kLdLoader);   // EXF, WL, RD, get-state, /proc/version, /proc/cmdline
+    const QString image = tempPath(QStringLiteral("withenv-%1/update.img").arg(m_caseNumber));   // its env.img carries the layout
+    QVERIFY(writeFile(image, rkfwBytes()));
+    QVERIFY(AppSettings::instance().firmwareMtdParts(kBoardSerial).isEmpty());
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                                      QStringLiteral("boot"), QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--yes")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());   // nothing was asked
+    const QString adb = QStringLiteral("adb -s ") + kBoardSerial;
+    const QStringList commands = rig.runner.invocations();
+    const qsizetype version = commands.indexOf(adb + QStringLiteral(" shell \"cat /proc/version\""));
+    const qsizetype cmdline = commands.indexOf(adb + QStringLiteral(" shell \"cat /proc/cmdline\""));
+    const qsizetype reboot = commands.indexOf(adb + QStringLiteral(" reboot loader"));
+    const qsizetype write = commands.indexOf(QRegularExpression(QStringLiteral("^upgrade_tool WL .*")));
+    QVERIFY2(version >= 0 && cmdline > version && reboot > cmdline && write > reboot, qPrintable(commands.join(QLatin1Char('\n'))));
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedWl(4, extractDirOf(image))});
+    QVERIFY(commands.contains(adb + QStringLiteral(" get-state")));   // the ADB wait asks the same board
+    QVERIFY(result.hasText(QStringLiteral("board running 5.10.209+, rebooting it into loader mode")));
+    QVERIFY(result.hasText(QStringLiteral("partition layout of the board: ") + kNodeMtdParts));
+    // Stored where the app keeps it: the settings file this test points QSettings at.
+    QCOMPARE(AppSettings::instance().firmwareMtdParts(kBoardSerial), kNodeMtdParts);
+    QCOMPARE(AppSettings::instance().firmwareMtdParts(QString()), kNodeMtdParts);
+    AppSettings::instance().sync();
+    QSettings stored;
+    QVERIFY2(stored.fileName().startsWith(m_tempDir.path()), qPrintable(stored.fileName()));
+    QCOMPARE(stored.value(QStringLiteral("firmware/mtdparts")).toMap().value(kBoardSerial).toString(), kNodeMtdParts);
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): Upgrade firmware ok; board is back on ADB"));
+}
+
+void Tst_firmwarecli::flashAdbNotBackIsStillDone()
+{
+    // "board flashed, but ADB did not come back": a success with a warning (flash-soc --help, exit 0).
+    CliRig rig;
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? get-state$")), "error: no devices/emulators found\n", 1);
+    scriptSocFlash(rig.runner, kLdLoader);
+    rig.setup = [](FirmwareJob& job) { job.setAdbReturnSeconds(1); };
+    const QString image = makeImage(QStringLiteral("flash/update.img"));
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--all"),
+                                      QStringLiteral("--layout"), kNodeMtdParts});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(wlCommands(rig.runner).size(), qsizetype(kNodePartitionCount));
+    const QString message = QStringLiteral("board flashed, but ADB did not come back within 1 s; check the serial console");
+    QVERIFY(result.hasText(QStringLiteral("Flash SoC done: ") + message));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): ") + message);
 }
 
 void Tst_firmwarecli::flashNoWait()
@@ -1366,6 +1611,47 @@ void Tst_firmwarecli::flashLogFileHoldsTheSameLines()
     QVERIFY2(logged.size() > result.lines().size() + 10, qPrintable(QString::number(logged.size())));
     QCOMPARE(logged.mid(0, result.lines().size()), result.lines());
     QCOMPARE(logged.last(), quiet.lines().first());
+}
+
+void Tst_firmwarecli::anotherOperationRunningExits1()
+{
+    // One firmware operation per PC: while another holds the lock (the tab, another su-fw; here a
+    // QLockFile of the test), an operation fails at once and status queries nothing - exit 1.
+    CliRig rig;
+    scriptSocFlash(rig.runner, kLdLoader);
+    rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    QLockFile other(AppSettings::dataDirectory() + QStringLiteral("/firmware.lock"));
+    QVERIFY(other.tryLock(0));
+    qint64 pid = 0;
+    QString host;
+    QString program;
+    QVERIFY(other.getLockInfo(&pid, &host, &program));
+    const QString running = QStringLiteral("another firmware operation is running (%1)")
+                                .arg(program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid));
+    const QRegularExpression board(QStringLiteral("^upgrade_tool (LD|WL|UF|RD)|^adb"));
+
+    const QString image = makeImage(QStringLiteral("flash/update.img"));
+    CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--all"),
+                                QStringLiteral("--layout"), kNodeMtdParts});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("Flash SoC failed: ") + running));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + running);
+    QCOMPARE(rig.runner.count(board), 0);
+
+    result = rig.run({QStringLiteral("status")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("status paused: ") + running));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + running);
+    result = rig.run({QStringLiteral("mcu-info")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(rig.runner.count(board), 0);   // the board was never touched
+
+    // Released: su-fw works again.
+    other.unlock();
+    result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--all"), QStringLiteral("--layout"),
+                      kNodeMtdParts});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(!QFileInfo::exists(AppSettings::dataDirectory() + QStringLiteral("/firmware.lock")));   // and released again
 }
 
 // =======================================================================================
@@ -1488,6 +1774,7 @@ struct ChainRig
     FakeMcu mcu;
     std::unique_ptr<FakeMcuServer> bridge;
     std::shared_ptr<QByteArray> versionReply = std::make_shared<QByteArray>("OK version=0.8.1 role=rx\n");
+    std::shared_ptr<int> versionExit = std::make_shared<int>(0);
 
     bool start(const QString& workDir)
     {
@@ -1500,9 +1787,12 @@ struct ChainRig
         }
         scriptSocFlash(rig.runner, kLdMaskrom);
         auto reply = versionReply;
-        rig.runner.addHandler(QRegularExpression(QStringLiteral("rfmcu cmd version")), [reply](FakeToolInvocation* i) {
-            i->emitOutput(*reply);
-            i->finish(0);
+        auto exitCode = versionExit;
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("rfmcu cmd version")), [reply, exitCode](FakeToolInvocation* i) {
+            if (!reply->isEmpty()) {
+                i->emitOutput(*reply);
+            }
+            i->finish(*exitCode);
         });
         scriptMcuBridge(rig.runner, bridge->port());
         return true;
@@ -1586,6 +1876,50 @@ void Tst_firmwarecli::pullFlashStopsAtThePull()
     QVERIFY2(result.code == 4, qPrintable(result.dump()));
     QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 4 (SSH): stopped at Pull: Host key rejected for ") + chain.machine.target());
     QCOMPARE(chain.rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool (LD|UF|WL)"))), 0);   // the board was not touched
+}
+
+void Tst_firmwarecli::pullFlashSilentMcuNeedsTheRole()
+{
+    // A CC1310 that cannot report its role (no CLI: it sits in its updater) and no --role: the chain
+    // stops, and su-fw names its own way out (the job's text names the tab's button).
+    ChainRig chain;
+    *chain.versionReply = QByteArray();
+    *chain.versionExit = 3;
+    QVERIFY(chain.start(caseDir(QStringLiteral("work"))));
+    const CliResult result = chain.rig.run(chain.arguments(caseDir(QStringLiteral("cache"))));
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): stopped at Update MCU: cannot read the running MCU "
+                                                        "version (the MCU did not answer \"version\") and no role is confirmed")));
+    QVERIFY2(result.hasText(QStringLiteral("The MCU cannot report its role (it may sit in its UART updater): pass --role rx|tx, the "
+                                           "role it should run with")),
+             qPrintable(result.dump()));
+    QCOMPARE(chain.rig.runner.count(QRegularExpression(QStringLiteral("forward tcp:0"))), 0);
+}
+
+void Tst_firmwarecli::passwordVariableLeavesTheEnvironment()
+{
+    // --password-env VAR: read once, then removed from su-fw's environment - no tool (adb,
+    // upgrade_tool, the adb server adb starts and leaves running) inherits the password.
+    ChainRig chain;
+    chain.machine.passwordAuth = true;
+    chain.machine.password = kSecret;
+    QStringList seenByTheTools;
+    chain.rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [&seenByTheTools](FakeToolInvocation* i) {
+        seenByTheTools << QProcessEnvironment::systemEnvironment().value(QString::fromLatin1(kSecretVariable), QStringLiteral("<unset>"));
+        i->emitOutput(kLdMaskrom);
+        i->finish(0);
+    });
+    QVERIFY(chain.start(caseDir(QStringLiteral("work"))));
+    qputenv(kSecretVariable, kSecret.toUtf8());
+    const CliResult result = chain.rig.run(chain.arguments(caseDir(QStringLiteral("cache")))
+                                           + QStringList{QStringLiteral("--password-env"), QString::fromLatin1(kSecretVariable)});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(chain.machine.server->lastAuthMethod(), QStringLiteral("password"));   // the secret did its job first
+    QVERIFY(!seenByTheTools.isEmpty());
+    for (const QString& seen : std::as_const(seenByTheTools)) {
+        QCOMPARE(seen, QStringLiteral("<unset>"));
+    }
+    QVERIFY(!qEnvironmentVariableIsSet(kSecretVariable));
 }
 
 // =======================================================================================

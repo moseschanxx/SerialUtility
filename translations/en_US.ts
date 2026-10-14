@@ -505,7 +505,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+291"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+317"/>
         <source>SSH: %1</source>
         <translation>SSH: %1</translation>
     </message>
@@ -651,12 +651,12 @@
     </message>
     <message>
         <location line="+0"/>
-        <location line="+472"/>
+        <location line="+541"/>
         <source>%1 failed: %2</source>
         <translation>%1 failed: %2</translation>
     </message>
     <message>
-        <location line="-428"/>
+        <location line="-497"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>the SSH profile of the build machine no longer exists</translation>
     </message>
@@ -696,22 +696,22 @@
         <translation>Cannot list the partitions of %1: %2</translation>
     </message>
     <message>
-        <location line="+63"/>
+        <location line="+64"/>
         <source>Cannot read the flash layout of board %1: %2</source>
         <translation>Cannot read the flash layout of board %1: %2</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
         <translation>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+4"/>
         <source>Flash layout of board %1: %2</source>
         <translation>Flash layout of board %1: %2</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+20"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>partition layout unknown: connect the board running once</translation>
     </message>
@@ -736,12 +736,23 @@
         <translation>Busy: %1 is still running</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+16"/>
+        <location line="+881"/>
+        <source>another firmware operation is running (%1)</source>
+        <translation>another firmware operation is running (%1)</translation>
+    </message>
+    <message>
+        <location line="-875"/>
+        <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
+        <translation>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</translation>
+    </message>
+    <message>
+        <location line="+40"/>
         <source>--- %1 ---</source>
         <translation>--- %1 ---</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+32"/>
         <source>%1: %2</source>
         <translation>%1: %2</translation>
     </message>
@@ -751,7 +762,7 @@
         <translation>stopped at %1: %2</translation>
     </message>
     <message>
-        <location line="+73"/>
+        <location line="+74"/>
         <source>enter the remote folder that holds update.img</source>
         <translation>enter the remote folder that holds update.img</translation>
     </message>
@@ -784,14 +795,14 @@
         <location line="+4"/>
         <location line="+354"/>
         <location line="+36"/>
-        <location line="+211"/>
+        <location line="+205"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-622"/>
+        <location line="-616"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -1000,7 +1011,7 @@
         <translation>the MCU already runs %1; update skipped</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+60"/>
         <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
         <translation>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</translation>
     </message>
@@ -1028,6 +1039,11 @@
         <location line="+9"/>
         <source>Rolled back: the previous image is the current one again</source>
         <translation>Rolled back: the previous image is the current one again</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>status paused: %1</source>
+        <translation>status paused: %1</translation>
     </message>
 </context>
 <context>
@@ -6743,7 +6759,7 @@ You will be asked for it when connecting.</translation>
 <context>
     <name>ToolRunner</name>
     <message>
-        <location filename="../src/firmware/ToolRunner.cpp" line="+340"/>
+        <location filename="../src/firmware/ToolRunner.cpp" line="+364"/>
         <source>timed out after %1 ms</source>
         <translation>timed out after %1 ms</translation>
     </message>

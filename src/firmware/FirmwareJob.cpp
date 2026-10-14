@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QLocale>
+#include <QLockFile>
 #include <QMap>
 #include <QPointer>
 #include <QSet>
@@ -13,6 +14,7 @@
 
 #include <utility>
 
+#include "app/AppSettings.h"
 #include "app/Logging.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/McuLink.h"
@@ -58,6 +60,24 @@ QString formatTime(const QDateTime& time)
 QString nativePath(const QString& path)
 {
     return QDir::toNativeSeparators(path);
+}
+
+/// The lock of "one firmware operation per machine": the tab and su-fw share the data folder.
+QString operationLockPath()
+{
+    return AppSettings::dataDirectory() + QStringLiteral("/firmware.lock");
+}
+
+/// Who holds `lock` (a QLockFile whose tryLock() failed), for the messages: "su-fw, pid 4711".
+QString lockHolder(const QLockFile& lock)
+{
+    qint64 pid = 0;
+    QString host;
+    QString program;
+    if (!lock.getLockInfo(&pid, &host, &program) || pid <= 0) {
+        return nativePath(operationLockPath());   // being written or unreadable: at least where it is
+    }
+    return program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid);
 }
 
 } // namespace
@@ -154,6 +174,8 @@ struct FirmwareJob::Private
     int lastCliExit = -1;           ///< exit code of the last `rfmcu cmd` that ran to its end, else -1
     std::function<void(bool, const QString&)> cliDone;
     bool cancellableShown = false;  ///< what cancellableChanged() said last
+    std::unique_ptr<QLockFile> operationLock;   ///< held from beginOperation() to endOperation()
+    QString statusPaused;           ///< statusPausedReason(); logged when it starts
 
     // ---- Construction ------------------------------------------------------------------------
     void wire();
@@ -179,7 +201,10 @@ struct FirmwareJob::Private
     bool cancellable() const;
     void updateCancellable();
     bool refuseIfBusy();
-    void beginOperation(const QString& op);
+    bool takeOperationLock(QString* refusal);
+    void releaseOperationLock();
+    bool lockHeldElsewhere(QString* holder) const;
+    bool beginOperation(const QString& op);
     void stepFinished(const QString& stepName, bool ok, const QString& message);
     void endOperation(const QString& stepName, bool ok, const QString& message);
     void setPersistent(const QString& text);
@@ -280,6 +305,7 @@ FirmwareJob::~FirmwareJob()
     }
     d->link->close();   // McuLink's destructor (below, before the runner's) sends the cleanup detached
     d->ssh->close();
+    d->releaseOperationLock();   // a job destroyed while busy lets the next operation run
 }
 
 void FirmwareJob::Private::wire()
@@ -974,19 +1000,23 @@ void FirmwareJob::Private::readBoardLayout(const QString& serial)
         }
         cmdlineInvocation = nullptr;
         if (result.cancelled) {
+            emit q->layoutReadFinished(serial, false);
             return;
         }
         if (!result.started) {
             log(FirmwareJob::tr("Cannot read the flash layout of board %1: %2").arg(serial, result.error));
+            emit q->layoutReadFinished(serial, false);
             return;
         }
         const QString mtdparts = RockchipTool::mtdPartsFromCommandLine(result.outputText());
         if (mtdparts.isEmpty()) {
             log(FirmwareJob::tr("Board %1 reports no flash layout (no mtdparts in /proc/cmdline)").arg(serial));
+            emit q->layoutReadFinished(serial, false);
             return;
         }
         log(FirmwareJob::tr("Flash layout of board %1: %2").arg(serial, mtdparts));
         storeLayout(serial, mtdparts);
+        emit q->layoutReadFinished(serial, true);
     });
 }
 
@@ -1159,7 +1189,60 @@ bool FirmwareJob::Private::refuseIfBusy()
     return true;
 }
 
-void FirmwareJob::Private::beginOperation(const QString& op)
+bool FirmwareJob::Private::takeOperationLock(QString* refusal)
+{
+    const QString path = operationLockPath();
+    auto lock = std::make_unique<QLockFile>(path);
+    // Stale only when its process is gone, however long a flash takes (the default would call a
+    // lock older than 30 s stale).
+    lock->setStaleLockTime(0);
+    if (lock->tryLock(0)) {
+        operationLock = std::move(lock);
+        return true;
+    }
+    if (lock->error() == QLockFile::LockFailedError) {
+        *refusal = FirmwareJob::tr("another firmware operation is running (%1)").arg(lockHolder(*lock));
+        return false;
+    }
+    // The data folder cannot hold the file (permissions, a full disk): the operation runs without
+    // the guard, as every operation did before 0.6.0.
+    qCWarning(lcFirmware) << "cannot create the firmware lock" << path << "error" << int(lock->error());
+    log(FirmwareJob::tr("Cannot create the lock file %1: another firmware operation on this PC would not be noticed")
+            .arg(nativePath(path)));
+    return true;
+}
+
+void FirmwareJob::Private::releaseOperationLock()
+{
+    if (operationLock) {
+        operationLock->unlock();
+        operationLock.reset();
+    }
+}
+
+bool FirmwareJob::Private::lockHeldElsewhere(QString* holder) const
+{
+    // Probed only when the file exists, so an idle owner's status timer never holds the lock (even
+    // for a moment) when su-fw or the tab starts an operation. A file whose process is gone is
+    // stale: the probe takes it over and drops it again.
+    const QString path = operationLockPath();
+    if (!QFileInfo::exists(path)) {
+        return false;
+    }
+    QLockFile probe(path);
+    probe.setStaleLockTime(0);
+    if (probe.tryLock(0)) {
+        probe.unlock();
+        return false;
+    }
+    if (probe.error() != QLockFile::LockFailedError) {
+        return false;   // cannot tell (permissions): the status goes on as before 0.6.0
+    }
+    *holder = lockHolder(probe);
+    return true;
+}
+
+bool FirmwareJob::Private::beginOperation(const QString& op)
 {
     operation = op;
     step.clear();
@@ -1170,6 +1253,18 @@ void FirmwareJob::Private::beginOperation(const QString& op)
     updateCancellable();
     qCInfo(lcFirmware) << "operation" << op << "started";
     emit q->busyChanged(true);
+
+    // One firmware operation per machine: the tab and su-fw drive the same board and tools.
+    QString refusal;
+    if (takeOperationLock(&refusal)) {
+        return true;
+    }
+    qCWarning(lcFirmware).noquote() << "operation" << op << "refused:" << refusal;
+    if (op != kOpPullFlash) {
+        emit q->stepFinished(op, false, refusal);   // a single step reports it like any other result
+    }
+    endOperation(op, false, refusal);
+    return false;
 }
 
 void FirmwareJob::Private::stepFinished(const QString& stepName, bool ok, const QString& message)
@@ -1207,6 +1302,7 @@ void FirmwareJob::Private::stepFinished(const QString& stepName, bool ok, const 
 
 void FirmwareJob::Private::endOperation(const QString& stepName, bool ok, const QString& message)
 {
+    releaseOperationLock();   // first: a slot of the signals below may start the next operation
     const QString op = operation;
     operation.clear();
     step.clear();
@@ -1853,47 +1949,42 @@ void FirmwareJob::Private::startChainMcu()
 
 void FirmwareJob::pull()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpPull)) {
         return;
     }
-    d->beginOperation(kOpPull);
     d->keepSsh = false;
     d->startPull();
 }
 
 void FirmwareJob::flashSoc()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpFlash)) {
         return;
     }
-    d->beginOperation(kOpFlash);
     d->startFlash();
 }
 
 void FirmwareJob::updateMcu()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpMcu)) {
         return;
     }
-    d->beginOperation(kOpMcu);
     d->startMcuUpdate(kOpMcu);
 }
 
 void FirmwareJob::setMcuRole()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpSetRole)) {
         return;
     }
-    d->beginOperation(kOpSetRole);
     d->startMcuUpdate(kOpSetRole);
 }
 
 void FirmwareJob::readMcuInfo()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpInfo)) {
         return;
     }
-    d->beginOperation(kOpInfo);
     d->step = kOpInfo;
     d->updateCancellable();
     d->startMcuRead([this](bool ok, const QString& message) { d->stepFinished(kOpInfo, ok, message); });
@@ -1901,10 +1992,9 @@ void FirmwareJob::readMcuInfo()
 
 void FirmwareJob::pullAndFlash()
 {
-    if (d->refuseIfBusy()) {
+    if (d->refuseIfBusy() || !d->beginOperation(kOpPullFlash)) {
         return;
     }
-    d->beginOperation(kOpPullFlash);
     d->keepSsh = true;
     d->log(tr("Pull & Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed"));
     d->startPull();
@@ -1988,7 +2078,24 @@ void FirmwareJob::refreshStatus()
     if (isBusy()) {
         return;   // upgrade_tool / adb belong to the running operation
     }
+    // ... and to another job's operation (su-fw while the tab is open, or the other way round):
+    // `upgrade_tool LD` and adb during its write or its ADB wait are not this job's to send.
+    QString holder;
+    if (d->lockHeldElsewhere(&holder)) {
+        const QString reason = tr("another firmware operation is running (%1)").arg(holder);
+        if (d->statusPaused.isEmpty()) {
+            d->log(tr("status paused: %1").arg(reason));
+        }
+        d->statusPaused = reason;
+        return;
+    }
+    d->statusPaused.clear();
     d->flasher->queryStatus();
+}
+
+QString FirmwareJob::statusPausedReason() const
+{
+    return d->statusPaused;
 }
 
 void FirmwareJob::planPartitions()

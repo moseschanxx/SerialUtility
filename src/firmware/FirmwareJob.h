@@ -66,6 +66,18 @@ class ToolRunner;
  * Every operation also checks its inputs first and fails as a step ("no image: pull one or choose a
  * local image first", "choose a valid .pkg package first", ...), framed like any other result.
  *
+ * One firmware operation per machine (v0.6.0): the tab and su-fw may run side by side on one PC and
+ * one board, so every operation holds a QLockFile, AppSettings::dataDirectory() + "/firmware.lock",
+ * from its busyChanged(true) to its result (taken without waiting; released on every end: done,
+ * failed, cancelled, the job destroyed). An operation that finds it held by another job - in this
+ * process or another one - ends at once, framed like every result, with the step failure "another
+ * firmware operation is running (<program>, pid <n>)" (a single-step operation reports it with
+ * stepFinished() as well). While another job holds it, refreshStatus() runs no query (its tools would
+ * talk to the board in the middle of the other operation): it logs "status paused: another firmware
+ * operation is running (...)" once and statusPausedReason() says why; the next refreshStatus() after
+ * the lock was released queries again. A lock left by a process that is gone is stale and taken over.
+ * A data folder that cannot hold the file leaves the operation unguarded (logged), as before 0.6.0.
+ *
  * Outputs: logLine() carries every plain log line (the owner adds the time; multi-line text is one
  * signal) - the command lines run, the tools' results, the flasher / updater / puller narration in
  * their own wording - and the job mirrors each of them to the System Log through lcFirmware; never
@@ -100,8 +112,11 @@ class ToolRunner;
  * AppSettings::firmwareMtdParts()) or from setMtdParts(); a layout the job reads itself (the first
  * time the status shows an ADB board without one: `adb -s <serial> shell cat /proc/cmdline`, once
  * per board and job; or the flasher's step 2) is kept and reported with mtdPartsRead(serial,
- * mtdparts) so the owner can store it. Settings: the job reads no AppSettings; the owner hands in
- * the values (setSshDefaults(), setGitDescribe(), setExtraFiles(), the timeouts, the paths).
+ * mtdparts) so the owner can store it. The status's own read ends with layoutReadFinished(serial,
+ * ok) whatever it found (after mtdPartsRead() when it found a layout; ok = false when adb could not
+ * run or the board reports none), so an owner that waits for it needs no log text. Settings: the
+ * job reads no AppSettings (only its data folder, for the lock); the owner hands in the values
+ * (setSshDefaults(), setGitDescribe(), setExtraFiles(), the timeouts, the paths).
  *
  * Partitions (v0.5.1): planPartitions() / every image change unpacks the image (SocFlasher
  * planPartitions(), EXF) and lists partitions() in the layout in use (flashLayout(): the image's own
@@ -275,6 +290,9 @@ public:
     QString currentStep() const;                    ///< the step running right now ("" between the steps of a chain)
     bool isCancellable() const;
     QString persistentStatusMessage() const;        ///< "" while idle
+    /// "" unless the last refreshStatus() ran no query because another job holds the firmware lock:
+    /// then "another firmware operation is running (<program>, pid <n>)".
+    QString statusPausedReason() const;
 
     void setHostKeyHandler(HostKeyHandler handler);
     void setAuthPromptHandler(AuthPromptHandler handler);
@@ -297,7 +315,7 @@ public slots:
     /// (busyRefused(), false, *message untouched). Logged; *message = the line; the cache image is
     /// the image again.
     bool rollBack(QString* message = nullptr);
-    void refreshStatus();                           ///< SocFlasher::queryStatus() unless busy
+    void refreshStatus();                           ///< SocFlasher::queryStatus() unless busy or another job holds the lock
     void planPartitions();                          ///< plan the current image again
     /// Re-reads the image: imageChanged(reread), then a new plan when image, mtime or layout changed
     /// (reread: the file changed in place, describe and plan it again).
@@ -326,6 +344,8 @@ signals:
     void partitionsChanged();
     void partitionsPlanned();
     void mtdPartsRead(const QString& serial, const QString& mtdparts);
+    /// The status's /proc/cmdline read of `serial` ended: ok = a layout was read (mtdPartsRead() came first).
+    void layoutReadFinished(const QString& serial, bool ok);
 
 private:
     struct Private;

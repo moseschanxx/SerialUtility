@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPointer>
@@ -23,6 +24,7 @@
 #include <memory>
 #include <optional>
 
+#include "app/AppSettings.h"
 #include "app/Logging.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/FirmwareJob.h"
@@ -171,6 +173,37 @@ bool waitForPlan(const FirmwareJob& job)
                            kOpTimeoutMs);
 }
 
+/// The lock every firmware operation holds (FirmwareJob.h, "One firmware operation per machine").
+QString firmwareLockPath()
+{
+    return AppSettings::dataDirectory() + QStringLiteral("/firmware.lock");
+}
+
+/// Whether anybody holds the lock right now (a fresh QLockFile can take it).
+bool lockIsFree()
+{
+    QLockFile probe(firmwareLockPath());
+    probe.setStaleLockTime(0);
+    if (!probe.tryLock(0)) {
+        return false;
+    }
+    probe.unlock();
+    return true;
+}
+
+/// The refusal a job gives while `held` (a QLockFile of this process) holds the lock.
+QString runningText(const QLockFile& held)
+{
+    qint64 pid = 0;
+    QString host;
+    QString program;
+    if (!held.getLockInfo(&pid, &host, &program)) {
+        return QStringLiteral("<no lock info>");
+    }
+    return QStringLiteral("another firmware operation is running (%1)")
+        .arg(program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid));
+}
+
 } // namespace
 
 // =======================================================================================
@@ -203,6 +236,11 @@ private slots:
     void inputsCheckedFirst();
     void persistentStatusWhileBusy();
 
+    // ---- One firmware operation per machine (the lock) ------------------------------------
+    void secondJobRefusedWhileTheFirstIsBusy();
+    void refreshStatusPausedWhileTheLockIsHeld();
+    void lockReleasedOnEveryEndPath();
+
     // ---- Pull ----------------------------------------------------------------------------
     void pullTargetErrors();
     void pullDownloadsThenSkipsUnchanged();
@@ -232,6 +270,7 @@ private slots:
 
     // ---- Status, layout, partitions --------------------------------------------------------
     void statusReadsTheLayoutOnce();
+    void layoutReadFinishedOnBothEnds();
     void layoutProviderAndOwnMemory();
     void layoutFromTheImage();
     void refreshStatusSkippedWhileBusy();
@@ -681,6 +720,162 @@ void Tst_firmwarejob::persistentStatusWhileBusy()
     QVERIFY(rec.waitForOperation());
     QVERIFY(job->persistentStatusMessage().isEmpty());
     QCOMPARE(rec.cancellable.last(), false);
+}
+
+// =======================================================================================
+// One firmware operation per machine (the lock)
+// =======================================================================================
+
+void Tst_firmwarejob::secondJobRefusedWhileTheFirstIsBusy()
+{
+    // The tab and su-fw are two jobs on one PC and one board: while one runs an operation, the
+    // other's operation ends at once (framed as usual) and its status query does nothing.
+    FakeToolRunner runner;
+    scriptNoBoard(runner);
+    auto first = makeJob(&runner);
+    const QString cache = caseDir(QStringLiteral("cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    first->setCacheDirectory(cache);
+    Recorder firstRec(first.get());
+    first->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(first->socFlasher()->phase(), SocFlasher::Phase::WaitingForLoader, kOpTimeoutMs);
+    QVERIFY(QFileInfo::exists(firmwareLockPath()));
+
+    FakeToolRunner otherRunner;   // what the second job runs, on its own
+    scriptNoBoard(otherRunner);
+    auto second = makeJob(&otherRunner);
+    second->setCacheDirectory(cache);
+    Recorder rec(second.get());
+    const QString running = runningText(QLockFile(firmwareLockPath()));   // what the first job wrote into it
+    QVERIFY2(running.endsWith(QStringLiteral("pid %1)").arg(QCoreApplication::applicationPid())), qPrintable(running));
+    second->flashSoc();
+    QCOMPARE(rec.order, (QStringList{QStringLiteral("step:flash"), QStringLiteral("op:flash")}));
+    QCOMPARE(rec.lastOperation().ok, false);
+    QCOMPARE(rec.lastOperation().message, running);
+    QCOMPARE(rec.busyChanges, (QList<bool>{true, false}));
+    QCOMPARE(rec.log.first(), QStringLiteral("--- Flash SoC ---"));
+    QCOMPARE(rec.log.last(), QStringLiteral("Flash SoC failed: ") + running);
+    QVERIFY(!second->isBusy());
+    second->pullAndFlash();   // a chain is refused the same way, without a step of its own
+    QCOMPARE(rec.order.mid(2), QStringList{QStringLiteral("op:pull-flash")});
+    QCOMPARE(rec.lastOperation().message, running);
+
+    second->refreshStatus();
+    second->refreshStatus();
+    QCOMPARE(second->statusPausedReason(), running);
+    QCOMPARE(rec.log.count(QStringLiteral("status paused: ") + running), qsizetype(1));   // said once
+    QCoreApplication::processEvents();
+    QVERIFY(otherRunner.invocations().isEmpty());   // nothing of the second job reached a tool
+    QVERIFY(first->isBusy());                       // the first one goes on undisturbed
+
+    // The first one ends: the second one runs again.
+    first->cancel();
+    QVERIFY(firstRec.waitForOperation());
+    QVERIFY(lockIsFree());
+    second->refreshStatus();
+    QVERIFY(second->statusPausedReason().isEmpty());
+    QVERIFY(otherRunner.invocations().value(0).startsWith(QStringLiteral("upgrade_tool LD")));
+    second->flashSoc();
+    QVERIFY(second->isBusy());
+    QVERIFY(!lockIsFree());
+    second->cancel();
+    QVERIFY(rec.waitForOperation(3));
+    QVERIFY(lockIsFree());
+}
+
+void Tst_firmwarejob::refreshStatusPausedWhileTheLockIsHeld()
+{
+    // Another process's operation (a QLockFile of this test stands in for su-fw): the status timer
+    // runs no tool until it ends; an operation is refused with who holds it.
+    FakeToolRunner runner;
+    scriptNoBoard(runner);
+    auto job = makeJob(&runner);
+    Recorder rec(job.get());
+    QLockFile other(firmwareLockPath());
+    QVERIFY(other.tryLock(0));
+    const QString running = runningText(other);
+    QVERIFY2(running.contains(QString::number(QCoreApplication::applicationPid())), qPrintable(running));
+
+    job->refreshStatus();
+    job->refreshStatus();
+    QCoreApplication::processEvents();
+    QVERIFY(runner.invocations().isEmpty());
+    QVERIFY(!job->hasStatus());
+    QCOMPARE(job->statusPausedReason(), running);
+    QCOMPARE(rec.log, QStringList{QStringLiteral("status paused: ") + running});
+
+    QVERIFY(job->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    job->setRole(CcProtocol::RoleRx);
+    job->readMcuInfo();
+    QCOMPARE(rec.lastOperation().name, QStringLiteral("info"));
+    QCOMPARE(rec.lastOperation().message, running);
+    job->updateMcu();
+    QCOMPARE(rec.lastOperation().message, running);
+    QVERIFY(runner.invocations().isEmpty());
+
+    // Released: the next refresh queries again.
+    other.unlock();
+    job->refreshStatus();
+    QVERIFY(job->statusPausedReason().isEmpty());
+    QTRY_VERIFY(job->hasStatus());
+    QVERIFY(runner.invocations().first().startsWith(QStringLiteral("upgrade_tool LD")));
+    // Held again: paused again, and said again.
+    QVERIFY(other.tryLock(0));
+    job->refreshStatus();
+    QCOMPARE(rec.log.count(QStringLiteral("status paused: ") + running), qsizetype(2));
+    other.unlock();
+
+    // A lock file left by a process that is gone is stale: it pauses nothing and is taken over.
+    QVERIFY(writeFile(firmwareLockPath(), "999999999\nno-such-program\n\n"));
+    const qsizetype before = runner.invocations().size();
+    job->refreshStatus();
+    QVERIFY(job->statusPausedReason().isEmpty());
+    QCOMPARE(runner.invocations().size(), before + 1);
+    QVERIFY(lockIsFree());
+}
+
+void Tst_firmwarejob::lockReleasedOnEveryEndPath()
+{
+    FakeToolRunner runner;
+    scriptNoBoard(runner);
+    runner.addScript(QRegularExpression(QStringLiteral("killall rfmcu")), QByteArray());
+    runner.addScript(QRegularExpression(QStringLiteral("rfmcu cmd version")), "OK version=0.8.1 role=tx\r\n");
+    auto job = makeJob(&runner);
+    Recorder rec(job.get());
+    QVERIFY(lockIsFree());
+
+    // Done.
+    job->readMcuInfo();
+    QVERIFY(!lockIsFree());   // held while it runs
+    QVERIFY(rec.waitForOperation(1));
+    QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+    QVERIFY(lockIsFree());
+
+    // Failed (at once: no package).
+    job->updateMcu();
+    QCOMPARE(rec.operations.size(), qsizetype(2));
+    QVERIFY(!rec.lastOperation().ok);
+    QVERIFY(lockIsFree());
+
+    // Cancelled.
+    const QString cache = caseDir(QStringLiteral("cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    job->setCacheDirectory(cache);
+    job->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(job->socFlasher()->phase(), SocFlasher::Phase::WaitingForLoader, kOpTimeoutMs);
+    QVERIFY(!lockIsFree());
+    job->cancel();
+    QVERIFY(rec.waitForOperation(3));
+    QCOMPARE(rec.lastOperation().message, QStringLiteral("cancelled"));
+    QVERIFY(lockIsFree());
+
+    // Destroyed while busy.
+    job->flashSoc();
+    QTRY_COMPARE_WITH_TIMEOUT(job->socFlasher()->phase(), SocFlasher::Phase::WaitingForLoader, kOpTimeoutMs);
+    QVERIFY(!lockIsFree());
+    job.reset();
+    QVERIFY(lockIsFree());
+    QVERIFY(!QFileInfo::exists(firmwareLockPath()));
 }
 
 // =======================================================================================
@@ -1442,6 +1637,53 @@ void Tst_firmwarejob::statusReadsTheLayoutOnce()
     emit second->socFlasher()->mtdPartsRead(QStringLiteral("y:2M(b)"));
     QCOMPARE(second->mtdParts(QStringLiteral("c3d9")), QStringLiteral("y:2M(b)"));
     QCOMPARE(second->boardLayout(), QStringLiteral("y:2M(b)"));   // the job's own memory first
+}
+
+void Tst_firmwarejob::layoutReadFinishedOnBothEnds()
+{
+    // The status's /proc/cmdline read ends with layoutReadFinished(serial, ok) whatever came of it,
+    // so an owner (su-fw status) knows when it is over without reading log texts.
+    SocFlasher::DeviceStatus board;
+    board.mode = SocFlasher::DeviceStatus::Mode::Adb;
+    board.serial = QStringLiteral("0225ce3c8d8d6e44");
+    board.detail = QStringLiteral("device");
+    const QRegularExpression cmdline(QStringLiteral("cat /proc/cmdline"));
+    {
+        FakeToolRunner runner;
+        runner.addScript(cmdline, kNodeCmdline);
+        auto job = makeJob(&runner);
+        QStringList order;
+        connect(job.get(), &FirmwareJob::mtdPartsRead, job.get(), [&order]() { order << QStringLiteral("mtdPartsRead"); });
+        QSignalSpy finished(job.get(), &FirmwareJob::layoutReadFinished);
+        connect(job.get(), &FirmwareJob::layoutReadFinished, job.get(), [&order]() { order << QStringLiteral("layoutReadFinished"); });
+        emit job->socFlasher()->statusChanged(board);
+        QTRY_COMPARE(finished.count(), qsizetype(1));
+        QCOMPARE(finished.at(0).at(0).toString(), board.serial);
+        QCOMPARE(finished.at(0).at(1).toBool(), true);
+        QCOMPARE(order, (QStringList{QStringLiteral("mtdPartsRead"), QStringLiteral("layoutReadFinished")}));
+    }
+    {
+        FakeToolRunner runner;
+        runner.addScript(cmdline, "console=ttyFIQ0 root=/dev/mtdblock5 rootwait\n");   // no mtdparts
+        auto job = makeJob(&runner);
+        QSignalSpy layouts(job.get(), &FirmwareJob::mtdPartsRead);
+        QSignalSpy finished(job.get(), &FirmwareJob::layoutReadFinished);
+        emit job->socFlasher()->statusChanged(board);
+        QTRY_COMPARE(finished.count(), qsizetype(1));
+        QCOMPARE(finished.at(0).at(1).toBool(), false);
+        QCOMPARE(layouts.count(), qsizetype(0));
+    }
+    {
+        FakeToolRunner runner;
+        runner.addHandler(cmdline, [](FakeToolInvocation* i) { i->failToStart(QStringLiteral("no adb here")); });
+        auto job = makeJob(&runner);
+        Recorder rec(job.get());
+        QSignalSpy finished(job.get(), &FirmwareJob::layoutReadFinished);
+        emit job->socFlasher()->statusChanged(board);
+        QTRY_COMPARE(finished.count(), qsizetype(1));
+        QCOMPARE(finished.at(0).at(1).toBool(), false);
+        QVERIFY(rec.log.contains(QStringLiteral("Cannot read the flash layout of board 0225ce3c8d8d6e44: no adb here")));
+    }
 }
 
 void Tst_firmwarejob::layoutProviderAndOwnMemory()

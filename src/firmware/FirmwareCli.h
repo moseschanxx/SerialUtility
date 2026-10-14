@@ -39,7 +39,8 @@ class ToolRunner;
  * percentage), "ok" (step, done), "exit" (done)}; the "done" object is the last line and carries
  * the command's result fields ("board", "mcu", "layout", "partitions", "image", "boardInfo").
  * --quiet prints only the result line; --log FILE appends every line to FILE as well (also with
- * --quiet).
+ * --quiet; opened only once the whole command line is valid). --password-env VAR is removed from
+ * the environment as soon as it is read, so no tool inherits it.
  *
  * Exit codes (ExitCode): 0 done; 1 the operation failed (the last log line says why); 2 usage;
  * 3 no board, or the board in a mode the command cannot use; 4 SSH: unreachable, host key
@@ -57,8 +58,13 @@ class ToolRunner;
  *
  * interrupt() (Ctrl+C) and --timeout cancel the running operation through FirmwareJob::cancel();
  * the job refuses that while upgrade_tool writes the flash (logged), and su-fw then cancels at
- * the next point where it can (cancellableChanged(true)) - the write itself is never cut. A wait
- * outside an operation (the status query, the partition plan) ends at once. Both exit with 5.
+ * the next point where it can (cancellableChanged(true), acted on from the event loop) - the write
+ * itself is never cut; cancelled in the ADB wait after it, the result says "interrupted after the
+ * image was written; the ADB wait was cancelled". A wait outside an operation (the status query,
+ * the partition plan) ends at once. An interrupt() while the command line is still read (the
+ * password from stdin) is remembered: nothing starts. All exit with 5. Another firmware operation
+ * on the PC (the tab, another su-fw: FirmwareJob's lock) makes an operation fail at once and the
+ * status query stop ("another firmware operation is running (...)", exit 1).
  */
 class FirmwareCli : public QObject
 {
@@ -108,7 +114,9 @@ public:
     static QString versionText();                             ///< "su-fw 0.6.0 (BuildAI Serial Utility, <git hash>)"
 
 public slots:
-    /// Ctrl+C / SIGINT: cancels the running operation (see the class comment); a no-op while idle.
+    /// Ctrl+C / SIGINT: cancels the running operation (see the class comment); remembered while the
+    /// command line is read; deferred to the event loop while a question waits for stdin; a no-op
+    /// while idle.
     void interrupt();
 
 private:

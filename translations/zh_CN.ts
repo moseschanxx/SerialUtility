@@ -504,7 +504,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+291"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+317"/>
         <source>SSH: %1</source>
         <translation>SSH：%1</translation>
     </message>
@@ -650,12 +650,12 @@
     </message>
     <message>
         <location line="+0"/>
-        <location line="+472"/>
+        <location line="+541"/>
         <source>%1 failed: %2</source>
         <translation>%1 失败：%2</translation>
     </message>
     <message>
-        <location line="-428"/>
+        <location line="-497"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>构建机的 SSH 配置文件已不存在</translation>
     </message>
@@ -695,22 +695,22 @@
         <translation>无法列出 %1 的分区：%2</translation>
     </message>
     <message>
-        <location line="+63"/>
+        <location line="+64"/>
         <source>Cannot read the flash layout of board %1: %2</source>
         <translation>无法读取开发板 %1 的闪存布局：%2</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</source>
         <translation>开发板 %1 未提供闪存布局（/proc/cmdline 中没有 mtdparts）</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+4"/>
         <source>Flash layout of board %1: %2</source>
         <translation>开发板 %1 的闪存布局：%2</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+20"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>分区布局未知：请先连接正常运行的开发板一次</translation>
     </message>
@@ -735,12 +735,23 @@
         <translation>忙碌：%1 仍在运行</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+16"/>
+        <location line="+881"/>
+        <source>another firmware operation is running (%1)</source>
+        <translation>另一个固件操作正在运行（%1）</translation>
+    </message>
+    <message>
+        <location line="-875"/>
+        <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
+        <translation>无法创建锁文件 %1：本机上的另一个固件操作将无法被察觉</translation>
+    </message>
+    <message>
+        <location line="+40"/>
         <source>--- %1 ---</source>
         <translation>--- %1 ---</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+32"/>
         <source>%1: %2</source>
         <translation>%1：%2</translation>
     </message>
@@ -750,7 +761,7 @@
         <translation>在“%1”处停止：%2</translation>
     </message>
     <message>
-        <location line="+73"/>
+        <location line="+74"/>
         <source>enter the remote folder that holds update.img</source>
         <translation>请输入存放 update.img 的远程文件夹</translation>
     </message>
@@ -783,14 +794,14 @@
         <location line="+4"/>
         <location line="+354"/>
         <location line="+36"/>
-        <location line="+211"/>
+        <location line="+205"/>
         <location line="+10"/>
         <location line="+13"/>
         <source>cancelled</source>
         <translation>已取消</translation>
     </message>
     <message>
-        <location line="-622"/>
+        <location line="-616"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>与 %1 的连接已关闭</translation>
@@ -999,7 +1010,7 @@
         <translation>MCU 已在运行 %1；跳过更新</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+60"/>
         <source>Pull &amp; Flash: pull the image, flash the SoC, wait for ADB, then update the MCU if needed</source>
         <translation>拉取并刷写：拉取镜像、刷写 SoC、等待 ADB，必要时再更新 MCU</translation>
     </message>
@@ -1027,6 +1038,11 @@
         <location line="+9"/>
         <source>Rolled back: the previous image is the current one again</source>
         <translation>已回滚：上一版镜像重新成为当前镜像</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>status paused: %1</source>
+        <translation>状态查询已暂停：%1</translation>
     </message>
 </context>
 <context>
@@ -6732,7 +6748,7 @@ You will be asked for it when connecting.</source>
 <context>
     <name>ToolRunner</name>
     <message>
-        <location filename="../src/firmware/ToolRunner.cpp" line="+340"/>
+        <location filename="../src/firmware/ToolRunner.cpp" line="+364"/>
         <source>timed out after %1 ms</source>
         <translation>%1 毫秒后超时</translation>
     </message>

@@ -515,7 +515,11 @@ every package (the same `bin/` folder, the same `tools/`) and runs the very same
 the exit code. It uses the app's settings - the SSH profiles and remembered passwords,
 *Preferences > Firmware* (tool paths, cache folder, Loader / ADB waits) and the flash layouts
 remembered per board - and writes back only a board's flash layout once it has read one, as the
-tab does.
+tab does. One firmware operation runs at a time on a PC: su-fw and the Firmware tab share a lock
+(`firmware.lock` in the app's data folder), so while one of them pulls, flashes or talks to the
+CC1310, the other's operation is refused with
+`another firmware operation is running (<program>, pid <n>)` (su-fw exits 1) and its board status
+pauses.
 
 | Command | What it does |
 |---|---|
@@ -536,9 +540,15 @@ refused - also what happens when stdin is not a terminal). `su-fw --help` and
 
 **Exit codes**: `0` done; `1` the operation failed (the last log lines say why); `2` usage (the
 message on stderr); `3` no board, or the board in a mode the command cannot use (`mcu-info` in Loader mode);
-`4` SSH (unreachable, host key refused, authentication failed); `5` `--timeout` or Ctrl+C. Ctrl+C
-ends the waiting phases, never a flash write in progress: su-fw then stops at the next safe point,
-and upgrade_tool itself never sees the Ctrl+C.
+`4` SSH (unreachable, host key refused, authentication failed); `5` `--timeout` or Ctrl+C (also
+SIGTERM, SIGHUP, Ctrl+Break). Ctrl+C ends the waiting phases, never a flash write in progress:
+su-fw then stops at the next safe point, and when that is the wait for ADB after the write the
+result says `interrupted after the image was written; the ADB wait was cancelled`. The tools run
+without su-fw's console (Windows) and in a process group of their own (Linux), so no Ctrl+C,
+Ctrl+Break, closed console window or terminal, or signal sent to su-fw reaches upgrade_tool. A
+harness that kills the whole su-fw process tree on its own timeout still cuts a write: its timeout
+must exceed `--timeout` plus the longest write (about two minutes for a full image). `--timeout` is
+no hard limit either: a write in progress is waited for, and a silent upgrade_tool is never killed.
 
 **Output**: one line per event, `HH:MM:SS text` - the tab's log lines and progress every 10 % - and
 last `su-fw: exit <code> (<meaning>): <message>`. With `--json` one object per line:
@@ -554,7 +564,8 @@ last `su-fw: exit <code> (<meaning>): <message>`. With `--json` one object per l
 
 **Secrets** are never taken from the command line: `--password-env VAR` (the value of the variable),
 `--password-stdin` (the first line of stdin), `--identity FILE`, or the password a profile saved in
-the app (*Remember*); nothing typed as a secret is ever printed. A host key that is not known yet is
+the app (*Remember*); nothing typed as a secret is ever printed, and the `--password-env` variable is
+removed from su-fw's environment at once, so no tool inherits it. A host key that is not known yet is
 accepted only with `--accept-host-key` (and then remembered in known_hosts); a changed one is
 refused. On a terminal without `--yes` su-fw asks instead (the host key; the password without echo).
 
@@ -565,7 +576,7 @@ su-fw status --mcu --json                       # 0: a board (and the CC1310) an
 su-fw partitions --image update.img --json      # the rows, their offsets, whether they fit
 $env:SU_PASSWORD = '...'
 su-fw pull-flash --target builder@10.0.10.71 --password-env SU_PASSWORD --accept-host-key `
-      --package firmware-0.8.1.pkg --json --timeout 900
+      --package firmware-0.8.1.pkg --json --timeout 900   # the harness's own timeout: 900 s + 2 min or more
 ```
 
 `pull-flash` always writes every partition, like the tab's Pull & Flash; for some partitions run

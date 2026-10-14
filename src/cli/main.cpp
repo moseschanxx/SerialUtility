@@ -10,11 +10,13 @@
 #include <QString>
 #include <QTimer>
 
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -85,6 +87,13 @@ std::optional<QString> readInputLine(bool secret)
         std::fflush(stderr);
     }
     if (!ok) {
+#ifdef Q_OS_WIN
+        // Ctrl+C ends a console read at once, but the handler that counts it runs on a thread of
+        // its own: a moment for it before the caller looks at the count.
+        if (terminal) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+#endif
         return std::nullopt;
     }
     if (!line.empty() && line.back() == '\r') {
@@ -94,30 +103,55 @@ std::optional<QString> readInputLine(bool secret)
     return terminal ? QString::fromLocal8Bit(line.data(), qsizetype(line.size())) : QString::fromUtf8(line.data(), qsizetype(line.size()));
 }
 
-/// Ctrl+C reaches every process attached to the terminal (Windows: the console), upgrade_tool and
-/// adb included - and upgrade_tool killed while it writes the flash leaves a board that does not
-/// boot. A child inherits "Ctrl+C is ignored" from its parent when it is created (Windows:
-/// SetConsoleCtrlHandler(nullptr, TRUE); POSIX: SIG_IGN survives exec), so su-fw ignores it for the
-/// moment a tool is started (QProcess::start() creates the process inside run()); su-fw itself stops
-/// the tools it may stop through the job (FirmwareJob::cancel(): only while waiting).
+#ifndef Q_OS_WIN
+/// upgrade_tool killed while it writes the flash leaves a board that does not boot. The tools run
+/// in a process group of their own (ProcessToolRunner), so the terminal's Ctrl+C / Ctrl+\ and a
+/// signal to su-fw's group never reach them - except in the moment between fork() and the child's
+/// setpgid(). For that moment su-fw ignores SIGINT and SIGHUP while it starts a tool; the child
+/// inherits "ignored" (SIG_IGN survives exec) and keeps ignoring both. su-fw itself stops the tools
+/// it may stop through the job (FirmwareJob::cancel(): only while waiting). (Windows needs no
+/// shield: the tools get no console of su-fw's, so no console event reaches them.)
 class ShieldedToolRunner : public ProcessToolRunner
 {
 public:
     using ToolRunner::run;
     ToolInvocation* run(const QString& program, const QStringList& arguments, const Options& options) override
     {
-#ifdef Q_OS_WIN
-        SetConsoleCtrlHandler(nullptr, TRUE);
+        const auto previousInterrupt = std::signal(SIGINT, SIG_IGN);
+        const auto previousHangUp = std::signal(SIGHUP, SIG_IGN);
         ToolInvocation* invocation = ProcessToolRunner::run(program, arguments, options);
-        SetConsoleCtrlHandler(nullptr, FALSE);
-#else
-        const auto previous = std::signal(SIGINT, SIG_IGN);
-        ToolInvocation* invocation = ProcessToolRunner::run(program, arguments, options);
-        std::signal(SIGINT, previous);
-#endif
+        std::signal(SIGHUP, previousHangUp);
+        std::signal(SIGINT, previousInterrupt);
         return invocation;
     }
 };
+#endif
+
+#ifdef Q_OS_WIN
+/// UTF-8 console output while su-fw runs (paths, the board's answers), the console's own code page
+/// again on every way out of main(). A killed su-fw cannot restore it; the console then stays UTF-8.
+class Utf8ConsoleOutput
+{
+public:
+    Utf8ConsoleOutput() : m_previous(GetConsoleOutputCP())
+    {
+        if (m_previous != 0) {
+            SetConsoleOutputCP(CP_UTF8);
+        }
+    }
+    ~Utf8ConsoleOutput()
+    {
+        if (m_previous != 0) {
+            SetConsoleOutputCP(m_previous);
+        }
+    }
+    Utf8ConsoleOutput(const Utf8ConsoleOutput&) = delete;
+    Utf8ConsoleOutput& operator=(const Utf8ConsoleOutput&) = delete;
+
+private:
+    UINT m_previous;   ///< 0: no console
+};
+#endif
 
 } // namespace
 
@@ -136,10 +170,7 @@ int main(int argc, char* argv[])
     QLoggingCategory::setFilterRules(QStringLiteral("buildai.*.debug=false\nbuildai.*.info=false\nbuildai.*.warning=false"));
 
 #ifdef Q_OS_WIN
-    const UINT previousCodePage = GetConsoleOutputCP();
-    if (previousCodePage != 0) {
-        SetConsoleOutputCP(CP_UTF8);   // the output is UTF-8 (paths, the board's answers)
-    }
+    const Utf8ConsoleOutput utf8Output;
 #endif
 
     QFile out;
@@ -148,32 +179,42 @@ int main(int argc, char* argv[])
         return FirmwareCli::ExitFailed;
     }
 
+#ifdef Q_OS_WIN
+    ProcessToolRunner runner;   // the tools get no console of su-fw's: no Ctrl+C / Ctrl+Break / close reaches them
+#else
     ShieldedToolRunner runner;
+#endif
     FirmwareCli cli(&runner);
-    cli.setInput(&readInputLine, stdinIsTerminal());
+
+    // The signal handler only counts (it may run on another thread). The count is passed on by the
+    // event loop, and after every read from stdin, during which no event loop runs: a Ctrl+C at the
+    // password prompt of --password-stdin is then remembered before anything starts.
+    int handled = 0;
+    const auto deliverInterrupts = [&handled, &cli]() {
+        while (handled < int(g_interrupts)) {
+            ++handled;
+            cli.interrupt();
+        }
+    };
+    cli.setInput(
+        [&deliverInterrupts](bool secret) {
+            const std::optional<QString> line = readInputLine(secret);
+            deliverInterrupts();
+            return line;
+        },
+        stdinIsTerminal());
 
     std::signal(SIGINT, onInterrupt);
     std::signal(SIGTERM, onInterrupt);
 #ifdef SIGBREAK
     std::signal(SIGBREAK, onInterrupt);   // Ctrl+Break on Windows
 #endif
-    // The handler only counts (it may run on another thread); the event loop passes it on.
-    int handled = 0;
+#ifdef SIGHUP
+    std::signal(SIGHUP, onInterrupt);   // the terminal closed: stop at the next safe point, not in a write
+#endif
     QTimer interrupts;
-    QObject::connect(&interrupts, &QTimer::timeout, &cli, [&handled, &cli]() {
-        while (handled < int(g_interrupts)) {
-            ++handled;
-            cli.interrupt();
-        }
-    });
+    QObject::connect(&interrupts, &QTimer::timeout, &cli, deliverInterrupts);
     interrupts.start(100);
 
-    const int code = cli.run(QCoreApplication::arguments().mid(1), &out, &err);
-
-#ifdef Q_OS_WIN
-    if (previousCodePage != 0) {
-        SetConsoleOutputCP(previousCodePage);
-    }
-#endif
-    return code;
+    return cli.run(QCoreApplication::arguments().mid(1), &out, &err);
 }

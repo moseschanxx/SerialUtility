@@ -10,6 +10,7 @@
 #include <QMap>
 #include <QPair>
 #include <QPointer>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -30,6 +31,9 @@
 #ifdef Q_OS_WIN
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "firmware/AdbTool.h"
@@ -233,6 +237,79 @@ public:
 
 // ---- the helper program (this executable with --tool-helper) ------------------------------------
 
+#ifdef Q_OS_WIN
+BOOL WINAPI survivesCtrlEvents(DWORD event)
+{
+    return (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT) ? TRUE : FALSE;
+}
+
+QStringList helperArguments(const char* mode, const char* argument = nullptr)
+{
+    QStringList arguments{QStringLiteral("--tool-helper"), QString::fromLatin1(mode)};
+    if (argument) {
+        arguments << QString::fromLatin1(argument);
+    }
+    return arguments;
+}
+
+/// "--tool-helper console-parent": a caller with a console window of its own, like su-fw in a
+/// terminal (the test starts it in a hidden new console). It reports whether its ProcessToolRunner
+/// child and a plain QProcess child share that console, then sends Ctrl+Break to the console and
+/// reports which of two sleeping children ran on.
+int runConsoleParent(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    SetConsoleCtrlHandler(&survivesCtrlEvents, TRUE);   // this process outlives its own Ctrl+Break
+    const QString self = QCoreApplication::applicationFilePath();
+    std::string report = std::string("parent ") + (GetConsoleWindow() ? "console=yes\n" : "console=none\n");
+
+    ProcessToolRunner runner;
+    ToolResult toolProbe;
+    bool toolProbeDone = false;
+    QObject::connect(runner.run(self, helperArguments("console")), &ToolInvocation::finished, &app, [&](const ToolResult& result) {
+        toolProbe = result;
+        toolProbeDone = true;
+    });
+    if (!QTest::qWaitFor([&]() { return toolProbeDone; }, 15000)) {
+        report += "timeout: the tool probe\n";
+    }
+    QProcess plainProbe;
+    plainProbe.start(self, helperArguments("console"));
+    plainProbe.waitForFinished(15000);
+    report += "tool " + toolProbe.outputText().trimmed().toStdString() + "\n";
+    report += "plain " + QString::fromLatin1(plainProbe.readAllStandardOutput()).trimmed().toStdString() + "\n";
+
+    ToolResult toolSleep;
+    bool toolSleeping = false;
+    bool toolSleepDone = false;
+    ToolInvocation* sleeper = runner.run(self, helperArguments("sleep", "3000"));
+    QObject::connect(sleeper, &ToolInvocation::outputReceived, &app, [&]() { toolSleeping = true; });
+    QObject::connect(sleeper, &ToolInvocation::finished, &app, [&](const ToolResult& result) {
+        toolSleep = result;
+        toolSleepDone = true;
+    });
+    QProcess plainSleeper;
+    plainSleeper.setProcessChannelMode(QProcess::MergedChannels);
+    plainSleeper.start(self, helperArguments("sleep", "3000"));
+    plainSleeper.waitForReadyRead(15000);
+    if (!QTest::qWaitFor([&]() { return toolSleeping; }, 15000)) {
+        report += "timeout: the sleeping tool\n";
+    }
+    GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0);   // every process attached to this console
+    plainSleeper.waitForFinished(15000);
+    if (!QTest::qWaitFor([&]() { return toolSleepDone; }, 15000)) {
+        report += "timeout: the end of the sleeping tool\n";
+    }
+    const bool plainRanOn = plainSleeper.exitStatus() == QProcess::NormalExit && plainSleeper.readAll().contains("woke");
+    const bool toolRanOn = toolSleep.succeeded() && toolSleep.outputText().contains(QStringLiteral("woke"));
+    report += std::string("plain after Ctrl+Break: ") + (plainRanOn ? "ran on\n" : "ended\n");
+    report += std::string("tool after Ctrl+Break: ") + (toolRanOn ? "ran on\n" : "ended\n");
+    std::fputs(report.c_str(), stdout);
+    std::fflush(stdout);
+    return 0;
+}
+#endif
+
 int runToolHelper(int argc, char** argv)
 {
 #ifdef Q_OS_WIN
@@ -298,6 +375,24 @@ int runToolHelper(int argc, char** argv)
 #endif
         say(stdout, "ready\n");
         sleepMs(30000);
+    } else if (mode == "console") {
+        // How the tool sees its caller (process_toolIsSeparatedFromTheCaller): on Windows whether it
+        // shares a console window; on POSIX its process group and what SIGPIPE does.
+#ifdef Q_OS_WIN
+        say(stdout, GetConsoleWindow() ? "console=yes\n" : "console=none\n");
+#else
+        const auto sigpipe = std::signal(SIGPIPE, SIG_DFL);
+        const std::string text = "pgrp=" + std::to_string(static_cast<long>(getpgrp())) + " pid="
+                                 + std::to_string(static_cast<long>(getpid()))
+                                 + (sigpipe == SIG_IGN ? " sigpipe=ignored\n" : " sigpipe=default\n");
+        say(stdout, text.c_str());
+#endif
+    } else if (mode == "console-parent") {
+#ifdef Q_OS_WIN
+        return runConsoleParent(argc, argv);
+#else
+        return 99;
+#endif
     } else {
         return 99;
     }
@@ -364,6 +459,7 @@ private slots:
     void process_concurrent();
     void process_runnerDeletedWhileRunning();
     void process_detachedOutlivesRunner();
+    void process_toolIsSeparatedFromTheCaller();
 
     // ---- ToolLocator ------------------------------------------------------------------------
     void locator_fileNamesAndBundledPaths();
@@ -1013,6 +1109,48 @@ void tst_firmwaretools::process_detachedOutlivesRunner()
     QTRY_VERIFY_WITH_TIMEOUT(missing.done(), 5000);
     QVERIFY(!missing.result().started);
     QVERIFY(!missing.result().error.isEmpty());
+}
+
+void tst_firmwaretools::process_toolIsSeparatedFromTheCaller()
+{
+    // v0.6.0: what reaches su-fw's console or process group (Ctrl+C, Ctrl+Break, the console window
+    // closed, SIGHUP, a group kill) must not reach upgrade_tool in the middle of a write. Windows:
+    // the tool has no console of the caller's; POSIX: it leads its own process group and ignores
+    // SIGPIPE. Its output still arrives through the pipes.
+    ProcessToolRunner runner;
+    Watch watch(runHelper(runner, {QStringLiteral("console")}));
+    QTRY_VERIFY_WITH_TIMEOUT(watch.done(), 15000);
+    QVERIFY(watch.result().succeeded());
+    const QString seen = watch.result().outputText().trimmed();
+#ifdef Q_OS_WIN
+    QCOMPARE(seen, QStringLiteral("console=none"));
+    // That alone proves little when this test has no console (ctest), because Qt then keeps every
+    // child off a console itself. So the check runs inside a caller that has one, as su-fw in a
+    // terminal: a helper started in a hidden console of its own. A plain child shares its console
+    // and dies of a Ctrl+Break sent to it; the ProcessToolRunner child does neither.
+    QProcess parent;
+    parent.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* arguments) {
+        arguments->flags &= ~static_cast<unsigned long>(CREATE_NO_WINDOW);
+        arguments->flags |= CREATE_NEW_CONSOLE;
+        arguments->startupInfo->dwFlags |= STARTF_USESHOWWINDOW;
+        arguments->startupInfo->wShowWindow = static_cast<WORD>(SW_HIDE);
+    });
+    parent.start(helperProgram(), {QStringLiteral("--tool-helper"), QStringLiteral("console-parent")});
+    QVERIFY(parent.waitForFinished(90000));
+    const QString report = QString::fromLatin1(parent.readAllStandardOutput());
+    QVERIFY2(report.contains(QStringLiteral("parent console=yes")), qPrintable(report));
+    QVERIFY2(report.contains(QStringLiteral("plain console=yes")), qPrintable(report));
+    QVERIFY2(report.contains(QStringLiteral("tool console=none")), qPrintable(report));
+    QVERIFY2(report.contains(QStringLiteral("plain after Ctrl+Break: ended")), qPrintable(report));
+    QVERIFY2(report.contains(QStringLiteral("tool after Ctrl+Break: ran on")), qPrintable(report));
+#else
+    static const QRegularExpression pattern(QStringLiteral("^pgrp=(\\d+) pid=(\\d+) sigpipe=(\\w+)$"));
+    const QRegularExpressionMatch match = pattern.match(seen);
+    QVERIFY2(match.hasMatch(), qPrintable(seen));
+    QCOMPARE(match.captured(1), match.captured(2));   // the leader of a process group of its own
+    QVERIFY(match.captured(1).toLongLong() != static_cast<qint64>(getpgrp()));
+    QCOMPARE(match.captured(3), QStringLiteral("ignored"));
+#endif
 }
 
 // =============================================================================================
