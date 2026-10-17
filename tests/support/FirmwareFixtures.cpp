@@ -202,6 +202,69 @@ void scriptSocFlash(FakeToolRunner& runner, const QByteArray& ld)
     runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), kNodeCmdline);
 }
 
+const QByteArray kPlNode = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                           "List of partitions(7)\r\n"
+                           "No  Offset(LBA)  Size(LBA)  Name\r\n"
+                           "01  0x00000000  0x00000080  env\r\n"
+                           "02  0x00000080  0x00000200  idblock\r\n"
+                           "03  0x00000280  0x00000200  uboot\r\n"
+                           "04  0x00000480  0x00000300  meta\r\n"
+                           "05  0x00000780  0x00001800  boot\r\n"
+                           "06  0x00001F80  0x00002800  rootfs\r\n"
+                           "07  0x00004780  0x00001800  userdata\r\n";
+const QByteArray kPlStacked = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                              "List of partitions(6)\r\n"
+                              "No  Offset(LBA)  Size(LBA)  Name\r\n"
+                              "01  0x00000000  0x00000080  env\r\n"
+                              "02  0x00000080  0x00000200  idblock\r\n"
+                              "03  0x00000280  0x00000200  uboot\r\n"
+                              "04  0x00000480  0x00000300  meta\r\n"
+                              "05  0x00000780  0x00006000  boot\r\n"
+                              "06  0x00006780  0x00001800  userdata\r\n";
+const QByteArray kPlDecimal = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                              "List of partitions(7)\r\n"
+                              "Name  Offset(LBA)  Size(LBA)\r\n"
+                              "env  0  128\r\n"
+                              "idblock  128  512\r\n"
+                              "uboot  640  512\r\n"
+                              "meta  1152  768\r\n"
+                              "boot  1920  6144\r\n"
+                              "rootfs  8064  10240\r\n"
+                              "userdata  18304  6144\r\n";
+const QByteArray kPlGarbage = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                              "List of partitions(0)\r\n";
+const QByteArray kPlHeaderOnly = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                                 "List of partitions(7)\r\n"
+                                 "No  Offset(LBA)  Size(LBA)  Name\r\n";
+
+const QRegularExpression& loaderEnvReadPattern()
+{
+    static const QRegularExpression pattern(QStringLiteral("^upgrade_tool -s \\d+ RL 0 128 "));
+    return pattern;
+}
+
+const QRegularExpression& loaderPartitionListPattern()
+{
+    static const QRegularExpression pattern(QStringLiteral("^upgrade_tool -s \\d+ PL$"));
+    return pattern;
+}
+
+void scriptLoaderLayoutRead(FakeToolRunner& runner, const QByteArray& envImage, const QByteArray& plOutput, int plExitCode)
+{
+    runner.addHandler(loaderEnvReadPattern(), [envImage](FakeToolInvocation* i) {
+        // The file is the last argument (native separators, as RockchipTool passes it).
+        const QString file = i->arguments().isEmpty() ? QString() : QDir::fromNativeSeparators(i->arguments().last());
+        if (envImage.isEmpty() || file.isEmpty() || !writeFile(file, envImage)) {
+            i->emitOutput("Read LBA failed!\r\n");
+            i->finish(1);
+            return;
+        }
+        i->emitOutput("Read LBA from file (100%)\r\n");
+        i->finish(0);
+    });
+    runner.addScript(loaderPartitionListPattern(), plOutput, plExitCode);
+}
+
 QStringList wlCommands(const FakeToolRunner& runner)
 {
     return runner.invocations().filter(QRegularExpression(QStringLiteral("^upgrade_tool WL ")));

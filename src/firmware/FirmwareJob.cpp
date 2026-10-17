@@ -436,7 +436,7 @@ void FirmwareJob::Private::wire()
     connect(flasher, &SocFlasher::statusChanged, q, [this](const SocFlasher::DeviceStatus& status) { onStatus(status); });
     connect(flasher, &SocFlasher::mtdPartsRead, q, [this](const QString& mtdparts) {
         // Step 2 of a flash read it from the board the flow found on ADB.
-        const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : layoutSerial;
+        const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : QString();
         storeLayout(serial, mtdparts);
     });
     // (v0.8.0) The flow's own detection (its PID, its layout, its product read) wins while it runs

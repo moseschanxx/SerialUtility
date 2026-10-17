@@ -46,6 +46,7 @@
 #include "firmware/BoardProfile.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/FirmwareJob.h"
+#include "firmware/InventoryRecorder.h"
 #include "firmware/McuLink.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/ToolRunner.h"
@@ -307,6 +308,10 @@ FirmwareTab::FirmwareTab(SshProfileStore* profiles, ToolRunner* runner, QWidget*
     d->profiles = profiles;
     d->job = new FirmwareJob(runner, this);   // `runner` null: the job owns a ProcessToolRunner
     d->job->setProfileStore(profiles);
+    // (v0.8.0) The bench inventory: every status and operation of this tab records its board
+    // (parented to the tab; its lines go to the log pane).
+    auto* recorder = new InventoryRecorder(d->job, this);
+    connect(recorder, &InventoryRecorder::logLine, this, &FirmwareTab::appendLog);
 
     d->statusTimer.setInterval(d->refreshMs);
     connect(&d->statusTimer, &QTimer::timeout, this, &FirmwareTab::refreshStatus);

@@ -258,6 +258,11 @@ set(SU_CORE_SOURCES
     src/firmware/ImagePuller.cpp
     src/firmware/FirmwareJob.h
     src/firmware/FirmwareJob.cpp
+    # (v0.8.0) the bench inventory: one record per board, fed from the job's signals
+    src/firmware/Inventory.h
+    src/firmware/Inventory.cpp
+    src/firmware/InventoryRecorder.h
+    src/firmware/InventoryRecorder.cpp
     src/firmware/FirmwareCli.h
     src/firmware/FirmwareCli.cpp
 

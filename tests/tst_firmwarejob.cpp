@@ -306,6 +306,9 @@ private slots:
     void handlersReachTheFlasher();
     void boardProfileIgnoresMaskromPid();
 
+    // ---- The layout of a board met in Loader mode (v0.8.0, layout-pl) ---------------------------
+    void soc_loaderReadRememberedUnderStar();
+
 private:
     void mcuProfileFromProductString();   ///< (v0.8.0) mcuRefusedOnPowerCutProfile()'s variant (decision 3)
     QString tempPath(const QString& name) const { return m_tempDir.filePath(name); }
@@ -2738,6 +2741,88 @@ void Tst_firmwarejob::boardProfileIgnoresMaskromPid()
     QCOMPARE(maskrom2.pid, quint16(0x110c));
     QCOMPARE(byOption.profile.id, QStringLiteral("node"));
     QCOMPARE(byOption.source, ProfileDetection::Source::Option);
+}
+
+// =======================================================================================
+// The layout of a board met in Loader mode (v0.8.0, layout-pl)
+// =======================================================================================
+
+void Tst_firmwarejob::soc_loaderReadRememberedUnderStar()
+{
+    const QString serial = QStringLiteral("0225ce3c8d8d6e44");
+    const QRegularExpression envRead = loaderEnvReadPattern();
+    {
+        // No status before: the board met in Loader mode tells its layout from its env partition,
+        // and the job keeps it under "" (the Loader-mode key) - the flow has no serial.
+        FakeToolRunner runner;
+        scriptLoaderLayoutRead(runner, nodeEnvImage(kNodeMtdParts), {}, 0);
+        scriptSocFlash(runner, kLdLoader);
+        auto job = makeJob(&runner);
+        job->setLayoutProvider([](const QString&) { return QString(); });
+        const QString image = caseDir(QStringLiteral("star/update.img"));
+        QVERIFY(writeFile(image, rkfwBytes()));
+        QVERIFY(job->setImagePath(image));
+        QVERIFY(waitForPlan(*job));
+        QSignalSpy layouts(job.get(), &FirmwareJob::mtdPartsRead);
+        Recorder rec(job.get());
+        job->flashSoc();
+        QVERIFY(rec.waitForOperation());
+        QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+        QCOMPARE(runner.count(envRead), 1);
+        QCOMPARE(layouts.count(), qsizetype(1));
+        QCOMPARE(layouts.at(0).at(0).toString(), QString());
+        QCOMPARE(layouts.at(0).at(1).toString(), kNodeMtdParts);
+        QCOMPARE(job->mtdParts(QString()), kNodeMtdParts);
+        QCOMPARE(job->socFlasher()->layoutSource(), SocFlasher::LayoutSource::LoaderEnv);
+        QStringList expected;
+        for (int k = 0; k < kNodePartitionCount; ++k) {
+            expected << expectedWl(k, extractDirOf(image));
+        }
+        QCOMPARE(wlCommands(runner), expected);
+    }
+    {
+        // A status showed an ADB board first (its /proc/cmdline without mtdparts: nothing kept for
+        // it); then another board - or the same one, nobody can tell - is met in Loader mode. Its
+        // layout is kept under "" only, never under the serial the job saw last.
+        FakeToolRunner runner;
+        auto inLoader = std::make_shared<bool>(false);
+        runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+            i->emitOutput(*inLoader ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+            i->finish(0);
+        });
+        runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+        runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 root=/dev/mtdblock5 rootwait\n");
+        scriptLoaderLayoutRead(runner, nodeEnvImage(kNodeMtdParts), {}, 0);
+        scriptSocFlash(runner, kLdLoader);
+        auto job = makeJob(&runner);
+        job->setLayoutProvider([](const QString&) { return QString(); });
+        QSignalSpy statuses(job.get(), &FirmwareJob::statusChanged);
+        QSignalSpy readFinished(job.get(), &FirmwareJob::layoutReadFinished);
+        job->refreshStatus();
+        QTRY_COMPARE(statuses.count(), qsizetype(1));
+        QCOMPARE(job->lastStatus().mode, SocFlasher::DeviceStatus::Mode::Adb);
+        QCOMPARE(job->lastStatus().serial, serial);
+        QTRY_COMPARE(readFinished.count(), qsizetype(1));
+        QCOMPARE(readFinished.at(0).at(1).toBool(), false);   // no mtdparts: nothing remembered for it
+        QVERIFY(job->mtdParts(serial).isEmpty());
+        *inLoader = true;
+        const QString image = caseDir(QStringLiteral("stale/update.img"));
+        QVERIFY(writeFile(image, rkfwBytes()));
+        QVERIFY(job->setImagePath(image));
+        QVERIFY(waitForPlan(*job));
+        QSignalSpy layouts(job.get(), &FirmwareJob::mtdPartsRead);
+        Recorder rec(job.get());
+        job->flashSoc();
+        QVERIFY(rec.waitForOperation());
+        QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+        QCOMPARE(job->lastStatus().mode, SocFlasher::DeviceStatus::Mode::Loader);   // the flow's Detecting query
+        QCOMPARE(runner.count(envRead), 1);
+        QCOMPARE(layouts.count(), qsizetype(1));
+        QCOMPARE(layouts.at(0).at(0).toString(), QString());   // NOT the serial of the earlier status
+        QCOMPARE(layouts.at(0).at(1).toString(), kNodeMtdParts);
+        QVERIFY(job->mtdParts(serial).isEmpty());
+        QCOMPARE(job->mtdParts(QString()), kNodeMtdParts);
+    }
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarejob)

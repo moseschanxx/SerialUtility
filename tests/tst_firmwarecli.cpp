@@ -37,6 +37,7 @@
 #include "firmware/FirmwareJob.h"
 #include "firmware/FleetFlasher.h"
 #include "firmware/FleetReport.h"
+#include "firmware/Inventory.h"
 #include "firmware/McuLink.h"
 #include "firmware/SocFlasher.h"
 #include "firmware/ToolRunner.h"
@@ -253,6 +254,70 @@ QString readAll(const QString& path)
     return QString::fromUtf8(file.readAll());
 }
 
+/// (v0.8.0) Every su-fw run records its boards in Inventory::defaultFilePath() - the test-mode data
+/// folder of this suite, which outlives a run of the suite: each case starts without it.
+void clearInventory()
+{
+    const QFileInfo file(Inventory::defaultFilePath());
+    QFile::remove(file.absoluteFilePath());
+    QDir dir = file.absoluteDir();
+    for (const QString& name : dir.entryList({file.fileName() + QStringLiteral(".corrupt-*")}, QDir::Files)) {
+        QFile::remove(dir.filePath(name));
+    }
+}
+
+std::optional<InventoryRecord> inventoryRecord(const QString& serial)
+{
+    Inventory inventory;
+    if (!inventory.load()) {
+        return std::nullopt;
+    }
+    return inventory.record(serial);
+}
+
+/// (v0.8.0) The bench's usual flash (flashBoardOnAdbGoesThroughLoader's scripts): the board runs on
+/// ADB, `adb reboot loader` puts it into Loader mode, RD brings it back on ADB - so one rig runs
+/// several flashes, each through the flow's Detecting query of the ADB board.
+std::shared_ptr<bool> scriptBoardOnAdb(FakeToolRunner& runner)
+{
+    auto inLoader = std::make_shared<bool>(false);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+        i->emitOutput(*inLoader ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    runner.addHandler(QRegularExpression(QStringLiteral("^adb( -s \\S+)? reboot loader$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = true;
+        i->finish(0);
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = false;
+        i->emitOutput("Reset Device OK.\r\n");
+        i->finish(0);
+    });
+    scriptSocFlash(runner, kLdLoader);   // EXF, WL, get-state, /proc/version, /proc/cmdline
+    return inLoader;
+}
+
+QString minuteText(const QDateTime& time)
+{
+    return time.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+}
+
+/// The record's last image as an earlier ok write left it (`partitions` of image `md5`).
+bool seedImage(const QString& serial, const QString& md5, const QStringList& partitions, const QDateTime& written)
+{
+    Inventory inventory;
+    return inventory.update(serial, [&](InventoryRecord& r) {
+        r.lastImage = InventoryRecord::Image();
+        r.lastImage.file = QStringLiteral("update.img");
+        r.lastImage.chipTag = QStringLiteral("110E");
+        r.lastImage.md5 = md5;
+        r.lastImage.partitions = partitions;
+        r.lastImage.written = written;
+    });
+}
+
 } // namespace
 
 // =======================================================================================
@@ -383,6 +448,22 @@ private slots:
     void fleetMixedBenchStopsThroughTheCli();
     void helpMentionsProfiles();
 
+    // ---- The inventory (v0.8.0) ----------------------------------------------------------------------
+    void inventoryCommandTable();
+    void inventoryCommandJson();
+    void inventoryCommandSerial();
+    void inventoryCommandCorruptFile();
+    void inventoryCommandEmpty();
+    void inventoryHelp();
+    void statusRecordsTheBoard();
+    void flashSocRecordsImageAndMd5();
+    void expectImageRefuses();
+    void expectImagePartialWriteDoesNotRefuse();
+    void expectImageUsage();
+    void expectImageFleet();
+    void fleetBoardsRecorded();
+    void recorderLinesRespectQuietAndLog();
+
     // ---- The executable ------------------------------------------------------------------------------
     void realExecutable();
 
@@ -429,6 +510,7 @@ void Tst_firmwarecli::init()
 {
     QSettings().clear();
     qunsetenv(kSecretVariable);
+    clearInventory();   // (v0.8.0) the data folder outlives the suite's runs
     ++m_caseNumber;
 }
 
@@ -473,7 +555,7 @@ void Tst_firmwarecli::helpEveryOptionOfEveryCommand()
     QCOMPARE(FirmwareCli::commands(),
              (QStringList{QStringLiteral("status"), QStringLiteral("partitions"), QStringLiteral("pull"), QStringLiteral("flash-soc"),
                           QStringLiteral("mcu-info"), QStringLiteral("mcu-update"), QStringLiteral("mcu-set-role"),
-                          QStringLiteral("pull-flash")}));
+                          QStringLiteral("pull-flash"), QStringLiteral("inventory")}));   // (v0.8.0) inventory last
     QVERIFY(FirmwareCli::commandOptions(QStringLiteral("nope")).isEmpty());
     for (const QString& command : FirmwareCli::commands()) {
         const QString help = FirmwareCli::helpText(command);
@@ -3190,6 +3272,425 @@ void Tst_firmwarecli::helpMentionsProfiles()
     }
     QVERIFY(FirmwareCli::helpText().startsWith(
         QStringLiteral("su-fw - flash the BuildAI Node and Stacked boards (RV1106 SoC + CC1310 RF MCU) from a command shell\n")));
+}
+
+// =======================================================================================
+// The inventory (v0.8.0)
+// =======================================================================================
+
+void Tst_firmwarecli::inventoryCommandTable()
+{
+    Inventory seed;
+    QVERIFY(seed.update(kBoardSerial, [](InventoryRecord& r) {
+        r.profile = QStringLiteral("node");
+        r.port = QStringLiteral("6&38635FDB&0&3");
+        r.mcuVersion = QStringLiteral("0.8.1");
+        r.mcuRole = QStringLiteral("rx");
+    }));
+    QVERIFY(seed.update(QStringLiteral("62ecfc6ddeb3f579"), nullptr));
+    CliRig rig;
+    const CliResult result = rig.run({QStringLiteral("inventory")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.err.isEmpty());
+    const QStringList texts = result.texts();
+    QCOMPARE(texts.size(), qsizetype(6));
+    QCOMPARE(texts.at(0), QStringLiteral("su-fw " APP_VERSION ": inventory"));
+    QCOMPARE(texts.at(1), QStringLiteral("Inventory: %1 (2 boards)").arg(QDir::toNativeSeparators(Inventory::defaultFilePath())));
+    const QStringList table = Inventory::tableLines(seed.records());
+    QCOMPARE(texts.mid(2, 3), table);   // the header and two rows
+    QVERIFY(texts.at(2).startsWith(QStringLiteral("serial            profile  port  ")));
+    QVERIFY(texts.at(3).startsWith(kBoardSerial + QStringLiteral("  node     6&38635FDB&0&3  -")));
+    QVERIFY(texts.at(3).contains(QStringLiteral("  0.8.1 rx  ")));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): 2 boards"));
+    QVERIFY(rig.runner.invocations().isEmpty());   // no tool, no board
+    QVERIFY(rig.lastJob == nullptr);               // no job either
+    QVERIFY(!result.out.contains(QStringLiteral("upgrade_tool:")));
+}
+
+void Tst_firmwarecli::inventoryCommandJson()
+{
+    Inventory seed;
+    QVERIFY(seed.update(kBoardSerial, [](InventoryRecord& r) { r.profile = QStringLiteral("node"); }));
+    QVERIFY(seed.update(QStringLiteral("62ecfc6ddeb3f579"), nullptr));
+    CliRig rig;
+    const CliResult result = rig.run({QStringLiteral("inventory"), QStringLiteral("--json")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    QVERIFY2(allParse, qPrintable(result.out));
+    const QJsonObject done = objects.last();
+    QCOMPARE(done.value(QStringLiteral("event")).toString(), QStringLiteral("done"));
+    QCOMPARE(done.value(QStringLiteral("step")).toString(), QStringLiteral("inventory"));
+    QCOMPARE(done.value(QStringLiteral("text")).toString(), QStringLiteral("2 boards"));
+    QCOMPARE(done.value(QStringLiteral("exit")).toInt(), 0);
+    const QJsonObject inventory = done.value(QStringLiteral("inventory")).toObject();
+    QCOMPARE(inventory.value(QStringLiteral("file")).toString(), QDir::toNativeSeparators(Inventory::defaultFilePath()));
+    const QJsonArray boards = inventory.value(QStringLiteral("boards")).toArray();
+    QCOMPARE(boards.size(), qsizetype(2));
+    QCOMPARE(boards.at(0).toObject(), seed.records().at(0).toJson());
+    QCOMPARE(boards.at(1).toObject(), seed.records().at(1).toJson());
+    QCOMPARE(inventory, Inventory::json(seed.records(), Inventory::defaultFilePath()));
+    for (const QJsonObject& object : objects) {   // the table is the text mode's; JSON carries the records
+        QVERIFY(!object.value(QStringLiteral("text")).toString().startsWith(QStringLiteral("serial  ")));
+    }
+}
+
+void Tst_firmwarecli::inventoryCommandSerial()
+{
+    Inventory seed;
+    QVERIFY(seed.update(kBoardSerial, [](InventoryRecord& r) { r.profile = QStringLiteral("node"); }));
+    QVERIFY(seed.update(QStringLiteral("62ecfc6ddeb3f579"), [](InventoryRecord& r) { r.profile = QStringLiteral("stacked"); }));
+    CliRig rig;
+    CliResult result = rig.run({QStringLiteral("inventory"), QStringLiteral("--serial"), QStringLiteral("62ecfc6ddeb3f579")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    const QStringList table = Inventory::tableLines({*seed.record(QStringLiteral("62ecfc6ddeb3f579"))});
+    QCOMPARE(table.size(), qsizetype(2));
+    QCOMPARE(result.texts().mid(2, 2), table);   // one row
+    QVERIFY(!result.out.contains(kBoardSerial));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): 1 board"));
+    result = rig.run({QStringLiteral("inventory"), QStringLiteral("--serial"), QStringLiteral("nope")});
+    QVERIFY2(result.code == 3, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 3 (no board): no record for nope"));
+    // --json: that record alone.
+    result = rig.run({QStringLiteral("inventory"), QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--json")});
+    bool allParse = false;
+    const QJsonArray boards =
+        jsonLines(result, &allParse).last().value(QStringLiteral("inventory")).toObject().value(QStringLiteral("boards")).toArray();
+    QVERIFY(allParse);
+    QCOMPARE(boards, (QJsonArray{seed.record(kBoardSerial)->toJson()}));
+}
+
+void Tst_firmwarecli::inventoryCommandCorruptFile()
+{
+    const QString file = Inventory::defaultFilePath();
+    QVERIFY(writeFile(file, "not json"));
+    CliRig rig;
+    const CliResult result = rig.run({QStringLiteral("inventory")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): %1: not JSON").arg(QDir::toNativeSeparators(file))),
+             qPrintable(result.lastText()));
+    QCOMPARE(readAll(file), QStringLiteral("not json"));   // a read never moves or rewrites it
+}
+
+void Tst_firmwarecli::inventoryCommandEmpty()
+{
+    QVERIFY(!QFileInfo::exists(Inventory::defaultFilePath()));
+    CliRig rig;
+    const CliResult result = rig.run({QStringLiteral("inventory")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QCOMPARE(result.texts(), (QStringList{QStringLiteral("su-fw " APP_VERSION ": inventory"),
+                                          QStringLiteral("Inventory: %1 (0 boards)").arg(QDir::toNativeSeparators(Inventory::defaultFilePath())),
+                                          Inventory::tableLines({}).first(), QStringLiteral("su-fw: exit 0 (done): 0 boards")}));
+    QVERIFY(!QFileInfo::exists(Inventory::defaultFilePath()));   // nothing created
+}
+
+void Tst_firmwarecli::inventoryHelp()
+{
+    QCOMPARE(FirmwareCli::commands().last(), QStringLiteral("inventory"));
+    QCOMPARE(FirmwareCli::commandOptions(QStringLiteral("inventory")),
+             (QStringList{QStringLiteral("serial"), QStringLiteral("tools"), QStringLiteral("log"), QStringLiteral("json"), QStringLiteral("quiet"),
+                          QStringLiteral("timeout"), QStringLiteral("yes")}));
+    const QString help = FirmwareCli::helpText(QStringLiteral("inventory"));
+    QVERIFY(help.startsWith(QStringLiteral("su-fw inventory - ")));
+    QVERIFY(help.contains(QStringLiteral("\n  --serial SERIAL ")));
+    QVERIFY(help.contains(QStringLiteral("inventory.json")));
+    QVERIFY(help.contains(QStringLiteral("  3  --serial SERIAL: no record for that board")));
+    const qsizetype examples = help.indexOf(QStringLiteral("Examples:"));
+    QVERIFY(examples > 0);
+    QCOMPARE(help.mid(examples).count(QStringLiteral("\n  su-fw inventory")), qsizetype(2));
+    QVERIFY(help.mid(examples).contains(QStringLiteral("\n  su-fw inventory\n")));
+    QVERIFY(help.mid(examples).contains(QStringLiteral("\n  su-fw inventory --serial 0225ce3c8d8d6e44 --json\n")));
+    const QString global = FirmwareCli::helpText();
+    QVERIFY(global.contains(QStringLiteral("\n  inventory     The bench inventory: one record per board (profile, port, layout, last image\n")));
+    QVERIFY(global.contains(QStringLiteral("\"imageMd5\"")));
+    QVERIFY(global.contains(QStringLiteral("\"inventory\"")));
+    const QString flash = FirmwareCli::helpText(QStringLiteral("flash-soc"));
+    QVERIFY(flash.contains(QStringLiteral("\n  --expect-image MD5 ")));
+    QVERIFY(flash.contains(QStringLiteral("\n  --force              With --expect-image")));
+    QVERIFY(flash.contains(QStringLiteral("--force without --expect-image")));
+    CliRig rig;
+    QCOMPARE(rig.run({QStringLiteral("inventory"), QStringLiteral("--help")}).out, help);
+    QCOMPARE(rig.run({QStringLiteral("help"), QStringLiteral("inventory")}).out, help);
+}
+
+void Tst_firmwarecli::statusRecordsTheBoard()
+{
+    CliRig rig;
+    scriptAdbBoard(rig.runner);
+    const CliResult result = rig.run({QStringLiteral("status")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    const std::optional<InventoryRecord> record = inventoryRecord(kBoardSerial);
+    QVERIFY(record);
+    QCOMPARE(record->profile, QStringLiteral("node"));
+    QCOMPARE(record->layout, kNodeMtdParts);
+    QVERIFY(record->lastSeen.isValid());
+    const QStringList texts = result.texts();
+    const qsizetype status = texts.indexOf(QStringLiteral("inventory: board %1 recorded (status)").arg(kBoardSerial));
+    const qsizetype layout = texts.indexOf(QStringLiteral("inventory: board %1 recorded (layout)").arg(kBoardSerial));
+    const qsizetype profile = texts.indexOf(QStringLiteral("inventory: board %1 recorded (profile)").arg(kBoardSerial));
+    const qsizetype profileLine = texts.indexOf(QRegularExpression(QStringLiteral("^profile: Node .*")));
+    // The status block (Board, layout, profile) first; what the inventory recorded right after it.
+    QVERIFY2(profileLine > 0 && status == profileLine + 1 && layout == status + 1 && profile == layout + 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): ADB device ") + kBoardSerial);
+    // Within the minute nothing but lastSeen would change: no write, no line.
+    const CliResult again = rig.run({QStringLiteral("status")});
+    QCOMPARE(again.code, 0);
+    QVERIFY2(!again.out.contains(QStringLiteral("inventory: ")), qPrintable(again.dump()));
+}
+
+void Tst_firmwarecli::flashSocRecordsImageAndMd5()
+{
+    CliRig rig;
+    scriptBoardOnAdb(rig.runner);
+    const QString image = withEnvImage();
+    const QString md5 = Inventory::md5Hex(image);
+    QCOMPARE(md5.size(), qsizetype(32));
+    CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot"),
+                                QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--yes"), QStringLiteral("--json")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    QVERIFY(allParse);
+    QStringList texts;
+    for (const QJsonObject& object : objects) {
+        texts << object.value(QStringLiteral("text")).toString();
+    }
+    const qsizetype md5Line = texts.indexOf(QStringLiteral("image md5: ") + md5);
+    const qsizetype imageProfile = texts.indexOf(QRegularExpression(QStringLiteral("^image profile: .*")));
+    QVERIFY2(md5Line > imageProfile && imageProfile > 0, qPrintable(result.dump()));   // after the image lines
+    QVERIFY(md5Line < texts.indexOf(QStringLiteral("--- Flash SoC ---")));             // before the flash
+    QCOMPARE(objects.last().value(QStringLiteral("imageMd5")).toString(), md5);
+    QVERIFY(texts.contains(QStringLiteral("inventory: board %1 recorded (flash)").arg(kBoardSerial)));
+    const std::optional<InventoryRecord> record = inventoryRecord(kBoardSerial);
+    QVERIFY(record);
+    QCOMPARE(record->lastImage.md5, md5);
+    QCOMPARE(record->lastImage.file, QStringLiteral("update.img"));
+    QCOMPARE(record->lastImage.partitions, QStringList{QStringLiteral("boot")});
+    QCOMPARE(record->lastOperation.name, QStringLiteral("flash"));
+    QCOMPARE(record->lastOperation.result, QStringLiteral("done"));
+    // The text mode prints the same line.
+    result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot"),
+                      QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--yes")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("image md5: ") + md5));
+}
+
+void Tst_firmwarecli::expectImageRefuses()
+{
+    CliRig rig;
+    scriptBoardOnAdb(rig.runner);
+    const QString image = withEnvImage();
+    const QString md5 = Inventory::md5Hex(image);
+    const QDateTime written = QDateTime::currentDateTime().addSecs(-3600);
+    QVERIFY(seedImage(kBoardSerial, md5, {QStringLiteral("boot")}, written));
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serial"),       kBoardSerial,           QStringLiteral("--partitions"),
+                                QStringLiteral("boot"),      QStringLiteral("--image"),        image,                  QStringLiteral("--yes"),
+                                QStringLiteral("--expect-image")};
+    const QString refusal = QStringLiteral("board %1 already runs the expected image (md5 %2, boot written %3); pass --force to write it again")
+                                .arg(kBoardSerial, md5, minuteText(written));
+    CliResult result = rig.run(arguments + QStringList{md5});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.hasText(refusal));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + refusal);
+    QVERIFY2(rig.runner.invocations().isEmpty(), qPrintable(rig.runner.invocations().join(QLatin1Char('\n'))));   // nothing ran
+    // Upper case is the same MD5.
+    result = rig.run(arguments + QStringList{md5.toUpper()});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(rig.runner.invocations().isEmpty());
+
+    // --force: written again.
+    result = rig.run(arguments + QStringList{md5, QStringLiteral("--force")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("board %1 already runs the expected image; written again (--force)").arg(kBoardSerial)));
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedWl(4, extractDirOf(image))});
+
+    // Another MD5 expected: the board runs something else, so it is written.
+    rig.runner.reset();
+    scriptBoardOnAdb(rig.runner);
+    const QString other = QStringLiteral("0123456789abcdef0123456789ABCDEF");
+    result = rig.run(arguments + QStringList{other});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasTextStarting(QStringLiteral("board %1 runs another image (md5 %2, written ").arg(kBoardSerial, md5)));
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedWl(4, extractDirOf(image))});
+}
+
+void Tst_firmwarecli::expectImagePartialWriteDoesNotRefuse()
+{
+    CliRig rig;
+    const QString image = withEnvImage();
+    const QString dir = extractDirOf(image);
+    const QString md5 = Inventory::md5Hex(image);
+    const QDateTime written = QDateTime::currentDateTime().addSecs(-7200);
+    const auto run = [&](const QStringList& choice) {
+        rig.runner.reset();
+        scriptBoardOnAdb(rig.runner);
+        return rig.run(QStringList{QStringLiteral("flash-soc"), QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--image"), image,
+                                   QStringLiteral("--yes"), QStringLiteral("--expect-image"), md5}
+                       + choice);
+    };
+    const QString partial = QStringLiteral("board %1 runs the expected image's userdata (md5 %2, written %3); %4 not recorded as written: writing");
+
+    // The G2 ladder: userdata with this build first, then boot with the same build.
+    QVERIFY(seedImage(kBoardSerial, md5, {QStringLiteral("userdata")}, written));
+    CliResult result = run({QStringLiteral("--partitions"), QStringLiteral("boot")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY2(result.hasText(partial.arg(kBoardSerial, md5, minuteText(written), QStringLiteral("boot is"))), qPrintable(result.dump()));
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedWl(4, dir)});
+    QCOMPARE(inventoryRecord(kBoardSerial)->lastImage.partitions, (QStringList{QStringLiteral("userdata"), QStringLiteral("boot")}));
+
+    QVERIFY(seedImage(kBoardSerial, md5, {QStringLiteral("userdata")}, written));
+    result = run({QStringLiteral("--partitions"), QStringLiteral("userdata,boot")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(partial.arg(kBoardSerial, md5, minuteText(written), QStringLiteral("boot is"))));
+    QCOMPARE(wlCommands(rig.runner), (QStringList{expectedWl(4, dir), expectedWl(6, dir)}));
+
+    QVERIFY(seedImage(kBoardSerial, md5, {QStringLiteral("userdata")}, written));
+    result = run({QStringLiteral("--partitions"), QStringLiteral("userdata")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): board %1 already runs the expected image (md5 %2, userdata written %3); "
+                                               "pass --force to write it again")
+                                    .arg(kBoardSerial, md5, minuteText(written)));
+    QVERIFY(rig.runner.invocations().isEmpty());
+
+    // --all: every row of the image, known after the plan - the refusal comes after the EXF alone.
+    QVERIFY(seedImage(kBoardSerial, md5, nodeNames(), written));
+    result = run({QStringLiteral("--all")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): board %1 already runs the expected image (md5 %2, env, idblock, "
+                                                        "uboot, meta, boot, rootfs, userdata written ")
+                                             .arg(kBoardSerial, md5)));
+    QCOMPARE(rig.runner.invocations().size(), qsizetype(1));
+    QVERIFY(exfPattern().match(rig.runner.invocations().first()).hasMatch());
+
+    QVERIFY(seedImage(kBoardSerial, md5, {QStringLiteral("userdata")}, written));
+    result = run({QStringLiteral("--all")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(partial.arg(kBoardSerial, md5, minuteText(written), QStringLiteral("env, idblock, uboot, meta, boot, rootfs are"))));
+    QCOMPARE(wlCommands(rig.runner).size(), qsizetype(kNodePartitionCount));
+}
+
+void Tst_firmwarecli::expectImageUsage()
+{
+    CliRig rig;
+    const QString image = makeImage(QStringLiteral("expect/update.img"));
+    const QString md5 = QStringLiteral("9e107d9d372bb6826bd81d3542a419d6");
+    const QStringList base{QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot")};
+    const struct
+    {
+        QStringList arguments;
+        QString message;
+    } cases[] = {
+        {base + QStringList{QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--expect-image"), QStringLiteral("xyz")},
+         QStringLiteral("su-fw: --expect-image needs the image's MD5 (32 hex digits)\n")},
+        {base + QStringList{QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--expect-image"), md5 + QStringLiteral("0")},
+         QStringLiteral("su-fw: --expect-image needs the image's MD5 (32 hex digits)\n")},
+        {base + QStringList{QStringLiteral("--all-boards"), QStringLiteral("--expect-image"), md5},
+         QStringLiteral("su-fw: --expect-image needs --serial or --serials: the inventory is checked per named board before anything runs\n")},
+        {base + QStringList{QStringLiteral("--expect-image"), md5},
+         QStringLiteral("su-fw: --expect-image needs --serial or --serials: the inventory is checked per named board before anything runs\n")},
+        {base + QStringList{QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--force")},
+         QStringLiteral("su-fw: --force: only with --expect-image\n")},
+    };
+    for (const auto& c : cases) {
+        const CliResult result = rig.run(c.arguments);
+        QVERIFY2(result.code == 2, qPrintable(result.dump()));
+        QVERIFY2(result.out.isEmpty(), qPrintable(result.dump()));
+        QVERIFY2(result.err.startsWith(c.message), qPrintable(result.dump()));
+    }
+    QVERIFY(rig.runner.invocations().isEmpty());
+    for (const char* option : {"expect-image", "force"}) {
+        QVERIFY(FirmwareCli::commandOptions(QStringLiteral("flash-soc")).contains(QLatin1String(option)));
+        QVERIFY(!FirmwareCli::commandOptions(QStringLiteral("pull-flash")).contains(QLatin1String(option)));
+    }
+}
+
+void Tst_firmwarecli::expectImageFleet()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const QString md5 = Inventory::md5Hex(image);
+    const QDateTime written = QDateTime::currentDateTime().addSecs(-600);
+    const QString a = benchSerial(0);
+    const QString b = benchSerial(1);
+    QVERIFY(seedImage(a, md5, {QStringLiteral("rootfs")}, written));
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("A=%1,B=%2").arg(a, b), QStringLiteral("--partitions"),
+                                QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--expect-image"), md5};
+    CliResult result = fleet.run(arguments);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): board %1 already runs the expected image (md5 %2, rootfs written %3); "
+                                               "pass --force to write it again")
+                                    .arg(a, md5, minuteText(written)));
+    QVERIFY(result.hasText(QStringLiteral("board %1 has no image recorded in the inventory: writing").arg(b)));
+    QVERIFY2(fleet.rig.runner.invocations().isEmpty(), qPrintable(fleet.rig.runner.invocations().join(QLatin1Char('\n'))));   // refused as a whole
+    // Both on it: the result names both.
+    QVERIFY(seedImage(b, md5, {QStringLiteral("rootfs")}, written));
+    result = fleet.run(arguments);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): boards %1, %2 already run the expected image (md5 %3); pass --force to "
+                                               "write them again")
+                                    .arg(a, b, md5));
+    QVERIFY(fleet.rig.runner.invocations().isEmpty());
+    // --force: the run.
+    result = fleet.run(arguments + QStringList{QStringLiteral("--force")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("board %1 already runs the expected image; written again (--force)").arg(a)));
+    QCOMPARE(fleet.rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool -s \\d+ WL "))), 2);
+}
+
+void Tst_firmwarecli::fleetBoardsRecorded()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const CliResult result = fleet.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                                        QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--yes")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    for (const int k : {5, 6}) {
+        const QString serial = benchSerial(k);
+        const std::optional<InventoryRecord> record = inventoryRecord(serial);
+        QVERIFY2(record, qPrintable(serial));
+        QCOMPARE(record->port, benchPort(k));
+        QCOMPARE(record->layout, kNodeMtdParts);
+        QCOMPARE(record->profile, QStringLiteral("node"));
+        QCOMPARE(record->lastOperation.name, QStringLiteral("fleet-flash"));
+        QCOMPARE(record->lastOperation.result, QStringLiteral("done"));
+        QCOMPARE(record->lastImage.md5, Inventory::md5Hex(image));
+        QCOMPARE(record->lastImage.partitions, QStringList{QStringLiteral("rootfs")});
+        QVERIFY(result.hasText(QStringLiteral("inventory: board %1 recorded (fleet-flash)").arg(serial)));
+    }
+    QVERIFY(!inventoryRecord(benchSerial(0)));   // not selected: not recorded
+}
+
+void Tst_firmwarecli::recorderLinesRespectQuietAndLog()
+{
+    CliRig rig;
+    scriptAdbBoard(rig.runner);
+    const QString line = QStringLiteral("inventory: board %1 recorded (status)").arg(kBoardSerial);
+    const QString logPath = caseDir(QStringLiteral("logs/status.log"));
+    QVERIFY(QDir().mkpath(QFileInfo(logPath).absolutePath()));
+    const CliResult quiet = rig.run({QStringLiteral("status"), QStringLiteral("--quiet"), QStringLiteral("--log"), logPath});
+    QCOMPARE(quiet.code, 0);
+    QCOMPARE(quiet.lines().size(), qsizetype(1));   // --quiet hides it ...
+    QVERIFY2(readAll(logPath).contains(QLatin1Char(' ') + line + QLatin1Char('\n')), qPrintable(readAll(logPath)));   // ... --log holds it
+    QVERIFY(inventoryRecord(kBoardSerial));
+
+    clearInventory();
+    const CliResult json = rig.run({QStringLiteral("status"), QStringLiteral("--json")});
+    QCOMPARE(json.code, 0);
+    bool allParse = false;
+    bool found = false;
+    for (const QJsonObject& object : jsonLines(json, &allParse)) {
+        if (object.value(QStringLiteral("text")).toString() == line) {
+            found = true;
+            QCOMPARE(object.value(QStringLiteral("event")).toString(), QStringLiteral("log"));
+            QCOMPARE(object.value(QStringLiteral("step")).toString(), QStringLiteral("status"));
+        }
+    }
+    QVERIFY(allParse);
+    QVERIFY2(found, qPrintable(json.out));
+
+    clearInventory();
+    const CliResult text = rig.run({QStringLiteral("status")});
+    QVERIFY(text.hasText(line));
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarecli)

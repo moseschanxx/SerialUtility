@@ -19,6 +19,7 @@
 #include <QPair>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTime>
 #include <QTimer>
@@ -32,6 +33,8 @@
 #include "firmware/FleetFlasher.h"
 #include "firmware/FleetReport.h"
 #include "firmware/ImagePuller.h"
+#include "firmware/Inventory.h"
+#include "firmware/InventoryRecorder.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/SocFlasher.h"
 #include "firmware/ToolRunner.h"
@@ -49,6 +52,7 @@ constexpr QLatin1StringView kMcuInfo{"mcu-info"};
 constexpr QLatin1StringView kMcuUpdate{"mcu-update"};
 constexpr QLatin1StringView kMcuSetRole{"mcu-set-role"};
 constexpr QLatin1StringView kPullFlash{"pull-flash"};
+constexpr QLatin1StringView kInventory{"inventory"};   ///< (v0.8.0) the bench inventory: a file read, no job
 
 // ---- Waits outside an operation (an operation itself waits for operationFinished()) -----------
 constexpr int kPollMs = 20;
@@ -69,7 +73,7 @@ QString optionValueName(const QString& option)
         {QLatin1String("password-env"), QLatin1String("VAR")},    {QLatin1String("partitions"), QLatin1String("NAMES")},
         {QLatin1String("package"), QLatin1String("FILE")},        {QLatin1String("role"), QLatin1String("ROLE")},
         {QLatin1String("serials"), QLatin1String("SERIALS")},     {QLatin1String("max-parallel"), QLatin1String("N")},
-        {QLatin1String("profile"), QLatin1String("ID")},
+        {QLatin1String("profile"), QLatin1String("ID")},          {QLatin1String("expect-image"), QLatin1String("MD5")},
     };
     for (const auto& entry : values) {
         if (option == entry.first) {
@@ -108,7 +112,8 @@ QStringList specificOptionNames(const QString& command)
         return {QStringLiteral("image"),   QStringLiteral("cache"),      QStringLiteral("all"),          QStringLiteral("partitions"),
                 QStringLiteral("serial"),  QStringLiteral("layout"),     QStringLiteral("no-wait"),      QStringLiteral("serials"),
                 QStringLiteral("all-boards"), QStringLiteral("max-parallel"), QStringLiteral("dry-run"),
-                QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions")};
+                QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions"),
+                QStringLiteral("expect-image"), QStringLiteral("force")};
     }
     if (command == kMcuInfo) {
         return {QStringLiteral("serial"), QStringLiteral("profile")};
@@ -126,6 +131,9 @@ QStringList specificOptionNames(const QString& command)
                              QStringLiteral("layout"),  QStringLiteral("all"),        QStringLiteral("partitions"),
                              QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions"),
                              QStringLiteral("confirm-soc-power")};
+    }
+    if (command == kInventory) {
+        return {QStringLiteral("serial")};
     }
     return {};
 }
@@ -157,7 +165,8 @@ const char* const kOutputHelp = R"HELP(Output:
   --json: one object per line, e.g. {"time":"2026-10-13T18:42:01.123+08:00","step":"flash",
   "event":"log","text":"..."}. "event" is "log" (a log line), "progress" (with "percent" when
   there is one), "step" (a step ended; "ok") or "done": the last line, with "ok", "exit", "text"
-  and the command's results ("board", "layout", "mcu", "partitions", "image", "boardInfo").
+  and the command's results ("board", "layout", "mcu", "partitions", "image", "imageMd5",
+  "boardInfo", "inventory").
   A usage error (exit 2) goes to stderr; found before anything ran, it leaves stdout empty.
 )HELP";
 
@@ -209,6 +218,8 @@ Commands:
   mcu-set-role  Set the CC1310's role (rx or tx) without updating it.
   pull-flash    Pull, flash every partition, wait for the board, then update the CC1310 when a
                 package is given and its version differs from the running one.
+  inventory     The bench inventory: one record per board (profile, port, layout, last image
+                and its MD5, MCU, last operation).
 
 Options of every command:
 )HELP";
@@ -343,10 +354,11 @@ const char* const kFlashSocHelp = R"HELP(su-fw flash-soc - flash the RV1106 SoC
 
 Usage: su-fw flash-soc [--image FILE] (--all | --partitions NAMES) [--serial SERIAL]
                        [--layout MTDPARTS] [--no-wait] [--profile ID] [--force-layout]
-                       [--force-loader-partitions] [options]
+                       [--force-loader-partitions] [--expect-image MD5 [--force]] [options]
        su-fw flash-soc (--serials S1,S2,... | --all-boards) --partitions NAMES [--image FILE]
                        [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait]
-                       [--profile ID] [--force-loader-partitions] [options]
+                       [--profile ID] [--force-loader-partitions]
+                       [--expect-image MD5 [--force]] (with --serials) [options]
 
 Finds the board: already in Loader / Maskrom mode, or running on ADB (its /proc/version and
 flash layout are read, then "adb reboot loader" - no question asked); with no board at all it
@@ -425,6 +437,13 @@ Options:
   --force-loader-partitions
                        Write idblock, uboot, env or meta on a board without a documented MASKROM
                        entry (the Stacked core). Without it those writes are refused there.
+  --expect-image MD5   The MD5 of the image the named board should already run: every flash
+                       logs "image md5: <hex>", su-fw inventory shows what each board runs. A
+                       board whose inventory record carries this MD5 for every partition named
+                       (--all: every partition of the image) is refused before anything runs;
+                       a partition not recorded as written with it is written. Only with
+                       --serial or --serials (never --all-boards); a fleet refuses as a whole.
+  --force              With --expect-image: write a board that already runs the expected image.
 )HELP";
 
 const char* const kFlashSocTail = R"HELP(
@@ -433,9 +452,11 @@ Exit codes:
   1  the flash failed: upgrade_tool's error (its last lines are in the log), an image that does
      not fit, the layout unknown in Loader mode, a refusal of the board profiles (the wrong image,
      a differing layout, loader partitions on the Stacked core, --profile against the board's
-     Loader PID), several devices in download mode
+     Loader PID), several devices in download mode; or --expect-image: the board already runs
+     that image ("board <serial> already runs the expected image ...; pass --force ...")
   2  usage: neither or both of --all / --partitions, an unknown partition, no image, --profile
-     with an unknown ID
+     with an unknown ID, --expect-image without 32 hex digits or without --serial / --serials,
+     --force without --expect-image
   3  no board entered Loader / Maskrom mode in time
   5  --timeout or Ctrl+C while waiting
 
@@ -455,9 +476,11 @@ Exit codes of a fleet (--serials / --all-boards):
      --force-loader-partitions, another firmware operation, port mapping not
      available on this platform, flash layout unknown, adb or upgrade_tool LD could not be run,
      --all-boards next to a non-Rockchip ADB device, a Loader / MASKROM device on the bus that no
-     selected board accounts for)
+     selected board accounts for); or --expect-image: a named board already runs that image
+     (the whole fleet is refused before anything runs; the result names the boards)
   2  usage: --serials with --all-boards or --serial, --all, no --partitions, a bad serial or tag,
-     --max-parallel outside 1..64, --dry-run / --max-parallel without a fleet, --force-layout
+     --max-parallel outside 1..64, --dry-run / --max-parallel without a fleet, --force-layout,
+     --expect-image with --all-boards
   3  no selected board is on ADB (--all-boards: no board at all)
   5  --timeout or Ctrl+C: boards whose write had not started are skipped and reset back to ADB; a
      board being written finishes every one of its partitions and its reset first; the table
@@ -614,6 +637,44 @@ Exit codes:
 Examples:
   su-fw pull-flash --target "Build machine"
   su-fw pull-flash --target builder@10.0.10.71 --password-env SU_PASSWORD --package firmware-0.8.1.pkg --json
+)HELP";
+
+const char* const kInventoryHelp = R"HELP(su-fw inventory - the bench inventory: what the tool knows about every board
+
+Usage: su-fw inventory [--serial SERIAL] [--json] [--quiet] [--log FILE] [options]
+
+Prints the inventory: one record per board, keyed by its ADB serial, written by every status,
+flash-soc (one board or a fleet), pull-flash and MCU command of su-fw and of the app's Firmware
+tab on this PC. The file is inventory.json in the app's data folder (the first line names it).
+It holds no password and no path - of the image only its file name -, so it can be pasted into
+a chat. This command only reads the file: no tool runs, no board is touched, no firmware lock is
+taken, and it may run while a flash runs. --tools, --timeout and --yes are accepted and do
+nothing here.
+
+The table: serial; profile (node / stacked, detected from the board - never from --profile);
+port (the USB port a fleet run learned); image, tag, md5 (its first 8 hex digits) and written:
+the image last written by a write that ended ok (a failed or cancelled write leaves the one
+before); mcu (the CC1310's version and role when last read); last operation, its result and
+time; last seen (the last status that showed the board on ADB, or its last operation). "-" =
+never learned. --json carries every record whole: "inventory": {"file", "boards": [...]}, with
+lastImage.md5 in full and lastImage.partitions, the partitions that write (or the writes of
+that same image) put on the board - what flash-soc --expect-image compares.
+
+Options:
+  --serial SERIAL      Only this board's record (exit 3 when it has none).
+)HELP";
+
+const char* const kInventoryTail = R"HELP(
+Exit codes:
+  0  listed (also an empty inventory: "0 boards")
+  1  the file cannot be read (not JSON, or not the inventory's shape): the message names it;
+     the next write moves it aside as inventory.json.corrupt-<time> and starts a new file
+  2  usage
+  3  --serial SERIAL: no record for that board
+
+Examples:
+  su-fw inventory
+  su-fw inventory --serial 0225ce3c8d8d6e44 --json
 )HELP";
 
 // ---- Output helpers ------------------------------------------------------------------------------
@@ -795,6 +856,9 @@ struct FirmwareCli::Private
         bool forceLayout = false;
         bool forceLoaderPartitions = false;
         bool confirmSocPower = false;
+        // ---- the inventory (v0.8.0) ----
+        QString expectImage;        ///< --expect-image: the MD5 (lower case) a named board should already run; "" = no check
+        bool force = false;         ///< --force: write such a board all the same
     };
 
     FirmwareCli* q;
@@ -822,6 +886,11 @@ struct FirmwareCli::Private
     std::unique_ptr<SshProfileStore> ownStore;
     SshProfileStore* profileStore = nullptr;
     std::unique_ptr<FirmwareJob> job;
+    /// (v0.8.0) Feeds the inventory from the job's signals; declared after `job` and reset before
+    /// it, so it never outlives the job it listens to.
+    std::unique_ptr<InventoryRecorder> recorder;
+    bool holdRecorderLines = false;  ///< queryBoard(): the recorder's lines follow the board's own block
+    QStringList heldRecorderLines;
     QTimer timeoutTimer;
     int timeoutSeconds = 0;
     bool interrupted = false;
@@ -896,6 +965,10 @@ struct FirmwareCli::Private
     void logPartitionTable();
     void insertImageFields();
     QJsonObject mcuJson() const;
+    void onRecorderLine(const QString& line);
+    void flushRecorderLines();
+    void logImageMd5();
+    int checkExpectedImage(const QStringList& serials, const QStringList& names);
 
     // ---- Commands --------------------------------------------------------------------------------------
     int runCommand();
@@ -906,6 +979,7 @@ struct FirmwareCli::Private
     int cmdFlashFleet();
     int cmdMcu();
     int cmdPullFlash();
+    int cmdInventory();
 
     // ---- Questions -------------------------------------------------------------------------------------
     bool canAsk() const { return !noQuestions && lineReader; }
@@ -930,7 +1004,10 @@ void FirmwareCli::Private::beginRun(QIODevice* out, QIODevice* err)
     opts = Inputs();
     ownStore.reset();
     profileStore = nullptr;
+    recorder.reset();
     job.reset();
+    holdRecorderLines = false;
+    heldRecorderLines.clear();
     timeoutSeconds = 0;
     interrupted = false;
     timedOut = false;
@@ -958,6 +1035,7 @@ void FirmwareCli::Private::beginRun(QIODevice* out, QIODevice* err)
 void FirmwareCli::Private::endRun()
 {
     timeoutTimer.stop();
+    recorder.reset();   // before the job it listens to
     job.reset();   // its destructor takes the MCU link down and closes the build-machine connection
     if (logFile) {
         logFile->close();
@@ -1049,9 +1127,11 @@ int FirmwareCli::Private::execute(const QStringList& arguments)
         return usageError(problem);
     }
 
-    createJob();
+    if (commandName != kInventory) {
+        createJob();   // (v0.8.0) inventory reads a file: no job, no tool
+    }
     configureTools();
-    if (jobSetup) {
+    if (jobSetup && job) {
         jobSetup(*job);
     }
     if (timeoutSeconds > 0) {
@@ -1193,6 +1273,29 @@ QString FirmwareCli::Private::parseInputs(const QCommandLineParser& parser)
             if (!opts.fleet && some && opts.partitionNames.isEmpty()) {
                 return QStringLiteral("--partitions needs names, comma separated (e.g. boot,rootfs)");
             }
+        }
+    }
+
+    // ---- --expect-image (v0.8.0, the inventory) ----
+    if (commandName == kFlashSoc) {
+        const bool expecting = isSet("expect-image");
+        opts.force = isSet("force");
+        if (expecting) {
+            static const QRegularExpression md5Pattern(QStringLiteral("^[0-9A-Fa-f]{32}$"));
+            const QString md5 = value("expect-image");
+            if (!md5Pattern.match(md5).hasMatch()) {
+                return QStringLiteral("--expect-image needs the image's MD5 (32 hex digits)");
+            }
+            // The serials of --all-boards are known only inside the operation, after adb talked to
+            // the boards: a refusal there would come too late.
+            if (opts.allBoards || (opts.serial.isEmpty() && opts.taggedSerials.isEmpty())) {
+                return QStringLiteral("--expect-image needs --serial or --serials: the inventory is checked per named board "
+                                      "before anything runs");
+            }
+            opts.expectImage = md5.toLower();
+        }
+        if (opts.force && !expecting) {
+            return QStringLiteral("--force: only with --expect-image");
         }
     }
 
@@ -1750,6 +1853,10 @@ void FirmwareCli::Private::createJob()
     j->setForceLayout(opts.forceLayout);
     j->setForceLoaderPartitions(opts.forceLoaderPartitions);
     j->setConfirmSocPower(opts.confirmSocPower);
+    // (v0.8.0) The inventory: what this run learns about its board(s) is recorded in the app's data
+    // folder (the file the tab writes too); a recorder that cannot write never fails the command.
+    recorder = std::make_unique<InventoryRecorder>(j);
+    QObject::connect(recorder.get(), &InventoryRecorder::logLine, q, [this](const QString& line) { onRecorderLine(line); });
 }
 
 void FirmwareCli::Private::configureTools()
@@ -1781,6 +1888,9 @@ void FirmwareCli::Private::configureTools()
         adbText = ToolLocator::describe(ToolLocator::Tool::Adb, settings.firmwareAdbPath());
     }
     log(QStringLiteral("su-fw %1: %2").arg(QStringLiteral(APP_VERSION), commandName));
+    if (commandName == kInventory) {
+        return;   // a file read: no tool is looked for
+    }
     if (commandName == kPull) {
         // A pull needs no tool; without upgrade_tool the job does not unpack the pulled image for
         // a partition table nobody shows (the tab does), and su-fw does not end with it running.
@@ -1926,6 +2036,10 @@ QString FirmwareCli::Private::operationResultMessage() const
 
 bool FirmwareCli::Private::queryBoard()
 {
+    // (v0.8.0) The status block stays together (Board, the layout read, profile); what the
+    // inventory recorded meanwhile follows it.
+    holdRecorderLines = true;
+    const auto releaseRecorderLines = qScopeGuard([this]() { flushRecorderLines(); });
     bool reported = false;
     bool readingLayout = false;
     QString serialSeen;
@@ -2094,6 +2208,110 @@ QJsonObject FirmwareCli::Private::mcuJson() const
     return QJsonObject{{QStringLiteral("version"), job->runningMcuVersion()}, {QStringLiteral("role"), job->runningMcuRole()}};
 }
 
+// ---- The inventory (v0.8.0) ---------------------------------------------------------------------
+
+void FirmwareCli::Private::onRecorderLine(const QString& line)
+{
+    if (holdRecorderLines) {
+        heldRecorderLines << line;
+        return;
+    }
+    log(line);
+}
+
+void FirmwareCli::Private::flushRecorderLines()
+{
+    holdRecorderLines = false;
+    const QStringList lines = std::exchange(heldRecorderLines, QStringList());
+    for (const QString& line : lines) {
+        log(line);
+    }
+}
+
+void FirmwareCli::Private::logImageMd5()
+{
+    // The identity an agent compares next time (--expect-image); the file name and git describe
+    // are not one (two builds share a name; a local image has no describe).
+    QString error;
+    const QString md5 = Inventory::md5Hex(job->imagePath(), &error);
+    if (md5.isEmpty()) {
+        log(QStringLiteral("image md5: unreadable (%1)").arg(error));
+        return;
+    }
+    log(QStringLiteral("image md5: %1").arg(md5));
+    resultFields.insert(QStringLiteral("imageMd5"), md5);
+}
+
+int FirmwareCli::Private::checkExpectedImage(const QStringList& serials, const QStringList& names)
+{
+    // The inventory file alone: no tool, no lock of the job - a refused run has done nothing.
+    Inventory inventory;
+    QString error;
+    if (!inventory.load(&error)) {
+        log(QStringLiteral("--expect-image: the inventory cannot be read (%1); writing").arg(error));
+        return ExitOk;
+    }
+    const auto timeText = [](const QDateTime& time) {
+        return time.isValid() ? time.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QStringLiteral("at an unknown time");
+    };
+    QStringList refused;
+    QStringList refusals;
+    for (const QString& serial : serials) {
+        const std::optional<InventoryRecord> record = inventory.record(serial);
+        if (!record || record->lastImage.md5.isEmpty()) {
+            log(QStringLiteral("board %1 has no image recorded in the inventory: writing").arg(serial));
+            continue;
+        }
+        const InventoryRecord::Image& image = record->lastImage;
+        if (image.md5.compare(opts.expectImage, Qt::CaseInsensitive) != 0) {
+            log(QStringLiteral("board %1 runs another image (md5 %2, written %3): writing").arg(serial, image.md5, timeText(image.written)));
+            continue;
+        }
+        if (names.isEmpty()) {
+            log(QStringLiteral("board %1 runs the expected image (md5 %2), but the image's partitions are not known (no plan): writing")
+                    .arg(serial, image.md5));
+            continue;
+        }
+        QStringList missing;
+        for (const QString& name : names) {
+            if (!image.partitions.contains(name)) {
+                missing << name;
+            }
+        }
+        if (missing.isEmpty()) {
+            if (opts.force) {
+                log(QStringLiteral("board %1 already runs the expected image; written again (--force)").arg(serial));
+                continue;
+            }
+            const QString text = QStringLiteral("board %1 already runs the expected image (md5 %2, %3 written %4); pass --force to write it again")
+                                     .arg(serial, image.md5, image.partitions.join(QStringLiteral(", ")), timeText(image.written));
+            log(text);
+            refused << serial;
+            refusals << text;
+            continue;
+        }
+        // The same build on some rows only (the G2 ladder: userdata first, then boot): the rows
+        // not recorded are what this run writes.
+        const QString notWritten = QStringLiteral("%1 %2 not recorded as written: writing")
+                                       .arg(missing.join(QStringLiteral(", ")), missing.size() == 1 ? QStringLiteral("is") : QStringLiteral("are"));
+        if (image.partitions.isEmpty()) {
+            log(QStringLiteral("board %1 runs the expected image (md5 %2, written %3) with no partition recorded; %4")
+                    .arg(serial, image.md5, timeText(image.written), notWritten));
+        } else {
+            log(QStringLiteral("board %1 runs the expected image's %2 (md5 %3, written %4); %5")
+                    .arg(serial, image.partitions.join(QStringLiteral(", ")), image.md5, timeText(image.written), notWritten));
+        }
+    }
+    if (refused.isEmpty()) {
+        return ExitOk;
+    }
+    // A fleet refuses as a whole: an agent that wants the other boards names them.
+    resultMessage = refused.size() == 1 ? refusals.first()
+                                        : QStringLiteral("boards %1 already run the expected image (md5 %2); pass --force to write them again")
+                                              .arg(refused.join(QStringLiteral(", ")), opts.expectImage);
+    return ExitFailed;
+}
+
 // =======================================================================================
 // Commands
 // =======================================================================================
@@ -2114,6 +2332,9 @@ int FirmwareCli::Private::runCommand()
     }
     if (commandName == kPullFlash) {
         return cmdPullFlash();
+    }
+    if (commandName == kInventory) {
+        return cmdInventory();
     }
     return cmdMcu();
 }
@@ -2192,8 +2413,16 @@ int FirmwareCli::Private::cmdFlashSoc()
     if (opts.fleet) {
         return cmdFlashFleet();
     }
+    // (v0.8.0) --expect-image with named partitions: the inventory first, before anything runs.
+    if (!opts.expectImage.isEmpty() && !opts.all) {
+        const int refused = checkExpectedImage({opts.serial}, opts.partitionNames);
+        if (refused != ExitOk) {
+            return refused;
+        }
+    }
     applyLayout();
     selectImage();
+    logImageMd5();
     if (opts.noWait) {
         job->socFlasher()->setWaitForAdb(false);
     }
@@ -2204,6 +2433,19 @@ int FirmwareCli::Private::cmdFlashSoc()
     }
     const bool ready = job->planState() == FirmwareJob::PlanState::Ready;
     const bool known = job->layoutKnown();
+    if (!opts.expectImage.isEmpty() && opts.all) {
+        // --all names every row of the image, known only now: still before any board is touched.
+        QStringList names;
+        if (ready) {
+            for (const PartitionImage& row : job->partitions()) {
+                names << row.name;
+            }
+        }
+        const int refused = checkExpectedImage({opts.serial}, names);
+        if (refused != ExitOk) {
+            return refused;
+        }
+    }
     if (opts.all) {
         job->selectAllPartitions();
         // "Every partition" means every one: a row that does not fit would be left out by the
@@ -2264,8 +2506,20 @@ int FirmwareCli::Private::cmdFlashSoc()
 
 int FirmwareCli::Private::cmdFlashFleet()
 {
+    // (v0.8.0) --expect-image: every named board against the inventory before anything runs.
+    if (!opts.expectImage.isEmpty()) {
+        QStringList serials;
+        for (const auto& entry : std::as_const(opts.taggedSerials)) {
+            serials << entry.second;
+        }
+        const int refused = checkExpectedImage(serials, opts.partitionNames);
+        if (refused != ExitOk) {
+            return refused;
+        }
+    }
     applyLayout();
     selectImage();
+    logImageMd5();
     if (opts.noWait) {
         job->socFlasher()->setWaitForAdb(false);   // the job hands it to the fleet
     }
@@ -2410,6 +2664,12 @@ int FirmwareCli::Private::cmdPullFlash()
             }
         });
     }
+    // (v0.8.0) The image is known once the pull ended (pulled or unchanged): its MD5 before the flash.
+    QObject::connect(job.get(), &FirmwareJob::stepFinished, q, [this](const QString& step, bool ok, const QString&) {
+        if (ok && step == FirmwareJob::kOpPull && !job->imagePath().isEmpty()) {
+            logImageMd5();
+        }
+    });
     runOperation(QString(FirmwareJob::kOpPullFlash), [this]() { job->pullAndFlash(); });
     const int code = operationExitCode();
     resultMessage = operationResultMessage();
@@ -2432,6 +2692,40 @@ int FirmwareCli::Private::cmdPullFlash()
         resultFields.insert(QStringLiteral("mcu"), mcuJson());
     }
     return code;
+}
+
+int FirmwareCli::Private::cmdInventory()
+{
+    // A file read: no job, no tool, no firmware lock - it runs while a flash runs, and the
+    // recorder's write at the end of that flash lands after this read (both are whole files).
+    Inventory inventory;
+    QString error;
+    if (!inventory.load(&error)) {
+        resultMessage = error;
+        return ExitFailed;
+    }
+    const auto boards = [](qsizetype count) {
+        return count == 1 ? QStringLiteral("1 board") : QStringLiteral("%1 boards").arg(count);
+    };
+    QList<InventoryRecord> listed = inventory.records();
+    const qsizetype total = listed.size();
+    if (!opts.serial.isEmpty()) {
+        const std::optional<InventoryRecord> record = inventory.record(opts.serial);
+        if (!record) {
+            resultMessage = QStringLiteral("no record for %1").arg(opts.serial);
+            return ExitNoBoard;
+        }
+        listed = {*record};
+    }
+    log(QStringLiteral("Inventory: %1 (%2)").arg(nativePath(inventory.filePath()), boards(total)));
+    if (!jsonOutput) {
+        for (const QString& line : Inventory::tableLines(listed)) {
+            log(line);
+        }
+    }
+    resultFields.insert(QStringLiteral("inventory"), Inventory::json(listed, inventory.filePath()));
+    resultMessage = boards(listed.size());
+    return ExitOk;
 }
 
 // =======================================================================================
@@ -2583,7 +2877,8 @@ void FirmwareCli::interrupt()
 QStringList FirmwareCli::commands()
 {
     return {QString(kStatus), QString(kPartitions), QString(kPull), QString(kFlashSoc),
-            QString(kMcuInfo), QString(kMcuUpdate), QString(kMcuSetRole), QString(kPullFlash)};
+            QString(kMcuInfo), QString(kMcuUpdate), QString(kMcuSetRole), QString(kPullFlash),
+            QString(kInventory)};
 }
 
 QStringList FirmwareCli::commandOptions(const QString& command)
@@ -2628,6 +2923,9 @@ QString FirmwareCli::helpText(const QString& command)
     if (command == kPullFlash) {
         return QString::fromLatin1(kPullFlashHelp) + QString::fromLatin1(kPullOptionsHelp) + QString::fromLatin1(kPullFlashOptionsHelp)
                + common + QString::fromLatin1(kPullFlashTail);
+    }
+    if (command == kInventory) {
+        return page(kInventoryHelp, kInventoryTail);
     }
     return QString();
 }

@@ -83,6 +83,27 @@ void nodeExtractor(FakeToolInvocation* i);
 /// ADB wait and the board info; `ld` is what `upgrade_tool LD` lists. (v0.8.0) EXF of an image whose
 /// path holds "stacked" runs stackedExtractor (registered first), every other one nodeExtractor.
 void scriptSocFlash(FakeToolRunner& runner, const QByteArray& ld);
+// ---- (v0.8.0, layout-pl) The layout read of a board met in Loader mode ------------------------------
+/// `upgrade_tool -s <id> PL` as the tool's documented table (the shape on a NOR board whose table
+/// lives in env.img is UNVERIFIED, open question 7): the banner, "List of partitions(7)", the header
+/// "No  Offset(LBA)  Size(LBA)  Name", then the Node's seven partitions in sectors ("01  0x00000000
+/// 0x00000080  env" ... "07  0x00004780  0x00001800  userdata"), "\r\n" line ends.
+extern const QByteArray kPlNode;
+extern const QByteArray kPlStacked;      ///< the stacked board's six: boot 0x780 / 0x6000, userdata 0x6780 / 0x1800
+extern const QByteArray kPlDecimal;      ///< the Node's table with decimal numbers in "name offset size" order
+extern const QByteArray kPlGarbage;      ///< the banner and "List of partitions(0)" only
+extern const QByteArray kPlHeaderOnly;   ///< the banner, "List of partitions(7)" and the header line, no row
+/// Handlers for the Loader-mode layout read, registered BEFORE scriptSocFlash() (the first match
+/// wins; scriptSocFlash() itself has no PL / RL: the pinned command lists count on their absence):
+/// `^upgrade_tool -s \d+ RL 0 128 ` writes `envImage` to the command's file argument (its folder
+/// created) and answers "Read LBA from file (100%)" with exit 0 - an empty `envImage` answers
+/// "Read LBA failed!" with exit 1 -; `^upgrade_tool -s \d+ PL$` answers `plOutput` with `plExitCode`
+/// (an empty `plOutput` with exit 0: the tool printed nothing).
+void scriptLoaderLayoutRead(FakeToolRunner& runner, const QByteArray& envImage, const QByteArray& plOutput, int plExitCode);
+/// The two patterns above, for tests that register their own handlers.
+const QRegularExpression& loaderEnvReadPattern();
+const QRegularExpression& loaderPartitionListPattern();
+
 /// The WL command lines a flash ran, in order.
 QStringList wlCommands(const FakeToolRunner& runner);
 /// The WL command line of Node partition `k` unpacked into `extractDir`.

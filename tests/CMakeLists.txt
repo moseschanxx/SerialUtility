@@ -100,6 +100,11 @@ set_tests_properties(tst_fleetflasher PROPERTIES TIMEOUT 600)
 # (v0.8.0) Board profiles: the Node / Stacked table, the detection order and the rules' texts.
 su_add_test(tst_boardprofile      tst_boardprofile.cpp)
 target_link_libraries(tst_boardprofile PRIVATE su_testsupport)
+# (v0.8.0) The bench inventory: the file (lock, atomic write, corrupt file) and its recorder on a
+# FirmwareJob over FakeToolRunner / FakeUsbBus / the in-process SSH server.
+su_add_test(tst_inventory         tst_inventory.cpp)
+target_link_libraries(tst_inventory PRIVATE su_testsupport)
+set_tests_properties(tst_inventory PROPERTIES TIMEOUT 600)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

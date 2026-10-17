@@ -55,6 +55,8 @@
 #include "core/Transport.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/FirmwareJob.h"
+#include "firmware/Inventory.h"
+#include "firmware/InventoryRecorder.h"
 #include "firmware/McuLink.h"
 #include "firmware/SocFlasher.h"
 #include "ssh/SshConnection.h"
@@ -345,6 +347,9 @@ private slots:
     void dailyPartitionsDefaultChecks();
     void layoutConflictDialog();
     void socPowerDialog();
+
+    // ---- The inventory (v0.8.0) -------------------------------------------------------------------
+    void tabRecordsStatusAndFlash();
 
     // ---- MainWindow integration -----------------------------------------------------
     void showFirmwareTabOnce();
@@ -2336,6 +2341,71 @@ void Tst_firmwaretab::socPowerDialog()
         QCOMPARE(runner.count(forward), 1);   // the fake bridge ran
         QCOMPARE(mcu.role(), static_cast<quint32>(CcProtocol::RoleRx));
     }
+}
+
+// =======================================================================================
+// The inventory (v0.8.0)
+// =======================================================================================
+
+void Tst_firmwaretab::tabRecordsStatusAndFlash()
+{
+    // The tab's job carries an InventoryRecorder: its status and its flash land in the inventory
+    // file of the data folder (the test-mode one, shared with su-fw on a real PC), and its lines in
+    // the log pane.
+    QFile::remove(Inventory::defaultFilePath());
+    const QString serial = QStringLiteral("0225ce3c8d8d6e44");
+    FakeToolRunner runner;
+    auto inLoader = std::make_shared<bool>(false);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+        i->emitOutput(*inLoader ? kLdLoader : QByteArray("List of rockusb connected(0)\r\n"));
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    runner.addHandler(QRegularExpression(QStringLiteral("^adb( -s \\S+)? reboot loader$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = true;
+        i->finish(0);
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = false;
+        i->emitOutput("Reset Device OK.\r\n");
+        i->finish(0);
+    });
+    scriptSocFlash(runner, kLdLoader);
+    auto tab = makeTab(&runner);
+    tab->socFlasher()->setPollIntervalMs(10);
+    auto* recorder = tab->findChild<InventoryRecorder*>();
+    QVERIFY(recorder);
+    QCOMPARE(recorder->filePath(), Inventory::defaultFilePath());
+    recorder->setUsbEnumerator([](quint16) { return QList<UsbDeviceInfo>(); });   // this PC's bus decides nothing
+    const auto record = [serial]() -> std::optional<InventoryRecord> {
+        Inventory inventory;
+        return inventory.load() ? inventory.record(serial) : std::nullopt;
+    };
+
+    tab->refreshStatus();
+    QTRY_VERIFY_WITH_TIMEOUT(record() && record()->profile == QLatin1String("node"), kOpTimeoutMs);
+    QCOMPARE(record()->layout, kNodeMtdParts);
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("inventory: board %1 recorded (status)").arg(serial)));
+
+    const QString cache = tempPath(QStringLiteral("inventory-cache"));
+    QVERIFY(writeFile(cache + QStringLiteral("/update.img"), rkfwBytes()));
+    tab->setCacheDirectory(cache);
+    QTRY_VERIFY_WITH_TIMEOUT(runner.liveInvocations().isEmpty(), kOpTimeoutMs);
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    ModalDismisser unexpected(ModalDismisser::Answer::Reject);
+    tab->flashSoc();
+    QTRY_VERIFY_WITH_TIMEOUT(!finished.isEmpty(), kOpTimeoutMs);
+    unexpected.stop();
+    QCOMPARE(unexpected.count(), 0);
+    QVERIFY2(finished.first().at(1).toBool(), qPrintable(finished.first().at(2).toString()));
+    const std::optional<InventoryRecord> flashed = record();
+    QVERIFY(flashed);
+    QCOMPARE(flashed->lastOperation.name, QStringLiteral("flash"));
+    QCOMPARE(flashed->lastOperation.result, QStringLiteral("done"));
+    QCOMPARE(flashed->lastImage.file, QStringLiteral("update.img"));
+    QCOMPARE(flashed->lastImage.md5, Inventory::md5Hex(cache + QStringLiteral("/update.img")));
+    QVERIFY(!flashed->lastImage.partitions.isEmpty());
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("inventory: board %1 recorded (flash)").arg(serial)));
 }
 
 // =======================================================================================

@@ -66,6 +66,65 @@ QString layoutUnknownMessage()
                                        "or flash it in MASKROM mode");
 }
 
+/// (v0.8.0, layout-pl) A size or an offset of the normalized mtdparts form: "3M" / "64K" when exact,
+/// else the bytes.
+QString memSizeText(quint64 bytes)
+{
+    constexpr quint64 kKiB = 1024;
+    if (bytes != 0 && bytes % (kKiB * kKiB) == 0) {
+        return QString::number(bytes / (kKiB * kKiB)) + QLatin1Char('M');
+    }
+    if (bytes != 0 && bytes % kKiB == 0) {
+        return QString::number(bytes / kKiB) + QLatin1Char('K');
+    }
+    return QString::number(bytes);
+}
+
+/// The flash device an mtdparts text names ("sfc_nor" of "sfc_nor:64K(env),..."), or "sfc_nor" - the
+/// device of both boards (RV1106G2_FACTS.md row 9) - when it names none (a PL table never does).
+QString mtdDeviceOf(const QString& mtdparts)
+{
+    QString text = normalizedLayout(mtdparts);
+    const qsizetype semicolon = text.indexOf(QLatin1Char(';'));
+    if (semicolon >= 0) {
+        text = text.left(semicolon);
+    }
+    const qsizetype colon = text.indexOf(QLatin1Char(':'));
+    const qsizetype paren = text.indexOf(QLatin1Char('('));
+    if (colon > 0 && (paren < 0 || colon < paren)) {
+        return text.left(colon).trimmed();
+    }
+    return QStringLiteral("sfc_nor");
+}
+
+/// (v0.8.0, layout-pl) A layout read in Loader mode in RockchipTool's normalized form: "<device>:" and
+/// one "<size>[@<offset>](<name>)" per partition, K / M where exact, "-" for "to the end". The offset
+/// is written where the partition does not start where the previous one ended - and always for
+/// idblock, whose place the BootROM fixes and every vendor string states (`256K@64K(idblock)` on both
+/// boards) - so the Node's PL table renders exactly the string its /proc/cmdline and env.img carry,
+/// and an env's "@0" or "mtdparts=" disappear. The plan key and the "*" memory get this one form.
+QString renderMtdParts(const QList<MtdPartition>& partitions, const QString& device = QStringLiteral("sfc_nor"))
+{
+    QStringList entries;
+    quint64 next = 0;
+    for (const MtdPartition& partition : partitions) {
+        QString entry = partition.size == 0 ? QStringLiteral("-") : memSizeText(partition.size);
+        const bool idblock = partition.name == QLatin1String("idblock") && partition.offset != 0;
+        if (partition.offset != next || idblock) {
+            entry += QLatin1Char('@') + memSizeText(partition.offset);
+        }
+        entry += QLatin1Char('(') + partition.name + QLatin1Char(')');
+        entries << entry;
+        next = partition.offset + partition.size;
+    }
+    return device + QLatin1Char(':') + entries.join(QLatin1Char(','));
+}
+
+QString pidText(quint16 pid)
+{
+    return QStringLiteral("0x%1").arg(pid, 4, 16, QLatin1Char('0'));
+}
+
 /// (v0.8.0) The configfs file usb_adb.sh writes the gadget's product string to (RV1106G2_FACTS.md
 /// row 29): what an ADB board on Windows can tell about its profile besides its layout.
 QString productCommand()
@@ -161,6 +220,14 @@ QString severalDevicesMessage(const QList<RockusbDevice>& devices)
  * first WL, and rule 1 alone before UF. A question's answer is kept for the flow (layoutAnswer,
  * loaderPartitionsAnswer); a handler may run a nested event loop, so the flow checks afterwards
  * that it (and this object) still exist.
+ *
+ * The layout of a board met in Loader mode (v0.8.0, layout-pl): toStepFive() sends the Loader device
+ * adopted at step 1 or after step 3's wait - never one rebooted by step 2 - through
+ * readLayoutInLoaderMode() when its own layout is unknown (boardLayoutUnknown()): the env partition
+ * (RL), then PL, each the flow's stepInvocation in the WaitingForLoader phase, so cancel() cuts a
+ * read like a wait. A layout found becomes mtdParts (loaderLayoutRead) and is reported with
+ * mtdPartsRead(); step 5 then plans, applies the rules and decides layoutSource from what the plan
+ * used.
  */
 struct SocFlasher::Private
 {
@@ -280,6 +347,14 @@ struct SocFlasher::Private
     QString flowProduct;                       ///< the product string read from the board in this flow (step 2)
     bool productReadTried = false;             ///< step 2 asked the board for it in this flow
     bool cameThroughStepTwo = false;           ///< the flow read the board's layout over ADB
+
+    // ---- the layout of a board met in Loader mode (v0.8.0, layout-pl) ------------------------
+    LayoutSource layoutSource = LayoutSource::None;        ///< what the writes of this flow used (step 5 decides)
+    QString loaderLayoutRead;                              ///< the layout read in Loader mode in this flow (rendered); "" = none
+    LayoutSource loaderLayoutSource = LayoutSource::None;  ///< LoaderEnv / LoaderPartitionList: where loaderLayoutRead came from
+    quint16 loaderReadPid = 0;                             ///< the Loader PID of the device the read addressed
+    bool boardLayoutRead = false;                          ///< step 2's /proc/cmdline carried the layout
+    bool layoutReading = false;                            ///< the env read (RL) runs: the silence line applies to it
 
     // ---- helpers -------------------------------------------------------------------------
 
@@ -982,6 +1057,7 @@ struct SocFlasher::Private
         abortQuery();   // a refresh in flight must not overlap the flow's own query
         const quint64 id = ++flowId;
         method = FlashMethod::None;
+        layoutSource = LayoutSource::None;
         const QString problem = validateStart();
         if (!problem.isEmpty()) {
             // The caller gets false at once and the reason from the event loop, never from inside start().
@@ -1005,6 +1081,11 @@ struct SocFlasher::Private
         flowProduct.clear();
         productReadTried = false;
         cameThroughStepTwo = false;
+        loaderLayoutRead.clear();
+        loaderLayoutSource = LayoutSource::None;
+        loaderReadPid = 0;
+        boardLayoutRead = false;
+        layoutReading = false;
         setPhase(Phase::Detecting);
         // The image's chip tag is a file read (no tool): said at once when it names a profile; else
         // once the plan has read the image's env.img layout (or before UF).
@@ -1040,6 +1121,7 @@ struct SocFlasher::Private
         ++flowId;   // retire every callback of this flow
         pollTimer->stop();
         silenceTimer->stop();
+        layoutReading = false;
         abortQuery();
         if (stepInvocation && !stepInvocation->isFinished()) {
             stepInvocation->cancel();
@@ -1158,6 +1240,7 @@ struct SocFlasher::Private
             const QString found = result.started ? RockchipTool::mtdPartsFromCommandLine(result.outputText()) : QString();
             if (!found.isEmpty()) {
                 mtdParts = found;
+                boardLayoutRead = true;
                 log(QCoreApplication::translate("SocFlasher", "partition layout of the board: %1").arg(found));
                 emit q->mtdPartsRead(found);
                 if (id != flowId) {
@@ -1275,7 +1358,7 @@ struct SocFlasher::Private
                     const RockusbDevice::Mode mode =
                         seen.mode == DeviceStatus::Mode::Maskrom ? RockusbDevice::Mode::Maskrom : RockusbDevice::Mode::Loader;
                     if (adoptDownloadDevice(mode, seen.pid) && id == flowId) {
-                        startFlash(mode);
+                        toStepFive(mode, seen.locationId, seen.pid);
                     }
                 } else if (seen.mode == DeviceStatus::Mode::Adb) {
                     setFlowProfile(BoardProfiles::detectBoard(evidenceForStatus(seen)));
@@ -1311,7 +1394,7 @@ struct SocFlasher::Private
                 // (v0.8.0) The adopted device is detected again with its PID: a board that came
                 // through step 2 without a readable layout (or through step 3) is known now.
                 if (adoptDownloadDevice(device.mode, device.pid) && id == flowId) {
-                    startFlash(device.mode);
+                    toStepFive(device.mode, device.locationId, device.pid);
                 }
                 return;
             }
@@ -1355,6 +1438,226 @@ struct SocFlasher::Private
         } else if (phase == Phase::WaitingForAdb) {
             pollAdb(false);
         }
+    }
+
+    // ---- step 4's end: the layout of a board met in Loader mode (v0.8.0, layout-pl) -------------
+
+    /// The device just adopted goes to step 5 - a Loader board MET in Loader mode (step 1, or one
+    /// that arrived during step 3's wait; never one rebooted by step 2, whose /proc/cmdline was
+    /// read) whose own layout is not known through the layout read first (SocFlasher.h, "The
+    /// layout of a board met in Loader mode"). The phase stays WaitingForLoader while it reads, so
+    /// cancel() ends the read as it ends the wait. MASKROM (UF) needs no layout and reads nothing.
+    void toStepFive(RockusbDevice::Mode mode, const QString& deviceId, quint16 pid)
+    {
+        const quint64 id = flowId;
+        if (mode == RockusbDevice::Mode::Loader && !cameThroughStepTwo && boardLayoutUnknown(pid)) {
+            if (id == flowId) {   // a slot of the log line may have ended the flow
+                readLayoutInLoaderMode(deviceId, pid);
+            }
+            return;
+        }
+        startFlash(mode);
+    }
+
+    /// No layout for the board (nothing remembered, no --layout), or a remembered one that is not
+    /// this board's: the "*" memory is the layout read last from ANY board on this PC, and a
+    /// Node's layout taken for a G2 would make rule 2 refuse the right image (and --force-layout
+    /// the habit). The image's env.img does not count: the board's own layout is what rule 2 and
+    /// an env-less image need.
+    bool boardLayoutUnknown(quint16 pid)
+    {
+        if (normalizedLayout(mtdParts).isEmpty()) {
+            return true;
+        }
+        const std::optional<BoardProfile> remembered = BoardProfiles::byLayout(mtdParts);
+        const std::optional<BoardProfile> board = BoardProfiles::byLoaderPid(pid);
+        if (!remembered || !board || remembered->id == board->id) {
+            return false;
+        }
+        log(QCoreApplication::translate("SocFlasher",
+                                        "the remembered layout is a %1's; the board's Loader PID %2 says %3: reading the "
+                                        "board's own")
+                .arg(remembered->name, pidText(pid), board->name));
+        mtdParts.clear();   // from here on as if nothing were remembered
+        return true;
+    }
+
+    /// The env partition first - the vendor's own way for these boards (rkdownload.sh's `RL 0 1
+    /// /tmp/env.img`), 128 sectors because the env is 64 KiB (RV1106G2_FACTS.md rows 18, 26) - into
+    /// <extract folder>/.layout/env.bin, then mtdPartsFromEnvImage(). Addressed to the adopted device
+    /// (the several-devices refusal guarantees it is the only one). A read, so cancel() may cut it;
+    /// no timeout, the silence line as for a WL.
+    void readLayoutInLoaderMode(const QString& deviceId, quint16 pid)
+    {
+        loaderReadPid = pid;
+        if (deviceId.isEmpty()) {
+            // Never an unaddressed read: without the id LD printed, nothing is read at all.
+            noLoaderLayout(QCoreApplication::translate("SocFlasher", "upgrade_tool LD printed no LocationID for it"));
+            return;
+        }
+        const quint64 id = flowId;
+        log(QCoreApplication::translate("SocFlasher",
+                                        "reading the flash layout of the board in Loader mode (env partition, upgrade_tool RL 0 128)"));
+        if (id != flowId) {
+            return;
+        }
+        const QString folder = effectiveExtractDirectory() + QStringLiteral("/.layout");
+        const QString file = folder + QStringLiteral("/env.bin");
+        // A file kept from an earlier read (it held no layout - perhaps another board's) is never
+        // parsed as this board's: it goes before the read, or the read does not run.
+        if (!QDir().mkpath(folder) || (QFileInfo::exists(file) && !QFile::remove(file))) {
+            envReadFailed(deviceId, QCoreApplication::translate("SocFlasher", "cannot write %1").arg(QDir::toNativeSeparators(file)));
+            return;
+        }
+        ToolInvocation* invocation = upgradeTool->readLbaOn(deviceId, 0, RockchipTool::kEnvPartitionSectors, file);
+        if (!invocation) {
+            envReadFailed(deviceId, QCoreApplication::translate("SocFlasher", "not started: %1")
+                                        .arg(QCoreApplication::translate("SocFlasher", "no device address")));
+            return;
+        }
+        tracked(invocation);
+        stepInvocation = invocation;
+        layoutReading = true;
+        lineBuffer.clear();
+        lastFlashOutput.start();
+        silenceTimer->start(kUfSilenceLogMs);
+        QObject::connect(invocation, &ToolInvocation::outputReceived, q, [this, id](const QByteArray& chunk) {
+            if (id == flowId) {
+                lastFlashOutput.restart();
+                silenceTimer->start(kUfSilenceLogMs);
+                forwardToolLines(chunk);
+            }
+        });
+        QObject::connect(invocation, &ToolInvocation::finished, q, [this, id, deviceId, file](const ToolResult& result) {
+            if (id != flowId || result.cancelled) {
+                return;
+            }
+            layoutReading = false;
+            silenceTimer->stop();
+            flushToolLines();
+            onEnvRead(deviceId, file, result);
+        });
+    }
+
+    void onEnvRead(const QString& deviceId, const QString& file, const ToolResult& result)
+    {
+        const QString output = result.outputText();
+        QString why;
+        if (!result.started) {
+            why = QCoreApplication::translate("SocFlasher", "not started: %1").arg(result.error);
+        } else if (result.timedOut || result.exitCode != 0 || RockchipTool::reportsWriteFailure(output)) {
+            const QString tail = RockchipTool::tailForMessage(output, 3).replace(QLatin1Char('\n'), QStringLiteral("; "));
+            why = QCoreApplication::translate("SocFlasher", "exit code %1: %2")
+                      .arg(result.exitCode)
+                      .arg(tail.isEmpty() ? QCoreApplication::translate("SocFlasher", "no output") : tail);
+        } else if (!QFileInfo(file).isFile()) {
+            why = QCoreApplication::translate("SocFlasher", "cannot write %1").arg(QDir::toNativeSeparators(file));
+        } else {
+            const QString found = normalizedLayout(RockchipTool::mtdPartsFromEnvImage(file));
+            const QList<MtdPartition> table = RockchipTool::parseMtdParts(found);
+            if (table.isEmpty()) {
+                why = found.isEmpty() ? QCoreApplication::translate("SocFlasher", "no mtdparts in the env partition")
+                                      : QCoreApplication::translate("SocFlasher", "an unreadable mtdparts in the env partition: %1")
+                                            .arg(found);
+            } else {
+                QFile::remove(file);   // parsed: the temporary has served (kept otherwise, for a look)
+                loaderLayoutFound(renderMtdParts(table, mtdDeviceOf(found)), LayoutSource::LoaderEnv,
+                                  QCoreApplication::translate("SocFlasher",
+                                                              "partition layout of the board (env partition read in Loader mode): %1"));
+                return;
+            }
+        }
+        envReadFailed(deviceId, why);
+    }
+
+    /// The unverified source (open question 7), tried only when the env holds nothing usable: its
+    /// raw output goes to toolOutput() and the log like every tool's, so the first G2 answers the
+    /// question; parsePartitionList() refuses whatever is not the documented table.
+    void envReadFailed(const QString& deviceId, const QString& why)
+    {
+        const quint64 id = flowId;
+        log(QCoreApplication::translate("SocFlasher",
+                                        "the env partition of the board holds no usable layout (%1); reading the partition table "
+                                        "instead (upgrade_tool PL)")
+                .arg(why));
+        if (id != flowId) {
+            return;
+        }
+        ToolInvocation* invocation = upgradeTool->partitionListOn(deviceId);
+        if (!invocation) {
+            noLoaderLayout(QCoreApplication::translate("SocFlasher", "not started: %1")
+                               .arg(QCoreApplication::translate("SocFlasher", "no device address")));
+            return;
+        }
+        tracked(invocation);
+        stepInvocation = invocation;
+        lineBuffer.clear();
+        QObject::connect(invocation, &ToolInvocation::outputReceived, q, [this, id](const QByteArray& chunk) {
+            if (id == flowId) {
+                forwardToolLines(chunk);
+            }
+        });
+        QObject::connect(invocation, &ToolInvocation::finished, q, [this, id](const ToolResult& result) {
+            if (id != flowId || result.cancelled) {
+                return;
+            }
+            flushToolLines();
+            onPartitionList(result);
+        });
+    }
+
+    void onPartitionList(const ToolResult& result)
+    {
+        qCInfo(lcFirmware).noquote() << "upgrade_tool PL output (open question 7):" << result.outputText();
+        if (!result.started) {
+            noLoaderLayout(QCoreApplication::translate("SocFlasher", "not started: %1").arg(result.error));
+        } else if (result.timedOut) {
+            noLoaderLayout(QCoreApplication::translate("SocFlasher", "upgrade_tool PL timed out"));
+        } else if (result.exitCode != 0) {
+            noLoaderLayout(QCoreApplication::translate("SocFlasher", "exit code %1").arg(result.exitCode));
+        } else {
+            const QList<MtdPartition> table = RockchipTool::parsePartitionList(result.outputText());
+            if (table.isEmpty()) {
+                noLoaderLayout(QCoreApplication::translate("SocFlasher", "no partition line"));
+            } else {
+                loaderLayoutFound(renderMtdParts(table), LayoutSource::LoaderPartitionList,
+                                  QCoreApplication::translate("SocFlasher", "partition layout of the board (upgrade_tool PL): %1"));
+            }
+        }
+    }
+
+    /// The board's own layout, read in Loader mode: mtdParts() from now on, reported for the
+    /// owner's "*" memory (under no serial: the flow has none in Loader mode), then step 5 - the
+    /// plan, the rules with this layout as the board's, the writes.
+    void loaderLayoutFound(const QString& layout, LayoutSource source, const QString& text)
+    {
+        const quint64 id = flowId;
+        mtdParts = layout;
+        loaderLayoutRead = layout;
+        loaderLayoutSource = source;
+        log(text.arg(layout));
+        emit q->mtdPartsRead(layout);
+        if (id != flowId) {
+            return;   // a slot ended the flow
+        }
+        // The layout is evidence too; it only tells something when the PID did not (an unknown PID).
+        setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, loaderReadPid, boardProduct(), mtdParts)));
+        if (id != flowId) {
+            return;
+        }
+        startFlash(RockusbDevice::Mode::Loader);
+    }
+
+    /// Neither source told the layout: not a failure of the flow - 0.7.0's path follows (the
+    /// image's env.img layout when it has one, else "partition layout unknown").
+    void noLoaderLayout(const QString& why)
+    {
+        const quint64 id = flowId;
+        log(QCoreApplication::translate("SocFlasher", "the board's layout could not be read in Loader mode: %1").arg(why));
+        if (id != flowId) {
+            return;
+        }
+        startFlash(RockusbDevice::Mode::Loader);
     }
 
     // Step 5: the method follows from the download mode
@@ -1424,16 +1727,24 @@ struct SocFlasher::Private
     /// recovery), the user decides whether to end the process by hand.
     void onFlashSilence()
     {
-        if (phase != Phase::Flashing) {
+        if (phase != Phase::Flashing && !layoutReading) {
             return;
         }
         const qint64 minutes = lastFlashOutput.elapsed() / 60000;
         qCWarning(lcFirmware) << "upgrade_tool silent for" << minutes << "min";
-        log(QCoreApplication::translate("SocFlasher",
-                                        "upgrade_tool has printed nothing for %1 min; it is left running, because "
-                                        "stopping it half way needs MASKROM recovery (if it hangs for good, end the "
-                                        "upgrade_tool process by hand)")
-                .arg(minutes));
+        if (layoutReading) {
+            // (v0.8.0) The env read in Loader mode has no timeout either; a read may be cut, though.
+            log(QCoreApplication::translate("SocFlasher",
+                                            "upgrade_tool has printed nothing for %1 min while reading the board's layout; it is "
+                                            "left running (Cancel ends it: a read changes nothing on the board)")
+                    .arg(minutes));
+        } else {
+            log(QCoreApplication::translate("SocFlasher",
+                                            "upgrade_tool has printed nothing for %1 min; it is left running, because "
+                                            "stopping it half way needs MASKROM recovery (if it hangs for good, end the "
+                                            "upgrade_tool process by hand)")
+                    .arg(minutes));
+        }
         silenceTimer->start(kUfSilenceLogMs);
     }
 
@@ -1532,12 +1843,45 @@ struct SocFlasher::Private
             } else if (planLayout.isEmpty()) {
                 endFlow(Phase::Failed, false, layoutUnknownMessage());
             } else {
-                log((planLayoutFromImage ? QCoreApplication::translate("SocFlasher", "flash layout in use (from the image's env.img): %1")
-                                         : QCoreApplication::translate("SocFlasher", "flash layout in use (from the board): %1"))
-                        .arg(planLayout));
+                layoutSource = sourceOfPlanLayout();
+                log(layoutInUseText(layoutSource).arg(planLayout));
                 writePartitions();
             }
         });
+    }
+
+    /// (v0.8.0) Where the plan's layout came from. The layout read in Loader mode first when the plan
+    /// uses it - also when the image's env.img says the same (the board's own, read from it, is what
+    /// was looked for; the two agree); else the image's when the plan placed the rows in it; else
+    /// step 2's /proc/cmdline when it carried one; else the owner's (remembered / --layout).
+    LayoutSource sourceOfPlanLayout() const
+    {
+        const QList<MtdPartition> used = RockchipTool::parseMtdParts(planLayout);
+        if (!loaderLayoutRead.isEmpty() && RockchipTool::parseMtdParts(loaderLayoutRead) == used) {
+            return loaderLayoutSource;
+        }
+        if (planLayoutFromImage) {
+            return LayoutSource::Image;
+        }
+        return boardLayoutRead ? LayoutSource::Board : LayoutSource::Owner;
+    }
+
+    static QString layoutInUseText(LayoutSource source)
+    {
+        switch (source) {
+        case LayoutSource::Image:
+            return QCoreApplication::translate("SocFlasher", "flash layout in use (from the image's env.img): %1");
+        case LayoutSource::LoaderEnv:
+            return QCoreApplication::translate("SocFlasher", "flash layout in use (from the board's env partition, read in Loader "
+                                                             "mode): %1");
+        case LayoutSource::LoaderPartitionList:
+            return QCoreApplication::translate("SocFlasher", "flash layout in use (from upgrade_tool PL in Loader mode): %1");
+        case LayoutSource::Board:
+        case LayoutSource::Owner:
+        case LayoutSource::None:
+            break;
+        }
+        return QCoreApplication::translate("SocFlasher", "flash layout in use (from the board): %1");
     }
 
     /// The rows to write in package-file order, every one checked before the first byte is written.
@@ -1924,15 +2268,30 @@ void SocFlasher::setLoaderPartitionsHandler(LoaderPartitionsHandler handler) { d
 ProfileDetection SocFlasher::detectedProfile() const { return d->boardProfile; }
 ProfileDetection SocFlasher::imageProfile() const { return d->computeImageProfile(); }
 
-// ---- layout-pl / verify-rl (v0.8.0): compile-only placeholders until those packages land -------
+// ---- The layout's source (v0.8.0, layout-pl) ----------------------------------------------------
 
-SocFlasher::LayoutSource SocFlasher::layoutSource() const { return LayoutSource::None; }
+SocFlasher::LayoutSource SocFlasher::layoutSource() const { return d->layoutSource; }
 
 QString SocFlasher::layoutSourceText(LayoutSource source)
 {
-    Q_UNUSED(source);
+    switch (source) {
+    case LayoutSource::Owner:
+        return QCoreApplication::translate("SocFlasher", "the layout given for the board");
+    case LayoutSource::Board:
+        return QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline");
+    case LayoutSource::Image:
+        return QCoreApplication::translate("SocFlasher", "the image's env.img");
+    case LayoutSource::LoaderPartitionList:
+        return QCoreApplication::translate("SocFlasher", "upgrade_tool PL in Loader mode");
+    case LayoutSource::LoaderEnv:
+        return QCoreApplication::translate("SocFlasher", "the board's env partition, read in Loader mode");
+    case LayoutSource::None:
+        break;
+    }
     return QString();
 }
+
+// ---- verify-rl (v0.8.0): compile-only placeholders until that package lands ----------------------
 
 void SocFlasher::setVerifyAfterWrite(bool on) { Q_UNUSED(on); }
 bool SocFlasher::verifyAfterWrite() const { return false; }

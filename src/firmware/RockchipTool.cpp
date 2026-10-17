@@ -313,6 +313,39 @@ ToolInvocation* RockchipTool::resetDeviceOn(const QString& locationId)
     return m_runner->run(m_tool, {QStringLiteral("-s"), locationId, QStringLiteral("RD")}, options);
 }
 
+ToolInvocation* RockchipTool::partitionListOn(const QString& locationId)
+{
+    // A read, but of one device among possibly several: the address is part of the call, as for
+    // the writes (a wrong device's table would be a wrong layout).
+    Q_ASSERT(!locationId.isEmpty());
+    if (locationId.isEmpty()) {
+        return nullptr;
+    }
+    ToolRunner::Options options;
+    options.timeoutMs = m_timeoutMs;   // a listing, like LD
+    return m_runner->run(m_tool, {QStringLiteral("-s"), locationId, QStringLiteral("PL")}, options);
+}
+
+ToolInvocation* RockchipTool::readLbaOn(const QString& locationId, quint64 startSector, quint64 sectorCount,
+                                        const QString& file, const QString& workingDirectory)
+{
+    // No "to the end" form: a read of unknown length into a temporary has no use here, and the
+    // count is the one number a caller could get wrong silently.
+    Q_ASSERT(!locationId.isEmpty());
+    Q_ASSERT(sectorCount != 0);
+    if (locationId.isEmpty() || sectorCount == 0) {
+        return nullptr;
+    }
+    ToolRunner::Options options = imageCommandOptions(file, 0);   // no timeout: a slow read is no failed one
+    if (!workingDirectory.isEmpty()) {
+        options.workingDirectory = workingDirectory;
+    }
+    return m_runner->run(m_tool,
+                         {QStringLiteral("-s"), locationId, QStringLiteral("RL"), QString::number(startSector),
+                          QString::number(sectorCount), QDir::toNativeSeparators(file)},
+                         options);
+}
+
 QList<RockusbDevice> RockchipTool::parseDeviceList(const QString& output)
 {
     QList<RockusbDevice> devices;
@@ -716,6 +749,144 @@ QString RockchipTool::mtdPartsFromEnvImage(const QString& envImagePath)
         }
     }
     return QString();
+}
+
+namespace {
+
+/// One whitespace-separated word of a `PL` table line, classified: a number (hex "0x..." in either
+/// case, or decimal - sectors), "-" (a size "to the end"), a partition name, or anything else.
+struct PlToken
+{
+    enum class Kind { Number, Dash, Name, Other };
+    Kind kind = Kind::Other;
+    quint64 value = 0;
+    QString text;
+};
+
+PlToken classifyPlToken(const QString& word)
+{
+    static const QRegularExpression hex(QStringLiteral("^0[xX]([0-9a-fA-F]{1,16})$"));
+    static const QRegularExpression decimal(QStringLiteral("^[0-9]{1,19}$"));
+    static const QRegularExpression name(QStringLiteral("^[A-Za-z0-9_-]+$"));
+    PlToken token;
+    token.text = word;
+    bool ok = false;
+    const QRegularExpressionMatch hexMatch = hex.match(word);
+    if (hexMatch.hasMatch()) {
+        token.value = hexMatch.captured(1).toULongLong(&ok, 16);
+    } else if (decimal.match(word).hasMatch()) {
+        token.value = word.toULongLong(&ok, 10);
+    }
+    if (ok) {
+        token.kind = PlToken::Kind::Number;
+    } else if (word == QLatin1String("-")) {
+        token.kind = PlToken::Kind::Dash;
+    } else if (name.match(word).hasMatch()) {
+        token.kind = PlToken::Kind::Name;
+    }
+    return token;
+}
+
+/// One table row in sectors; `toTheEnd` for a size of "-" or 0.
+struct PlRow
+{
+    QString name;
+    quint64 offset = 0;
+    quint64 size = 0;
+    bool toTheEnd = false;
+};
+
+/// The row a line of exactly these tokens describes, in one of the four accepted shapes:
+/// "<index> <offset> <size> <name>", "<offset> <size> <name>", "<index> <name> <offset> <size>",
+/// "<name> <offset> <size>" (a size may be "-").
+std::optional<PlRow> plRowOf(const QList<PlToken>& tokens)
+{
+    using Kind = PlToken::Kind;
+    const auto isSize = [](const PlToken& token) { return token.kind == Kind::Number || token.kind == Kind::Dash; };
+    const auto row = [](const PlToken& nameToken, const PlToken& offsetToken, const PlToken& sizeToken) {
+        PlRow result;
+        result.name = nameToken.text;
+        result.offset = offsetToken.value;
+        result.toTheEnd = sizeToken.kind == Kind::Dash || sizeToken.value == 0;
+        result.size = result.toTheEnd ? 0 : sizeToken.value;
+        return result;
+    };
+    if (tokens.size() != 3 && tokens.size() != 4) {
+        return std::nullopt;
+    }
+    const qsizetype first = tokens.size() == 4 ? 1 : 0;   // a leading index is ignored
+    if (first == 1 && tokens.at(0).kind != Kind::Number) {
+        return std::nullopt;
+    }
+    const PlToken& a = tokens.at(first);
+    const PlToken& b = tokens.at(first + 1);
+    const PlToken& c = tokens.at(first + 2);
+    if (a.kind == Kind::Number && isSize(b) && c.kind == Kind::Name) {
+        return row(c, a, b);   // offset size name
+    }
+    if (a.kind == Kind::Name && b.kind == Kind::Number && isSize(c)) {
+        return row(a, b, c);   // name offset size
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+QList<MtdPartition> RockchipTool::parsePartitionList(const QString& output)
+{
+    // UNVERIFIED on a NOR board whose table lives in env.img (open question 7): written for the
+    // documented table and strict, because a table that parses but is not the board's would
+    // become "the board's layout". Every line that looks like a row (two numbers or more) must be
+    // one; anything that does not fit empties the whole result.
+    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+    QList<PlRow> rows;
+    for (const QString& rawLine : splitLines(output)) {
+        const QString line = rawLine.trimmed();
+        if (line.isEmpty() || isBannerLine(line) || line.contains(QLatin1String("List of"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        QList<PlToken> tokens;
+        int numeric = 0;
+        for (const QString& word : line.split(whitespace, Qt::SkipEmptyParts)) {
+            tokens << classifyPlToken(word);
+            const PlToken::Kind kind = tokens.last().kind;
+            numeric += (kind == PlToken::Kind::Number || kind == PlToken::Kind::Dash) ? 1 : 0;
+        }
+        if (numeric < 2) {
+            continue;   // a header ("No  Offset(LBA)  Size(LBA)  Name") or a message
+        }
+        const std::optional<PlRow> row = plRowOf(tokens);
+        if (!row) {
+            return {};
+        }
+        rows << *row;
+    }
+
+    // At least the env and one more, in flash order from sector 0, no overlap, no name twice, and
+    // "to the end" only on the last row: anything else is no usable table, never a guessed layout.
+    constexpr quint64 kMaxSectors = std::numeric_limits<quint64>::max() / 512;
+    if (rows.size() < 2 || rows.first().offset != 0) {
+        return {};
+    }
+    QList<MtdPartition> partitions;
+    QStringList names;
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        const PlRow& row = rows.at(i);
+        const bool last = i + 1 == rows.size();
+        if ((row.toTheEnd && !last) || names.contains(row.name) || row.offset > kMaxSectors || row.size > kMaxSectors
+            || row.size > kMaxSectors - row.offset) {
+            return {};
+        }
+        if (i > 0) {
+            const PlRow& previous = rows.at(i - 1);
+            if (row.offset <= previous.offset || row.offset < previous.offset + previous.size) {
+                return {};
+            }
+        }
+        names << row.name;
+        partitions.append({row.name, row.offset * 512, row.size * 512});
+    }
+    return partitions;
 }
 
 QList<QPair<QString, QString>> RockchipTool::parsePackageFile(const QString& text)
