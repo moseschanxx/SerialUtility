@@ -4,7 +4,10 @@
 # ctest sets QT_QPA_PLATFORM=offscreen and puts the Qt bin directory on PATH.
 
 function(su_configure_test name)
-    add_test(NAME ${name} COMMAND ${name})
+    # TAP on stdout: on Windows Qt Test's plain-text logger writes nothing to a redirected stdout (ctest
+    # and CI logs showed a failed suite without one line), while the TAP logger does; a failure then
+    # appears as "not ok N - case()" with the message and the location in the ctest output.
+    add_test(NAME ${name} COMMAND ${name} -o -,tap)
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     if(WIN32 AND DEFINED QT6_INSTALL_PREFIX)
         # Make the Qt DLLs reachable when ctest launches the test binary.
