@@ -468,6 +468,20 @@ button. The tab has three sections and a log pane:
   for the board to come back on ADB (60 s) and shows its kernel version and uptime. **Cancel**
   works while waiting, never while `upgrade_tool` writes the flash.
 
+  **Verify after writing** (v0.8.0; the checkbox next to Flash SoC, remembered, off by default so the
+  daily update stays as fast) reads every partition back right after it was written -
+  `upgrade_tool -s <LocationID> RL <sector> <sectors> <file>`, addressed to the board the flash found -
+  and compares it with the image byte for byte, over the image's length (a jffs2 userdata or an erofs
+  boot image is smaller than its partition; the rest of the partition is not compared). The log says
+  `rootfs verified: 3830272 bytes read back equal the image (4.1 s)` per partition and the progress bar
+  `Verifying rootfs (6 of 7)`. A difference - or a read-back that fails or comes back short - fails the
+  flash with the first differing byte (`verifying rootfs failed: byte 4660 of the image differs (flash
+  offset 0x3F1234): read 0x3c, image 0xff; the board is left in Loader mode, nothing else is
+  written`): no reset, nothing written again, the board stays in Loader mode and you decide (flash it
+  again, or look at the read-back kept in `update.extracted\.verify\`). Cancel is refused during a
+  read-back as during a write. It costs about one read per write (not measured on the boards yet);
+  MASKROM mode (UF) checks the image itself and reads nothing back.
+
   Before anything is written (and before `adb reboot loader`) the board profiles' rules run
   (v0.8.0): an image built for the other board is refused (its RKFW chip tag - 110E the Node,
   1106 the Stacked core - against the board's profile); an image whose flash layout differs from
@@ -550,13 +564,14 @@ pauses.
 | `su-fw status [--serial S] [--mcu] [--profile ID]` | The board the PC sees: *ADB device ...*, *Loader mode*, *Maskrom mode*, *no board* or the driver hint; a running board's flash layout; (0.8.0) the board's profile with its evidence; `--mcu` adds the CC1310's version and role |
 | `su-fw partitions [--image F] [--layout M \| --serial S] [--profile ID]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; (0.8.0) the image's RKFW header and profile; the board is not touched |
 | `su-fw pull [--target T] [--remote-folder F] [--cache D] [--identity K] [--password-env VAR \| --password-stdin] [--accept-host-key]` | Pull `update.img` from the build machine (skipped when unchanged, the previous one kept) |
-| `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait] [--profile ID] [--force-layout] [--force-loader-partitions]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question |
-| `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*) |
+| `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait] [--verify] [--profile ID] [--force-layout] [--force-loader-partitions] [--expect-image MD5 [--force]]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question; (0.8.0) logs `image md5: <hex>` first, and `--expect-image` skips a board that already runs that image (see *The bench inventory*); `--verify` reads every partition written back and compares it (see *Verify after writing*) |
+| `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait] [--verify]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*) |
 | `su-fw mcu-info [--serial S] [--profile ID]` | The running CC1310's version and role |
 | `su-fw mcu-update --package P --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Update the CC1310 (the role is never guessed) |
 | `su-fw mcu-set-role --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Set the CC1310's role |
-| `su-fw pull-flash [pull options] [--package P] [--role rx\|tx] [--serial S] [--layout M] [--profile ID] [--force-layout] [--force-loader-partitions] [--confirm-soc-power]` | The tab's Pull & Flash: pull, flash every partition, wait for ADB, update the CC1310 when the package's version differs; stops at the first failure |
+| `su-fw pull-flash [pull options] [--package P] [--role rx\|tx] [--serial S] [--layout M] [--profile ID] [--force-layout] [--force-loader-partitions] [--confirm-soc-power] [--verify]` | The tab's Pull & Flash: pull, flash every partition, wait for ADB, update the CC1310 when the package's version differs; stops at the first failure |
 | `--profile ID` / `--force-layout` / `--force-loader-partitions` / `--confirm-soc-power` | (0.8.0) The attached board when the tool cannot tell it (`node`, `stacked`; anything else is usage error 2) / write an image whose flash layout differs from the board's / write idblock, uboot, env or meta on the Stacked core / update or re-role the Stacked core's CC1310 - see *Board profiles* below |
+| `su-fw inventory [--serial S] [--json]` | (0.8.0) The bench inventory: one record per board - profile, USB port, flash layout, the last image written (file, chip tag, MD5, the partitions it wrote, when), the CC1310's version and role, the last operation and its result, last seen - written by every su-fw command and the Firmware tab on this PC; reads a file only (no tool, no board, no lock) |
 
 Every command also takes `--tools DIR` (default: the app's tool paths, then `tools/` next to
 su-fw), `--log FILE` (append every line, also with `--quiet`), `--json`, `--quiet` (only the
@@ -652,6 +667,103 @@ su-fw flash-soc --image update.img --partitions boot --json                     
 su-fw flash-soc --image update.img --partitions boot --profile stacked --json    # only when status said ""
 ```
 
+**The layout of a board met in Loader mode (v0.8.0).** A board that is already in Loader mode when
+`flash-soc` starts, or that arrives in Loader mode during the wait (put there by hand or by a
+session's `reboot loader`), cannot be asked for its `/proc/cmdline`. When no layout is known for it
+(nothing remembered, no `--layout`), or the remembered one is the other board's
+(`the remembered layout is a Node (RV1106BG2)'s; the board's Loader PID 0x110c says Stacked
+(RV1106G2): reading the board's own`), su-fw reads it from the board before anything is unpacked
+or written, addressed to the one device in download mode:
+
+1. the env partition - `upgrade_tool -s <LocationID> RL 0 128 <extract folder>\.layout\env.bin`,
+   the vendor's own way (rkdownload.sh), parsed like an image's `env.img`;
+2. only when that holds nothing usable, the partition table - `upgrade_tool -s <LocationID> PL`.
+   Its output on these NOR boards has not been seen yet: anything but the documented table is
+   ignored, never taken for the board's layout.
+
+The layout read is checked against the image's (rule 2 above), remembered like one read over ADB
+(for the next board met in Loader mode; never under another board's serial) and named in the log -
+`flash layout in use (from the board's env partition, read in Loader mode): sfc_nor:64K(env),...`
+or `... (from upgrade_tool PL in Loader mode): ...`. When neither read tells it, 0.7.0's behaviour
+follows: the image's `env.img` layout, else `partition layout unknown: ...`. MASKROM mode reads
+nothing (UF writes the whole image), and a running board is read over ADB as before. Ctrl+C /
+Cancel may end the read: it changes nothing on the board. `--layout` skips the read altogether.
+
+**Verify after writing (`--verify`, v0.8.0).** `flash-soc` (one board or a fleet) and `pull-flash`
+take `--verify`: every partition written in Loader mode is read back right after its write and
+compared with the image byte for byte. The read is `upgrade_tool -s <LocationID> RL <sector>
+<ceil(bytes / 512)> <file>` - always addressed (a single board with the LocationID its `LD` found,
+a fleet board with its own), never while that board's write runs, into
+`<extract folder>\.verify\<partition>.img` (a fleet board: its own `.fleet\<serial>` folder),
+deleted once it matched. The compare covers the image's length, never the partition's: a jffs2
+userdata or an erofs boot is smaller than its partition, and the flash behind its last byte is not
+compared. The log names every read-back:
+
+```
+12:53:52 verifying boot: reading 5945 sectors back from sector 1920 (upgrade_tool -s 104 RL)
+12:53:52 $ upgrade_tool -s 104 RL 1920 5945 C:\...\update.extracted\.verify\boot.img
+12:53:56   exit code 0
+12:53:56 boot verified: 3043840 bytes read back equal the image (4.1 s)
+```
+
+A difference, a short read or a read that fails is **a failed board**, never written again by the
+tool: a flipped byte after a write that said OK means the flash, the cable or the tool lied, and
+writing again blindly could lie again. One board ends with exit 1 and `verifying rootfs failed: byte
+4660 of the image differs (flash offset 0x3F1234): read 0x3c, image 0xff; the board is left in Loader
+mode, nothing else is written` - no RD; the read-back is kept for a look. A fleet board is handled
+exactly as a failed write: left in Loader mode with the addressed `retry` lines, that partition's WL
+first (see *Flashing several boards*). The JSON: the `done` object carries `"verify"` (true / false)
+and, for one board with `--verify`, `"verified": [{"name":"boot","ok":true,"bytes":3043840,
+"mismatch":-1,"seconds":4.1}, ...]` (`mismatch` is the first differing byte's offset into the image,
+-1 when none); a fleet's `boards[]` carry `verified`, `verifyFailed` and `verifyMismatch`. MASKROM
+mode (UF) checks the whole image itself and reads nothing back (the log says so). **The cost is about
+one read per write and is not measured on the boards yet** (the Node's 3.8 MiB rootfs, the stacked
+board's 8-10 MiB boot); the log prints the seconds per partition.
+
+#### The bench inventory (`su-fw inventory`, v0.8.0)
+
+Every su-fw command and the Firmware tab record what they learn about a board in one file,
+`inventory.json` in the app's data folder (Windows: `%LOCALAPPDATA%\BuildAI\SerialUtility`), keyed by
+the board's ADB serial. A record holds:
+
+- the board's profile, as detected from the board (never from `--profile`);
+- the USB port a fleet run learned, and the flash layout read from the board;
+- whether its ADB gadget shows a USB serial string;
+- the last image written by a write that ended ok: file name, chip tag, MD5, git describe and **the
+  partitions that write put on the board**;
+- the CC1310's version and role when last read;
+- the last operation, its result and message;
+- first and last seen.
+
+`su-fw inventory` prints it as a table, and `--json` prints the whole records. The command reads the
+file only, so it runs next to a flash. The file holds no password and no path except the image's file
+name, so it can be pasted into a chat. Writers take a lock next to it and replace it whole, so the tab
+and any number of su-fw write it at once. A corrupt file is moved aside as
+`inventory.json.corrupt-<time>`, never overwritten.
+
+Only an ok write sets the image. A failed or cancelled write leaves the image the board ran before.
+When the same image (MD5) is written again, its partitions are added to the record; a different image
+replaces it. A board met in Loader mode has no serial and is not recorded (the log says so). A status
+rewrites a board's record at most once a minute. A dry run records only that the boards were seen.
+
+Every flash logs `image md5: <hex>` (`imageMd5` in the JSON). With `flash-soc ... --expect-image <that
+MD5>` (`--serial` or `--serials` only), a board is refused before anything runs (exit 1, "board S
+already runs the expected image (md5 ..., rootfs written ...); pass --force to write it again") when
+two things hold:
+
+- its record carries that MD5;
+- the record lists every partition the command names (with `--all`: every partition of the image).
+
+A record with the MD5 but not every named partition is written: "board S runs the expected image's
+userdata (...); boot is not recorded as written: writing" (the stacked board's ladder: userdata
+first, then boot with the same build). `--force` writes it anyway, and a fleet is refused as a
+whole.
+
+```powershell
+su-fw inventory --json                                          # what every board runs
+su-fw flash-soc --serial 0225ce3c8d8d6e44 --partitions rootfs --image update.img --expect-image 9e107d9d372bb6826bd81d3542a419d6 --json
+```
+
 #### Flashing several boards (`--serials` / `--all-boards`, v0.7.0)
 
 `su-fw flash-soc --serials F=c4130950110960e0,G=5a33c81a6e996266 --partitions rootfs` (or
@@ -680,19 +792,30 @@ skipped, failed or did not come back (or the run stopped / could not start), `2`
 selected board is on ADB, `5` `--timeout` / Ctrl+C. The output has one line per board and event
 (`HH:MM:SS [F c4130950110960e0] in Loader mode on port 6&3A944CE5&0&1, LocationID 112 (1.2 s)`),
 progress every 10 % per board, and last a table (board, serial, port, LocationID, result, mapping /
-writing / total seconds, detail). With `--json` a board's lines carry `board`, `tag` and `stage`, each
-board ends with a `step` object (`result`, `seconds`, `written`, `retry`, `adbBack`), and the `done`
+writing seconds, verify, total seconds, detail). With `--json` a board's lines carry `board`, `tag`
+and `stage`, each board ends with a `step` object (`result`, `seconds`, `written`, `verified`,
+`verifyFailed`, `verifyMismatch`, `retry`, `adbBack`), and the `done`
 object carries the whole record:
 
 ```json
 {"time":"...","step":"flash-soc","event":"done","text":"2 of 2 boards flashed in 41.0 s (mapping 3.1 s, writing 29.8 s)","ok":true,"exit":0,
- "fleet":true,"dryRun":false,"image":"C:\\...\\update.img","partitions":["rootfs"],"maxParallel":0,"seconds":41.0,"mappingSeconds":3.1,
+ "fleet":true,"dryRun":false,"verify":false,"image":"C:\\...\\update.img","partitions":["rootfs"],"maxParallel":0,"seconds":41.0,"mappingSeconds":3.1,
  "writingSeconds":29.8,"stop":"","unattributed":[],"summary":{"selected":2,"done":2,"notBack":0,"failed":0,"skipped":0},
  "boards":[{"tag":"F","serial":"c4130950110960e0","adb":"device","expectedPort":"","port":"6&3A944CE5&0&1","loader":"112","stage":"finished",
-            "result":"done","ok":true,"seconds":38.2,"mappingSeconds":1.2,"writingSeconds":29.4,"detail":"","written":["rootfs"],"retry":[],
+            "result":"done","ok":true,"seconds":38.2,"mappingSeconds":1.2,"writingSeconds":29.4,"detail":"","written":["rootfs"],
+            "verified":[],"verifyFailed":"","verifyMismatch":-1,"retry":[],
             "adbBack":true,"leftInLoader":false,"kernel":"5.10.209+","uptime":"up 0 min","boardInfo":"Linux version 5.10.209+ ...",
             "rfmcu":"pid=412 uart=owned mcu=alive"}, ...]}
 ```
+
+**With `--verify`** (v0.8.0) every board reads each partition back right after its write
+(`upgrade_tool -s <LocationID> RL ...` in its own folder; counted as a write for the LD gate, never
+next to its own write) and compares it with the image; the table's `verify` column says `ok`,
+`FAIL <partition>` or `-` (the run did not verify, or the board wrote nothing), and `boards[]` carry
+`verified`, `verifyFailed` and `verifyMismatch` (the per-board `step` objects too). A read-back that
+differs fails that board exactly as a failed write does: no RD, `leftInLoader`, the addressed `retry`
+lines with that partition's WL first (it does not count as written), the other boards go on. The
+dry run is unchanged (it writes nothing, so it reads nothing back).
 
 **Agent recipe**: look first, then two boards, then all of them; read `done.boards[]`, and tell
 whoever else uses the boards when you start and when you are done.

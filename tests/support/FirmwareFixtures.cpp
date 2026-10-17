@@ -4,6 +4,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
+#include <QPair>
+#include <QPointer>
+
+#include <functional>
+#include <utility>
 
 #include "firmware/ToolRunner.h"
 #include "support/FakeToolRunner.h"
@@ -263,6 +269,146 @@ void scriptLoaderLayoutRead(FakeToolRunner& runner, const QByteArray& envImage, 
         i->finish(0);
     });
     runner.addScript(loaderPartitionListPattern(), plOutput, plExitCode);
+}
+
+// ---- (v0.8.0, verify-rl) FakeFlash ------------------------------------------------------------------
+
+struct FakeFlash::State
+{
+    QMap<quint64, QString> written;                 ///< sector -> the file its last WL wrote (as the command named it)
+    QMap<quint64, QPair<qint64, quint8>> corrupt;   ///< sector -> (index, value): the next read only
+    QMap<quint64, qint64> shortReads;               ///< sector -> bytes: the next read only
+    bool failing = false;
+    QByteArray failOutput;
+    int failExit = 0;
+    bool gone = false;
+    bool hold = false;
+    QList<std::function<void()>> held;
+    QStringList reads;
+    QStringList writes;
+    int unaddressed = 0;
+    QMap<quint64, int> writesBeforeRead;
+};
+
+namespace {
+
+/// "Read LBA from file (10%)" ... "(90%)" and then the file and "(100%)", exit 0.
+void finishRead(FakeToolInvocation* i, const QString& target, const QByteArray& bytes)
+{
+    if (!writeFile(target, bytes)) {
+        i->emitOutput("Read LBA failed!\r\n");
+        i->finish(1);
+        return;
+    }
+    i->emitOutput("Read LBA from file (100%)\r\n");
+    i->finish(0);
+}
+
+} // namespace
+
+FakeFlash::FakeFlash() : state(std::make_shared<State>()) {}
+
+void FakeFlash::script(FakeToolRunner& runner)
+{
+    const std::shared_ptr<State> s = state;
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool (-s \\S+ )?WL ")), [s](FakeToolInvocation* i) {
+        const QStringList args = i->arguments();
+        const qsizetype at = args.indexOf(QStringLiteral("WL"));
+        s->writes << i->commandLine();
+        s->written.insert(args.value(at + 1).toULongLong(), args.value(at + 3));
+        i->emitOutput("Write LBA from file (50%)\rWrite LBA from file (100%)\r\n");
+        i->finish(0);
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool -s \\S+ RL ")), [s](FakeToolInvocation* i) {
+        const QStringList args = i->arguments();   // -s ID RL start count file
+        const quint64 sector = args.value(3).toULongLong();
+        const qint64 count = args.value(4).toLongLong();
+        const QString target = QDir::fromNativeSeparators(args.value(5));
+        s->reads << i->commandLine();
+        s->writesBeforeRead.insert(sector, static_cast<int>(s->writes.size()));
+        if (s->gone) {
+            i->emitOutput("rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\nNo found specific rockusb device!\r\n");
+            i->finish(255);
+            return;
+        }
+        if (s->failing) {
+            if (!s->failOutput.isEmpty()) {
+                i->emitOutput(s->failOutput);
+            }
+            i->finish(s->failExit);
+            return;
+        }
+        QByteArray bytes;
+        QFile file(QDir::fromNativeSeparators(s->written.value(sector)));
+        if (s->written.contains(sector) && file.open(QIODevice::ReadOnly)) {
+            bytes = file.read(count * 512);
+        }
+        if (bytes.size() < count * 512) {
+            bytes.append(QByteArray(count * 512 - bytes.size(), '\xff'));
+        }
+        if (s->corrupt.contains(sector)) {
+            const QPair<qint64, quint8> flip = s->corrupt.take(sector);
+            if (flip.first >= 0 && flip.first < bytes.size()) {
+                bytes[flip.first] = static_cast<char>(flip.second);
+            }
+        }
+        if (s->shortReads.contains(sector)) {
+            bytes = bytes.left(s->shortReads.take(sector));
+        }
+        if (s->hold) {
+            i->emitOutput("Read LBA from file (10%)\r");
+            i->hang();
+            const QPointer<FakeToolInvocation> guard(i);
+            s->held << [guard, target, bytes] {
+                if (guard) {
+                    finishRead(guard, target, bytes);
+                }
+            };
+            return;
+        }
+        for (int percent = 10; percent < 100; percent += 10) {
+            i->emitOutput("Read LBA from file (" + QByteArray::number(percent) + "%)\r");
+        }
+        finishRead(i, target, bytes);
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool RL ")), [s](FakeToolInvocation* i) {
+        ++s->unaddressed;
+        i->emitOutput("fake: unaddressed read refused\r\n");
+        i->finish(99);
+    });
+}
+
+void FakeFlash::corruptByte(quint64 sector, qint64 index, quint8 value) { state->corrupt.insert(sector, {index, value}); }
+void FakeFlash::shortRead(quint64 sector, qint64 bytes) { state->shortReads.insert(sector, bytes); }
+
+void FakeFlash::failReads(const QByteArray& output, int exitCode)
+{
+    state->failing = true;
+    state->failOutput = output;
+    state->failExit = exitCode;
+}
+
+void FakeFlash::noSuchDevice() { state->gone = true; }
+void FakeFlash::hangReads() { state->hold = true; }
+
+void FakeFlash::releaseReads()
+{
+    state->hold = false;
+    const QList<std::function<void()>> held = std::exchange(state->held, {});
+    for (const auto& finish : held) {
+        finish();
+    }
+}
+
+QStringList FakeFlash::readCommands() const { return state->reads; }
+QStringList FakeFlash::writeCommands() const { return state->writes; }
+int FakeFlash::unaddressedReads() const { return state->unaddressed; }
+int FakeFlash::writesBefore(quint64 sector) const { return state->writesBeforeRead.value(sector, -1); }
+
+void scriptSocFlashWithReadBack(FakeToolRunner& runner, const QByteArray& ld, FakeFlash& flash)
+{
+    flash.script(runner);           // first: its WL handler takes every WL, its RL handler every RL
+    scriptSocFlash(runner, ld);
 }
 
 QStringList wlCommands(const FakeToolRunner& runner)

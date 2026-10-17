@@ -113,7 +113,7 @@ QStringList specificOptionNames(const QString& command)
                 QStringLiteral("serial"),  QStringLiteral("layout"),     QStringLiteral("no-wait"),      QStringLiteral("serials"),
                 QStringLiteral("all-boards"), QStringLiteral("max-parallel"), QStringLiteral("dry-run"),
                 QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions"),
-                QStringLiteral("expect-image"), QStringLiteral("force")};
+                QStringLiteral("expect-image"), QStringLiteral("force"), QStringLiteral("verify")};
     }
     if (command == kMcuInfo) {
         return {QStringLiteral("serial"), QStringLiteral("profile")};
@@ -130,7 +130,7 @@ QStringList specificOptionNames(const QString& command)
                + QStringList{QStringLiteral("package"), QStringLiteral("role"),       QStringLiteral("serial"),
                              QStringLiteral("layout"),  QStringLiteral("all"),        QStringLiteral("partitions"),
                              QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions"),
-                             QStringLiteral("confirm-soc-power")};
+                             QStringLiteral("confirm-soc-power"), QStringLiteral("verify")};
     }
     if (command == kInventory) {
         return {QStringLiteral("serial")};
@@ -166,7 +166,8 @@ const char* const kOutputHelp = R"HELP(Output:
   "event":"log","text":"..."}. "event" is "log" (a log line), "progress" (with "percent" when
   there is one), "step" (a step ended; "ok") or "done": the last line, with "ok", "exit", "text"
   and the command's results ("board", "layout", "mcu", "partitions", "image", "imageMd5",
-  "boardInfo", "inventory").
+  "boardInfo", "inventory", "verify" and, with --verify, "verified": one {"name", "ok",
+  "bytes", "mismatch", "seconds"} per partition read back).
   A usage error (exit 2) goes to stderr; found before anything ran, it leaves stdout empty.
 )HELP";
 
@@ -353,10 +354,10 @@ Examples:
 const char* const kFlashSocHelp = R"HELP(su-fw flash-soc - flash the RV1106 SoC
 
 Usage: su-fw flash-soc [--image FILE] (--all | --partitions NAMES) [--serial SERIAL]
-                       [--layout MTDPARTS] [--no-wait] [--profile ID] [--force-layout]
+                       [--layout MTDPARTS] [--no-wait] [--verify] [--profile ID] [--force-layout]
                        [--force-loader-partitions] [--expect-image MD5 [--force]] [options]
        su-fw flash-soc (--serials S1,S2,... | --all-boards) --partitions NAMES [--image FILE]
-                       [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait]
+                       [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait] [--verify]
                        [--profile ID] [--force-loader-partitions]
                        [--expect-image MD5 [--force]] (with --serials) [options]
 
@@ -364,7 +365,8 @@ Finds the board: already in Loader / Maskrom mode, or running on ADB (its /proc/
 flash layout are read, then "adb reboot loader" - no question asked); with no board at all it
 logs how to enter MASKROM mode and waits (30 s, Preferences > Firmware). Then it writes:
   Loader mode:  the chosen partitions, one "upgrade_tool WL <offset> <size> <file>" each (every
-                image is checked against its partition first), then RD restarts the board.
+                image is checked against its partition first; with --verify each one is read
+                back and compared before the next), then RD restarts the board.
   MASKROM mode: the whole image with "upgrade_tool UF" (a partition choice does not apply; the
                 log says so).
 Last it waits for the board to come back on ADB and prints its kernel version and uptime.
@@ -377,8 +379,9 @@ upgrade_tool LocationID; anything else stops the run before a byte is written, n
 Then the named partitions are written on up to --max-parallel boards at once, every upgrade_tool
 command addressed with -s <LocationID> and every board re-checked before each write; each board
 is reset (-s <LocationID> RD), waited for on ADB, and its kernel, uptime and "rfmcu status" are
-printed; last a table: board, serial, port, LocationID, result, seconds. A fleet takes
---partitions only (idblock, uboot, env and meta are written only when named; --all is refused).
+printed; last a table: board, serial, port, LocationID, result, verify (--verify: ok, or FAIL
+<partition> for a read-back that differs - that board is handled as a failed write), seconds. A
+fleet takes --partitions only (idblock, uboot, env and meta are written only when named; --all is refused).
 A board not in Loader mode on its port in time is skipped; a Loader / MASKROM device nobody
 accounts for refuses the run (the message names the "upgrade_tool -s <n> RD" that clears it).
 Ctrl+C skips and resets the boards not started; a board being written finishes all its
@@ -415,6 +418,10 @@ Options:
                        own (an image layout that differs from the board's is refused unless
                        --force-layout).
   --no-wait            Do not wait for the board to come back on ADB after the flash.
+  --verify             After every partition written, read it back (upgrade_tool RL) and compare
+                       it with the image byte for byte; a difference fails the flash (the board is
+                       left in Loader mode, nothing is written again). Costs about one read per
+                       write.
   --serials SERIALS    A fleet: the ADB serials, comma separated, repeatable (entries add up).
                        TAG=SERIAL names a board for every line and the table
                        (B=62ecfc6ddeb3f579); the untagged entries get A, B, ... Z, AA, AB in the
@@ -452,8 +459,10 @@ Exit codes:
   1  the flash failed: upgrade_tool's error (its last lines are in the log), an image that does
      not fit, the layout unknown in Loader mode, a refusal of the board profiles (the wrong image,
      a differing layout, loader partitions on the Stacked core, --profile against the board's
-     Loader PID), several devices in download mode; or --expect-image: the board already runs
-     that image ("board <serial> already runs the expected image ...; pass --force ...")
+     Loader PID), several devices in download mode, a verify read-back that differs (--verify:
+     the board is left in Loader mode, nothing else is written); or --expect-image: the board
+     already runs that image ("board <serial> already runs the expected image ...; pass
+     --force ...")
   2  usage: neither or both of --all / --partitions, an unknown partition, no image, --profile
      with an unknown ID, --expect-image without 32 hex digits or without --serial / --serials,
      --force without --expect-image
@@ -463,8 +472,8 @@ Exit codes:
 Exit codes of a fleet (--serials / --all-boards):
   0  every selected board flashed, reset and back on ADB (with --no-wait: reset)
   1  a board not back on ADB in time, failed (no Loader mode on its port in time, left Loader mode
-     before a write, a failing WL - the board is then left in Loader mode and its lines name the
-     addressed retry: upgrade_tool -s <LocationID> WL ... per missing partition, then
+     before a write, a failing WL or (--verify) a read-back that differs - the board is then
+     left in Loader mode and its lines name the addressed retry: upgrade_tool -s <LocationID> WL ... per missing partition, then
      upgrade_tool -s <LocationID> RD; --serial only once upgrade_tool LD lists it as the ONLY
      device in download mode - or RD, MASKROM instead of Loader: flashed alone with --serial only
      once upgrade_tool LD lists it as the ONLY device in download mode, and MASKROM mode writes
@@ -592,7 +601,7 @@ const char* const kPullFlashHelp = R"HELP(su-fw pull-flash - pull, flash and upd
 
 Usage: su-fw pull-flash [--target TARGET] [pull options] [--package FILE] [--role rx|tx]
                         [--serial SERIAL] [--layout MTDPARTS] [--all] [--profile ID] [--force-layout]
-                        [--force-loader-partitions] [--confirm-soc-power] [options]
+                        [--force-loader-partitions] [--confirm-soc-power] [--verify] [options]
 
 pull (skipped when unchanged) -> flash-soc with every partition -> wait for the board on ADB ->
 read the CC1310's version -> mcu-update when --package is given and its version differs from the
@@ -622,6 +631,10 @@ const char* const kPullFlashOptionsHelp = R"HELP(  --package FILE       The CC13
   --confirm-soc-power  The CC1310 of the Stacked core holds the SoC's power (SOC_PWR_EN); its reset
                        into the bootloader can switch the SoC off. Confirm once the carrier's CC1310
                        bootloader is known to hold it (the 14 Oct 2026 build or later).
+  --verify             After every partition written, read it back (upgrade_tool RL) and compare
+                       it with the image byte for byte; a difference fails the flash (the board is
+                       left in Loader mode, nothing is written again). Costs about one read per
+                       write.
 )HELP";
 
 const char* const kPullFlashTail = R"HELP(
@@ -859,6 +872,8 @@ struct FirmwareCli::Private
         // ---- the inventory (v0.8.0) ----
         QString expectImage;        ///< --expect-image: the MD5 (lower case) a named board should already run; "" = no check
         bool force = false;         ///< --force: write such a board all the same
+        // ---- verify after write (v0.8.0) ----
+        bool verify = false;        ///< --verify: every partition written is read back and compared
     };
 
     FirmwareCli* q;
@@ -918,6 +933,7 @@ struct FirmwareCli::Private
 
     QJsonObject resultFields;
     QString resultMessage;
+    QJsonArray verifiedRows;         ///< (v0.8.0) the single-board flasher's read-back verdicts, in order
 
     // ---- Run framing ---------------------------------------------------------------------------------
     void beginRun(QIODevice* out, QIODevice* err);
@@ -969,6 +985,7 @@ struct FirmwareCli::Private
     void flushRecorderLines();
     void logImageMd5();
     int checkExpectedImage(const QStringList& serials, const QStringList& names);
+    void insertVerifyFields();
 
     // ---- Commands --------------------------------------------------------------------------------------
     int runCommand();
@@ -1030,6 +1047,7 @@ void FirmwareCli::Private::beginRun(QIODevice* out, QIODevice* err)
     secretUsed = false;
     resultFields = QJsonObject();
     resultMessage.clear();
+    verifiedRows = QJsonArray();
 }
 
 void FirmwareCli::Private::endRun()
@@ -1210,6 +1228,7 @@ QString FirmwareCli::Private::parseInputs(const QCommandLineParser& parser)
     opts.forceLayout = isSet("force-layout");
     opts.forceLoaderPartitions = isSet("force-loader-partitions");
     opts.confirmSocPower = isSet("confirm-soc-power");
+    opts.verify = isSet("verify");   // (v0.8.0) flash-soc (one board or a fleet) and pull-flash
     opts.cache = isSet("cache") ? QDir::fromNativeSeparators(value("cache")) : settings.firmwareCacheDirectory();
     if (isSet("cache") && opts.cache.isEmpty()) {
         return QStringLiteral("--cache needs a folder");
@@ -1780,6 +1799,9 @@ void FirmwareCli::Private::onBoardFinished(const FleetBoard& board)
                         {QStringLiteral("mappingSeconds"), seconds(board.mappingSeconds)},
                         {QStringLiteral("writingSeconds"), seconds(board.writingSeconds)},
                         {QStringLiteral("written"), QJsonArray::fromStringList(board.written)},
+                        {QStringLiteral("verified"), QJsonArray::fromStringList(board.verified)},   // (v0.8.0)
+                        {QStringLiteral("verifyFailed"), board.verifyFailed},
+                        {QStringLiteral("verifyMismatch"), static_cast<double>(board.verifyMismatch)},
                         {QStringLiteral("retry"), QJsonArray::fromStringList(board.retry)},
                         {QStringLiteral("adbBack"), board.adbBack},
                         {QStringLiteral("text"), text}}));
@@ -1853,6 +1875,16 @@ void FirmwareCli::Private::createJob()
     j->setForceLayout(opts.forceLayout);
     j->setForceLoaderPartitions(opts.forceLoaderPartitions);
     j->setConfirmSocPower(opts.confirmSocPower);
+    // (v0.8.0) Verify after write: the flag before the operation; the single board's verdicts are
+    // collected for the done object (a fleet's are in its report's boards).
+    j->setVerifyAfterWrite(opts.verify);
+    QObject::connect(j, &FirmwareJob::partitionVerified, q, [this](const ReadBackResult& result) {
+        verifiedRows.append(QJsonObject{{QStringLiteral("name"), result.name},
+                                        {QStringLiteral("ok"), result.ok},
+                                        {QStringLiteral("bytes"), static_cast<double>(result.bytes)},
+                                        {QStringLiteral("mismatch"), static_cast<double>(result.mismatchOffset)},
+                                        {QStringLiteral("seconds"), qRound(result.milliseconds / 100.0) / 10.0}});
+    });
     // (v0.8.0) The inventory: what this run learns about its board(s) is recorded in the app's data
     // folder (the file the tab writes too); a recorder that cannot write never fails the command.
     recorder = std::make_unique<InventoryRecorder>(j);
@@ -2242,6 +2274,16 @@ void FirmwareCli::Private::logImageMd5()
     resultFields.insert(QStringLiteral("imageMd5"), md5);
 }
 
+void FirmwareCli::Private::insertVerifyFields()
+{
+    // "verify" always; "verified" only with --verify and the partition writes (MASKROM's UF checks
+    // itself and reads nothing back: its done object carries "verify" alone).
+    resultFields.insert(QStringLiteral("verify"), opts.verify);
+    if (opts.verify && job->socFlasher()->flashMethod() == SocFlasher::FlashMethod::PartitionWrites) {
+        resultFields.insert(QStringLiteral("verified"), verifiedRows);
+    }
+}
+
 int FirmwareCli::Private::checkExpectedImage(const QStringList& serials, const QStringList& names)
 {
     // The inventory file alone: no tool, no lock of the job - a refused run has done nothing.
@@ -2498,6 +2540,7 @@ int FirmwareCli::Private::cmdFlashSoc()
     resultFields.insert(QStringLiteral("method"), method == SocFlasher::FlashMethod::PartitionWrites   ? QStringLiteral("partition-writes")
                                                   : method == SocFlasher::FlashMethod::UpgradeFirmware ? QStringLiteral("upgrade-firmware")
                                                                                                        : QString());
+    insertVerifyFields();
     if (!job->boardInfo().isEmpty()) {
         resultFields.insert(QStringLiteral("boardInfo"), job->boardInfo());
     }
@@ -2685,6 +2728,7 @@ int FirmwareCli::Private::cmdPullFlash()
     if (!job->imagePath().isEmpty()) {
         insertImageFields();
     }
+    insertVerifyFields();
     if (!job->boardInfo().isEmpty()) {
         resultFields.insert(QStringLiteral("boardInfo"), job->boardInfo());
     }

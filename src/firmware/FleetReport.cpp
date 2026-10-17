@@ -82,6 +82,28 @@ QString detailCell(const FleetBoard& board)
     return text;
 }
 
+/// (v0.8.0) The "verify" cell of the real run's table: "-" when the run did not verify or the board
+/// wrote nothing, "FAIL <row>" when a read-back failed (the detail says why), "ok" when every row
+/// in `written` was read back equal.
+QString verifyCell(const FleetBoard& board, bool verified)
+{
+    if (!verified) {
+        return QStringLiteral("-");
+    }
+    if (!board.verifyFailed.isEmpty()) {
+        return QStringLiteral("FAIL ") + board.verifyFailed;
+    }
+    if (board.written.isEmpty()) {
+        return QStringLiteral("-");
+    }
+    for (const QString& row : board.written) {
+        if (!board.verified.contains(row)) {
+            return QStringLiteral("-");
+        }
+    }
+    return QStringLiteral("ok");
+}
+
 QString unattributedSuffix(qsizetype count)
 {
     if (count <= 0) {
@@ -124,6 +146,7 @@ void FleetReport::setStop(const QString& reason) { m_stop = reason; }
 void FleetReport::setResetCount(int boards) { m_resetCount = boards; }
 void FleetReport::setUnattributed(const QList<FleetFlasher::UnattributedDevice>& devices) { m_unattributed = devices; }
 void FleetReport::setAborted(bool aborted) { m_aborted = aborted; }
+void FleetReport::setVerifyAfterWrite(bool on) { m_verifyAfterWrite = on; }
 
 QList<FleetBoard> FleetReport::boards() const { return m_boards; }
 bool FleetReport::dryRun() const { return m_dryRun; }
@@ -137,6 +160,7 @@ QString FleetReport::stop() const { return m_stop; }
 int FleetReport::resetCount() const { return m_resetCount; }
 QList<FleetFlasher::UnattributedDevice> FleetReport::unattributed() const { return m_unattributed; }
 bool FleetReport::aborted() const { return m_aborted; }
+bool FleetReport::verifyAfterWrite() const { return m_verifyAfterWrite; }
 
 // ---------------------------------------------------------------------------------------------
 // What the user reads
@@ -232,12 +256,12 @@ QStringList FleetReport::tableLines() const
         return alignColumns(rows);
     }
     rows.append({QStringLiteral("board"), QStringLiteral("serial"), QStringLiteral("port"), QStringLiteral("loader"),
-                 QStringLiteral("result"), QStringLiteral("mapping"), QStringLiteral("writing"), QStringLiteral("seconds"),
-                 QStringLiteral("detail")});
+                 QStringLiteral("result"), QStringLiteral("mapping"), QStringLiteral("writing"), QStringLiteral("verify"),
+                 QStringLiteral("seconds"), QStringLiteral("detail")});
     for (const FleetBoard& board : m_boards) {
         rows.append({board.tag, board.serial, orDash(board.port), orDash(board.locationId), board.resultText(),
-                     secondsCell(board.mappingSeconds), secondsCell(board.writingSeconds), secondsCell(board.seconds),
-                     detailCell(board)});
+                     secondsCell(board.mappingSeconds), secondsCell(board.writingSeconds), verifyCell(board, m_verifyAfterWrite),
+                     secondsCell(board.seconds), detailCell(board)});
     }
     return alignColumns(rows);
 }
@@ -258,6 +282,9 @@ QJsonObject FleetReport::boardJson(const FleetBoard& board)
                        {QStringLiteral("writingSeconds"), jsonSeconds(board.writingSeconds)},
                        {QStringLiteral("detail"), board.detail},
                        {QStringLiteral("written"), QJsonArray::fromStringList(board.written)},
+                       {QStringLiteral("verified"), QJsonArray::fromStringList(board.verified)},   // (v0.8.0)
+                       {QStringLiteral("verifyFailed"), board.verifyFailed},
+                       {QStringLiteral("verifyMismatch"), static_cast<double>(board.verifyMismatch)},
                        {QStringLiteral("retry"), QJsonArray::fromStringList(board.retry)},
                        {QStringLiteral("adbBack"), board.adbBack},
                        {QStringLiteral("leftInLoader"), board.leftInLoader},
@@ -293,6 +320,7 @@ QJsonObject FleetReport::json() const
     }
     return QJsonObject{{QStringLiteral("fleet"), true},
                        {QStringLiteral("dryRun"), m_dryRun},
+                       {QStringLiteral("verify"), m_verifyAfterWrite},   // (v0.8.0)
                        {QStringLiteral("image"), QDir::toNativeSeparators(m_image)},
                        {QStringLiteral("partitions"), QJsonArray::fromStringList(m_partitions)},
                        {QStringLiteral("maxParallel"), m_maxParallel},

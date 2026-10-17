@@ -562,7 +562,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+391"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+394"/>
         <source>SSH: %1</source>
         <translation>SSH：%1</translation>
     </message>
@@ -587,7 +587,7 @@
         <translation>正在拉取 update.img：%1</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+45"/>
         <source>Flashing SoC: %1 %2 %</source>
         <translation>正在刷写 SoC：%1 %2 %</translation>
     </message>
@@ -597,7 +597,7 @@
         <translation>正在刷写 SoC：%1</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+18"/>
         <source>Board information:</source>
         <translation>开发板信息：</translation>
     </message>
@@ -677,7 +677,7 @@
         <translation>未找到开发板：请按住 MASKROM 按键再插入 USB-C 线（或在按住时给开发板重新上电）；最多等待 %1 秒</translation>
     </message>
     <message>
-        <location line="+130"/>
+        <location line="+136"/>
         <source>image: %1, chip tag %2, built %3</source>
         <translation>镜像：%1，芯片标签 %2，构建于 %3</translation>
     </message>
@@ -829,12 +829,12 @@
     </message>
     <message>
         <location line="+16"/>
-        <location line="+1116"/>
+        <location line="+1118"/>
         <source>another firmware operation is running (%1)</source>
         <translation>另一个固件操作正在运行（%1）</translation>
     </message>
     <message>
-        <location line="-1110"/>
+        <location line="-1112"/>
         <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
         <translation>无法创建锁文件 %1：本机上的另一个固件操作将无法被察觉</translation>
     </message>
@@ -885,8 +885,8 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+350"/>
-        <location line="+106"/>
+        <location line="+351"/>
+        <location line="+107"/>
         <location line="+112"/>
         <location line="+36"/>
         <location line="+226"/>
@@ -896,7 +896,7 @@
         <translation>已取消</translation>
     </message>
     <message>
-        <location line="-851"/>
+        <location line="-853"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>与 %1 的连接已关闭</translation>
@@ -913,7 +913,7 @@
     </message>
     <message>
         <location line="+42"/>
-        <location line="+180"/>
+        <location line="+181"/>
         <source>no image: pull one or choose a local image first</source>
         <translation>没有镜像：请先拉取或选择本地镜像</translation>
     </message>
@@ -1029,7 +1029,7 @@
         <translation>同时写入的开发板数量必须为 0（全部）到 64，而不是 %1</translation>
     </message>
     <message>
-        <location line="+74"/>
+        <location line="+75"/>
         <source>Flashing fleet: starting...</source>
         <translation>正在批量刷写：启动中...</translation>
     </message>
@@ -1177,7 +1177,7 @@
         <translation>正在取消 %1</translation>
     </message>
     <message>
-        <location line="-2472"/>
+        <location line="-2490"/>
         <source>image profile: unknown (no chip tag or env.img layout matched a profile)</source>
         <translation>镜像型号：未知（芯片标签和 env.img 布局都不匹配任何型号）</translation>
     </message>
@@ -1187,7 +1187,7 @@
         <translation>镜像型号：%1 - %2</translation>
     </message>
     <message>
-        <location line="+2513"/>
+        <location line="+2531"/>
         <source>Roll back failed: %1</source>
         <translation>回滚失败：%1</translation>
     </message>
@@ -1210,12 +1210,12 @@
 <context>
     <name>FirmwareTab</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+644"/>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+648"/>
         <source>Choose the Local Image Cache</source>
         <translation>选择本地镜像缓存</translation>
     </message>
     <message>
-        <location line="+127"/>
+        <location line="+135"/>
         <source>Write anyway?</source>
         <translation>仍然写入？</translation>
     </message>
@@ -1316,12 +1316,12 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+13"/>
+        <location line="+17"/>
         <source>Image:</source>
         <translation>镜像：</translation>
     </message>
     <message>
-        <location line="-12"/>
+        <location line="-16"/>
         <source>Roll back</source>
         <translation>回滚</translation>
     </message>
@@ -1362,6 +1362,11 @@
     </message>
     <message>
         <location line="+1"/>
+        <source>Read every partition back after it was written (upgrade_tool RL) and compare it with the image byte for byte; a difference fails the flash and leaves the board in Loader mode with nothing else written. Costs about one read per write; MASKROM mode (UF) checks the image itself</source>
+        <translation>写入每个分区后立即回读（upgrade_tool RL）并与镜像逐字节比较；不一致时刷写失败，开发板停留在 Loader 模式，不会再写入任何内容。大约多花一次读取的时间；MASKROM 模式（UF）由工具自行校验镜像</translation>
+    </message>
+    <message>
+        <location line="+4"/>
         <source>Install drivers</source>
         <translation>安装驱动</translation>
     </message>
@@ -1432,12 +1437,12 @@
     </message>
     <message>
         <location line="+3"/>
-        <location line="+732"/>
+        <location line="+736"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="-731"/>
+        <location line="-735"/>
         <source>Stop the running step (not while upgrade_tool writes the flash)</source>
         <translation>停止当前步骤（upgrade_tool 写入闪存期间不可停止）</translation>
     </message>
@@ -1552,12 +1557,12 @@
         <translation>就绪</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+60"/>
         <source>Firmware</source>
         <translation>固件</translation>
     </message>
     <message>
-        <location line="+360"/>
+        <location line="+361"/>
         <source>no image yet: pull one from the build machine or use a local image</source>
         <translation>还没有镜像：请从构建机拉取或使用本地镜像</translation>
     </message>
@@ -1679,7 +1684,7 @@
         <translation>未知</translation>
     </message>
     <message>
-        <location line="+61"/>
+        <location line="+62"/>
         <source>upgrade_tool: %1</source>
         <translation>upgrade_tool：%1</translation>
     </message>
@@ -1689,8 +1694,8 @@
         <translation>adb：%1</translation>
     </message>
     <message>
-        <location line="-146"/>
-        <location line="+249"/>
+        <location line="-147"/>
+        <location line="+250"/>
         <source>Firmware Update</source>
         <translation>固件更新</translation>
     </message>
@@ -1715,22 +1720,22 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>否，使用 MASKROM 按键</translation>
     </message>
     <message>
-        <location line="-1730"/>
+        <location line="-1750"/>
         <source>to the end</source>
         <translation>直到末尾</translation>
     </message>
     <message>
-        <location line="+242"/>
+        <location line="+246"/>
         <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
         <translation>已记住上次会话的角色 %1：请点击该角色或按“读取”进行确认</translation>
     </message>
     <message>
-        <location line="+500"/>
+        <location line="+511"/>
         <source>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</source>
         <translation>通过 USB-C 线缆将镜像写入 Rockchip SoC：Loader 模式写入勾选的分区，MASKROM 模式写入整个镜像</translation>
     </message>
     <message>
-        <location line="+608"/>
+        <location line="+612"/>
         <source>layout from the board</source>
         <translation>布局来自开发板</translation>
     </message>
@@ -1790,7 +1795,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>镜像型号：未知</translation>
     </message>
     <message>
-        <location line="+406"/>
+        <location line="+407"/>
         <source>Choose a Rockchip Update Image</source>
         <translation>选择 Rockchip 更新镜像</translation>
     </message>
@@ -1853,12 +1858,12 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
 <context>
     <name>FleetFlasher</name>
     <message>
-        <location filename="../src/firmware/FleetFlasher.cpp" line="+132"/>
+        <location filename="../src/firmware/FleetFlasher.cpp" line="+133"/>
         <source>internal: unaddressed write refused</source>
         <translation>内部错误：已拒绝未指定地址的写入</translation>
     </message>
     <message>
-        <location line="+131"/>
+        <location line="+132"/>
         <source>no change on the USB bus yet: the board is still on ADB</source>
         <translation>USB 总线上尚无变化：开发板仍在 ADB 上</translation>
     </message>
@@ -1918,7 +1923,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>在端口 %1 上处于 Loader 模式，LocationID %2</translation>
     </message>
     <message>
-        <location line="+242"/>
+        <location line="+245"/>
         <source>  could not run: %1</source>
         <translation>  无法运行：%1</translation>
     </message>
@@ -2311,12 +2316,12 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+151"/>
-        <location line="+533"/>
+        <location line="+731"/>
         <source>port %1 shows %2</source>
         <translation>端口 %1 显示 %2</translation>
     </message>
     <message>
-        <location line="-508"/>
+        <location line="-706"/>
         <source>cancelled before its write started; reset back to ADB</source>
         <translation>在开始写入之前已取消；已复位回 ADB</translation>
     </message>
@@ -2357,18 +2362,18 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+7"/>
-        <location line="+915"/>
+        <location line="+1113"/>
         <source>; it is in Loader mode now (port %1, LocationID %2)</source>
         <translation>；它现在处于 Loader 模式（端口 %1，LocationID %2）</translation>
     </message>
     <message>
-        <location line="-914"/>
-        <location line="+918"/>
+        <location line="-1112"/>
+        <location line="+1116"/>
         <source>; it is in Loader mode now (port %1)</source>
         <translation>；它现在处于 Loader 模式（端口 %1）</translation>
     </message>
     <message>
-        <location line="-914"/>
+        <location line="-1112"/>
         <source>a Loader device appeared late %1 and belongs to no mapped board</source>
         <translation>有 Loader 设备迟到出现 %1，不属于任何已映射的开发板</translation>
     </message>
@@ -2384,19 +2389,19 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+1"/>
-        <location line="+527"/>
+        <location line="+725"/>
         <source>no output</source>
         <translation>无输出</translation>
     </message>
     <message>
-        <location line="-533"/>
+        <location line="-731"/>
         <location line="+124"/>
-        <location line="+406"/>
+        <location line="+604"/>
         <source>timed out</source>
         <translation>超时</translation>
     </message>
     <message>
-        <location line="-1730"/>
+        <location line="-1928"/>
         <source>an ADB device</source>
         <translation>一个 ADB 设备</translation>
     </message>
@@ -2476,12 +2481,17 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>分区已写入，但开发板在复位前离开了 Loader 模式（%1）：批量刷写未复位它；请手动检查</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+28"/>
+        <source>Verifying %1 (%2 of %3)</source>
+        <translation>正在校验 %1（第 %2 个，共 %3 个）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Writing %1 (%2 of %3)</source>
         <translation>正在写入 %1（第 %2 个，共 %3 个）</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+23"/>
         <source>cannot create the working folder %1: nothing written for it</source>
         <translation>无法创建工作文件夹 %1：未向它写入任何内容</translation>
     </message>
@@ -2491,7 +2501,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>正在写入 %1（第 %2 个，共 %3 个）：%4（%5 字节），起始扇区 %6，分区共 %7 个扇区</translation>
     </message>
     <message>
-        <location line="+80"/>
+        <location line="+83"/>
         <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
         <translation>upgrade_tool 已 %1 分钟没有输出；它仍保持运行，因为中途停止需要通过 MASKROM 恢复（如果它确实卡死，请手动结束 upgrade_tool 进程）</translation>
     </message>
@@ -2502,21 +2512,63 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+1"/>
+        <location line="+120"/>
         <source>no output (exit code %1)</source>
         <translation>无输出（退出码 %1）</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-102"/>
         <source>%1 written: %2 bytes in %3 s</source>
         <translation>%1 已写入：%2 字节，用时 %3 秒</translation>
     </message>
     <message>
+        <location line="+32"/>
+        <source>verifying %1: reading %2 sectors back from sector %3 (upgrade_tool -s %4 RL)</source>
+        <translation>正在校验 %1：从扇区 %3 回读 %2 个扇区（upgrade_tool -s %4 RL）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>cannot write %1</source>
+        <translation>无法写入 %1</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>verifying %1 failed: %2</source>
+        <translation>校验 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>cannot run upgrade_tool: %1</source>
+        <translation>无法运行 upgrade_tool：%1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>%1 verified: %2 bytes read back equal the image (%3 s)</source>
+        <translation>%1 已校验：回读的 %2 字节与镜像一致（%3 秒）</translation>
+    </message>
+    <message>
         <location line="+19"/>
+        <source>byte %1 of the image differs (flash offset 0x%2): read 0x%3, image 0x%4</source>
+        <translation>镜像的第 %1 字节不一致（闪存偏移 0x%2）：读到 0x%3，镜像为 0x%4</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>upgrade_tool RL read %1 of %2 bytes (short read)</source>
+        <translation>upgrade_tool RL 只读到 %2 字节中的 %1 字节（读取不足）</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>No found specific rockusb device! (LocationID %1 is gone)</source>
+        <translation>No found specific rockusb device!（LocationID %1 已不存在）</translation>
+    </message>
+    <message>
+        <location line="+28"/>
         <source>writing %1 failed: No found specific rockusb device! (LocationID %2 is gone)</source>
         <translation>写入 %1 失败：No found specific rockusb device!（LocationID %2 已不存在）</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="-16"/>
+        <location line="+18"/>
         <location line="+381"/>
         <source>port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s</source>
         <translation>端口 %1 显示 %2：重试之前请先用 `upgrade_tool LD` 找到它的 LocationID，并用 -s 指定地址</translation>
@@ -2612,7 +2664,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>仍在端口 %1 上处于 Loader 模式，LocationID %2：请用 `%3` 手动复位（命令见下方）</translation>
     </message>
     <message>
-        <location line="+164"/>
+        <location line="+167"/>
         <source>port mapping not available on this platform</source>
         <translation>本平台不支持端口映射</translation>
     </message>
@@ -2620,7 +2672,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
 <context>
     <name>FleetReport</name>
     <message>
-        <location filename="../src/firmware/FleetReport.cpp" line="+90"/>
+        <location filename="../src/firmware/FleetReport.cpp" line="+112"/>
         <source>; 1 Loader device left unattributed</source>
         <translation>；1 个 Loader 设备未能归属</translation>
     </message>
@@ -2630,7 +2682,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>；%1 个 Loader 设备未能归属</translation>
     </message>
     <message>
-        <location line="+98"/>
+        <location line="+100"/>
         <source>; nothing was written</source>
         <translation>；未写入任何内容</translation>
     </message>
@@ -3001,6 +3053,29 @@ Only replace the stored key if you are sure the change is expected.</source>
         <location line="+37"/>
         <source>There is no previous image to go back to</source>
         <translation>没有可回退的上一版镜像</translation>
+    </message>
+</context>
+<context>
+    <name>InventoryRecorder</name>
+    <message>
+        <location filename="../src/firmware/InventoryRecorder.cpp" line="+237"/>
+        <source>inventory: the board in Loader mode has no serial; not recorded</source>
+        <translation>清单：Loader 模式下的开发板没有序列号；未记录</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>inventory: cannot write %1: %2</source>
+        <translation>清单：无法写入 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>inventory: %1 was unreadable and moved to %2</source>
+        <translation>清单：%1 无法读取，已移到 %2</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>inventory: board %1 recorded (%2)</source>
+        <translation>清单：已记录开发板 %1（%2）</translation>
     </message>
 </context>
 <context>
@@ -5448,19 +5523,20 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>RockchipTool</name>
     <message>
-        <location line="+259"/>
+        <location line="+292"/>
         <source>no firmware image selected</source>
         <translation>未选择固件镜像</translation>
     </message>
     <message>
         <location line="+8"/>
         <location line="+56"/>
-        <location line="+243"/>
+        <location line="+52"/>
+        <location line="+400"/>
         <source>cannot read %1: %2</source>
         <translation>无法读取 %1：%2</translation>
     </message>
     <message>
-        <location line="-297"/>
+        <location line="-506"/>
         <source>no firmware image at %1</source>
         <translation>%1 处没有固件镜像</translation>
     </message>
@@ -5485,7 +5561,13 @@ Nothing is saved until you press OK.</source>
         <translation>头部不完整</translation>
     </message>
     <message>
-        <location line="+229"/>
+        <location line="+69"/>
+        <location line="+14"/>
+        <source>short read: %1 of %2 bytes</source>
+        <translation>读取不足：%2 字节中只读到 %1 字节</translation>
+    </message>
+    <message>
+        <location line="+355"/>
         <source>no package-file in %1: the image was not unpacked</source>
         <translation>%1 中没有 package-file：镜像未被解包</translation>
     </message>
@@ -6292,7 +6374,7 @@ Nothing is saved until you press OK.</source>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+332"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+420"/>
         <source>  could not run: %1</source>
         <translation>  无法运行：%1</translation>
     </message>
@@ -6357,7 +6439,7 @@ Nothing is saved until you press OK.</source>
         <translation>没有工具运行器</translation>
     </message>
     <message>
-        <location line="+87"/>
+        <location line="+97"/>
         <source>cannot cancel while upgrade_tool writes the flash</source>
         <translation>upgrade_tool 写入闪存期间无法取消</translation>
     </message>
@@ -6367,18 +6449,18 @@ Nothing is saved until you press OK.</source>
         <translation>已停止等待 ADB；镜像已写入</translation>
     </message>
     <message>
-        <location line="-202"/>
-        <location line="+210"/>
+        <location line="-212"/>
+        <location line="+220"/>
         <source>cancelled</source>
         <translation>已取消</translation>
     </message>
     <message>
-        <location line="-947"/>
+        <location line="-986"/>
         <source>several rockusb devices are in download mode (LocationIDs %1): the single-board flow writes unaddressed and cannot tell them apart; reset the ones that are not this board with `upgrade_tool -s &lt;id&gt; RD`, or flash them as a fleet with --serials</source>
         <translation>有多个 rockusb 设备处于下载模式（LocationID %1）：单板流程的写入不带地址，无法区分它们；请用 `upgrade_tool -s &lt;id&gt; RD` 复位不是本开发板的设备，或用 --serials 按批量方式刷写</translation>
     </message>
     <message>
-        <location line="+993"/>
+        <location line="+1032"/>
         <source>no usable board: %1</source>
         <translation>没有可用的开发板：%1</translation>
     </message>
@@ -6393,7 +6475,7 @@ Nothing is saved until you press OK.</source>
         <translation>未知内核</translation>
     </message>
     <message>
-        <location line="+103"/>
+        <location line="+104"/>
         <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
         <translation>在 ADB、MASKROM 或 Loader 模式下都找不到开发板：请通过会话发送 &apos;reboot loader&apos;，或按住 MASKROM 并重新插拔数据线</translation>
     </message>
@@ -6419,29 +6501,31 @@ Nothing is saved until you press OK.</source>
         <translation>开发板已刷写，但 ADB 未在 %1 秒内恢复；请检查串口控制台</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+256"/>
         <source>flashing %1 (%2 mode)</source>
         <translation>正在刷写 %1（%2 模式）</translation>
     </message>
     <message>
-        <location line="+61"/>
+        <location line="+73"/>
         <source>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</source>
         <translation>upgrade_tool 已 %1 分钟没有输出；它仍保持运行，因为中途停止需要通过 MASKROM 恢复（如果它确实卡死，请手动结束 upgrade_tool 进程）</translation>
     </message>
     <message>
-        <location line="-571"/>
-        <location line="+599"/>
-        <location line="+237"/>
+        <location line="-817"/>
+        <location line="+846"/>
+        <location line="+275"/>
+        <location line="+81"/>
+        <location line="+37"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>无法运行 upgrade_tool：%1</translation>
     </message>
     <message>
-        <location line="-1633"/>
+        <location line="-2124"/>
         <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
         <translation>分区布局未知：请先让开发板正常启动一次以便通过 ADB 读取，或在 MASKROM 模式下刷写</translation>
     </message>
     <message>
-        <location line="+756"/>
+        <location line="+844"/>
         <source>cannot create the folder %1 to unpack the image in</source>
         <translation>无法创建用于解包镜像的文件夹 %1</translation>
     </message>
@@ -6462,11 +6546,12 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
+        <location line="+673"/>
         <source>exit code %1</source>
         <translation>退出码 %1</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="-657"/>
         <source>the image lists no partition images</source>
         <translation>镜像中没有列出任何分区镜像</translation>
     </message>
@@ -6486,7 +6571,7 @@ Nothing is saved until you press OK.</source>
         <translation>%1 个分区镜像，%2 个在布局中</translation>
     </message>
     <message>
-        <location line="+234"/>
+        <location line="+245"/>
         <source>partition layout of the board: %1</source>
         <translation>开发板的分区布局：%1</translation>
     </message>
@@ -6501,12 +6586,12 @@ Nothing is saved until you press OK.</source>
         <translation>开发板的 /proc/cmdline 中没有 mtdparts</translation>
     </message>
     <message>
-        <location line="+207"/>
+        <location line="+430"/>
         <source>MASKROM mode: writing the whole image with upgrade_tool UF</source>
         <translation>MASKROM 模式：使用 upgrade_tool UF 写入整个镜像</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+7"/>
         <source>the partition selection (%1) is ignored: UF writes every partition</source>
         <translation>已忽略分区选择（%1）：UF 会写入所有分区</translation>
     </message>
@@ -6516,18 +6601,111 @@ Nothing is saved until you press OK.</source>
         <translation>Loader 模式：与 SocToolKit 的下载页面一样，使用 upgrade_tool WL 逐个分区写入（不做芯片校验）</translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+87"/>
         <source>upgrade_tool did not report success: %1</source>
         <translation>upgrade_tool 未报告成功：%1</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <location line="+276"/>
+        <location line="-231"/>
+        <location line="+232"/>
+        <location line="+496"/>
         <source>no output</source>
         <translation>无输出</translation>
     </message>
     <message>
-        <location line="-273"/>
+        <location line="-803"/>
+        <source>the remembered layout is a %1&apos;s; the board&apos;s Loader PID %2 says %3: reading the board&apos;s own</source>
+        <translation>记住的布局属于 %1；开发板的 Loader PID %2 表明它是 %3：改为读取开发板自己的布局</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>upgrade_tool LD printed no LocationID for it</source>
+        <translation>upgrade_tool LD 没有给出它的 LocationID</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>reading the flash layout of the board in Loader mode (env partition, upgrade_tool RL 0 128)</source>
+        <translation>正在读取 Loader 模式下开发板的闪存布局（env 分区，upgrade_tool RL 0 128）</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+45"/>
+        <location line="+556"/>
+        <source>cannot write %1</source>
+        <translation>无法写入 %1</translation>
+    </message>
+    <message>
+        <location line="-596"/>
+        <location line="+33"/>
+        <location line="+41"/>
+        <location line="+25"/>
+        <source>not started: %1</source>
+        <translation>未能启动：%1</translation>
+    </message>
+    <message>
+        <location line="-98"/>
+        <location line="+74"/>
+        <location line="+544"/>
+        <source>no device address</source>
+        <translation>没有设备地址</translation>
+    </message>
+    <message>
+        <location line="-583"/>
+        <source>exit code %1: %2</source>
+        <translation>退出码 %1：%2</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>no mtdparts in the env partition</source>
+        <translation>env 分区中没有 mtdparts</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>an unreadable mtdparts in the env partition: %1</source>
+        <translation>env 分区中的 mtdparts 无法解析：%1</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>partition layout of the board (env partition read in Loader mode): %1</source>
+        <translation>开发板的分区布局（在 Loader 模式下读取的 env 分区）：%1</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>the env partition of the board holds no usable layout (%1); reading the partition table instead (upgrade_tool PL)</source>
+        <translation>开发板的 env 分区中没有可用的布局（%1）；改为读取分区表（upgrade_tool PL）</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>upgrade_tool PL timed out</source>
+        <translation>upgrade_tool PL 超时</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>no partition line</source>
+        <translation>没有分区行</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>partition layout of the board (upgrade_tool PL): %1</source>
+        <translation>开发板的分区布局（upgrade_tool PL）：%1</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>the board&apos;s layout could not be read in Loader mode: %1</source>
+        <translation>无法在 Loader 模式下读取开发板的布局：%1</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>verify after writing: not available in MASKROM mode (UF writes and checks the whole image itself)</source>
+        <translation>写入后校验：MASKROM 模式下不可用（UF 自行写入并校验整个镜像）</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>upgrade_tool has printed nothing for %1 min while reading the board&apos;s layout; it is left running (Cancel ends it: a read changes nothing on the board)</source>
+        <translation>读取开发板布局时 upgrade_tool 已 %1 分钟没有输出；让它继续运行（取消可结束它：读取不会改变开发板上的任何内容）</translation>
+    </message>
+    <message>
+        <location line="+45"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok（固件升级成功）</translation>
     </message>
@@ -6542,17 +6720,27 @@ Nothing is saved until you press OK.</source>
         <translation>正在等待镜像解包完成</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+58"/>
         <source>flash layout in use (from the image&apos;s env.img): %1</source>
         <translation>使用的闪存布局（来自镜像的 env.img）：%1</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
+        <source>flash layout in use (from the board&apos;s env partition, read in Loader mode): %1</source>
+        <translation>使用的闪存布局（来自开发板的 env 分区，在 Loader 模式下读取）：%1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>flash layout in use (from upgrade_tool PL in Loader mode): %1</source>
+        <translation>使用的闪存布局（来自 Loader 模式下的 upgrade_tool PL）：%1</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>flash layout in use (from the board): %1</source>
         <translation>使用的闪存布局（来自开发板）：%1</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+11"/>
         <source>skipping %1: not selected</source>
         <translation>跳过 %1：未选择</translation>
     </message>
@@ -6592,7 +6780,7 @@ Nothing is saved until you press OK.</source>
         <translation>正在写入 %2 个分区中的 %1 个（%3 字节）：%4</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+37"/>
         <source>Writing %1 (%2 of %3)</source>
         <translation>正在写入 %1（第 %2 个，共 %3 个）</translation>
     </message>
@@ -6608,11 +6796,57 @@ Nothing is saved until you press OK.</source>
     </message>
     <message>
         <location line="+1"/>
+        <location line="+125"/>
         <source>no output (exit code %1)</source>
         <translation>无输出（退出码 %1）</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="-96"/>
+        <source>no LocationID for the board (upgrade_tool LD printed none): the read-back needs -s</source>
+        <translation>开发板没有 LocationID（upgrade_tool LD 没有给出）：回读需要 -s</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>verifying %1: reading %2 sectors back from sector %3 (upgrade_tool -s %4 RL)</source>
+        <translation>正在校验 %1：从扇区 %3 回读 %2 个扇区（upgrade_tool -s %4 RL）</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Verifying %1 (%2 of %3)</source>
+        <translation>正在校验 %1（第 %2 个，共 %3 个）</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>verifying %1 failed: %2</source>
+        <translation>校验 %1 失败：%2</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>No found specific rockusb device! (LocationID %1 is gone)</source>
+        <translation>No found specific rockusb device!（LocationID %1 已不存在）</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1 verified: %2 bytes read back equal the image (%3 s)</source>
+        <translation>%1 已校验：回读的 %2 字节与镜像一致（%3 秒）</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>byte %1 of the image differs (flash offset 0x%2): read 0x%3, image 0x%4</source>
+        <translation>镜像的第 %1 字节不一致（闪存偏移 0x%2）：读到 0x%3，镜像为 0x%4</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>; the board is left in Loader mode, nothing else is written</source>
+        <translation>；开发板停留在 Loader 模式，不会再写入任何内容</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>upgrade_tool RL read %1 of %2 bytes (short read)</source>
+        <translation>upgrade_tool RL 只读到 %2 字节中的 %1 字节（读取不足）</translation>
+    </message>
+    <message>
+        <location line="+30"/>
         <source>Resetting the board</source>
         <translation>正在复位开发板</translation>
     </message>
@@ -6680,6 +6914,31 @@ Nothing is saved until you press OK.</source>
         <location line="+4"/>
         <source>no board</source>
         <translation>无开发板</translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>the layout given for the board</source>
+        <translation>为开发板指定的布局</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the board&apos;s /proc/cmdline</source>
+        <translation>开发板的 /proc/cmdline</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the image&apos;s env.img</source>
+        <translation>镜像的 env.img</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>upgrade_tool PL in Loader mode</source>
+        <translation>Loader 模式下的 upgrade_tool PL</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>the board&apos;s env partition, read in Loader mode</source>
+        <translation>开发板的 env 分区（在 Loader 模式下读取）</translation>
     </message>
 </context>
 <context>

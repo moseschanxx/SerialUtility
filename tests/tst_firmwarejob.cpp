@@ -216,6 +216,7 @@ class Tst_firmwarejob : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
 
     // ---- The object and its inputs -------------------------------------------------------
@@ -326,7 +327,9 @@ void Tst_firmwarejob::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("BuildAI-Test"));
-    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwarejob"));
+    // (v0.8.0) The pid in the name: the test-mode data folder (firmware.lock, inventory.json) is this
+    // run's own, so two runs of the suite at once (two build folders) never meet on the lock.
+    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwarejob-%1").arg(QCoreApplication::applicationPid()));
     QVERIFY(m_tempDir.isValid());
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_tempDir.filePath(QStringLiteral("settings")));
@@ -334,6 +337,15 @@ void Tst_firmwarejob::initTestCase()
     QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));   // "78,040" whatever the machine's locale
     qputenv("SU_SSH_IGNORE_CONFIG", "1");   // the SSH connects of this suite must not read ~/.ssh/config
     qunsetenv("SSH_AUTH_SOCK");             // nor offer the developer's agent keys to the test server
+}
+
+void Tst_firmwarejob::cleanupTestCase()
+{
+    // (v0.8.0) The run's own data folder goes with it (its name carries this process's pid).
+    const QString data = AppSettings::dataDirectory();
+    if (QStandardPaths::isTestModeEnabled() && data.endsWith(QStringLiteral("-%1").arg(QCoreApplication::applicationPid()))) {
+        QDir(data).removeRecursively();
+    }
 }
 
 void Tst_firmwarejob::init()

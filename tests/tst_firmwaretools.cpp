@@ -635,6 +635,26 @@ private slots:
     void soc_loaderMetAfterWaitReadsEnv();
     void soc_rememberedLayoutOfOtherProfileIsRead();
 
+    // ---- RockchipTool / SocFlasher: verify after write (v0.8.0, verify-rl) ----------------------
+    void rockchip_compareReadBackEqual();
+    void rockchip_compareReadBackMismatch();
+    void rockchip_compareReadBackShort();
+    void rockchip_compareReadBackUnreadable();
+    void rockchip_compareReadBackLarge();
+    void soc_verifyReadsBackEveryRow();
+    void soc_verifySectorCountCeil();
+    void soc_verifyMismatchFails();
+    void soc_verifyShortReadFails();
+    void soc_verifyRlFailsFails();
+    void soc_verifyNoSuchDevice();
+    void soc_verifyOffByDefault();
+    void soc_verifyMaskromNotAvailable();
+    void soc_verifyProgressStage();
+    void soc_verifyUsesTheDetectedLocationId();
+    void soc_verifyJffs2ComparesImageLength();
+    void soc_verifyCancelRefused();
+    void soc_verifyNeverUnaddressed();
+
     // ---- Real board (env-gated; nothing is flashed) ----
     void realBoard_statusAndMcuInfo();
 };
@@ -6206,6 +6226,590 @@ void tst_firmwaretools::soc_rememberedLayoutOfOtherProfileIsRead()
         QCOMPARE(rig.flasher.layoutSource(), SocFlasher::LayoutSource::Owner);
         QVERIFY(!rig.logged(QStringLiteral("the remembered layout is")));
     }
+}
+
+// =============================================================================================
+// RockchipTool / SocFlasher: verify after write (v0.8.0, verify-rl)
+// =============================================================================================
+
+namespace {
+
+using FirmwareFixtures::FakeFlash;
+using FirmwareFixtures::scriptSocFlashWithReadBack;
+
+/// The seven Node rows (kNodePartitions).
+constexpr int kNodeRows = static_cast<int>(sizeof(kNodePartitions) / sizeof(kNodePartitions[0]));
+
+/// `bytes` of a repeating, position-dependent pattern (no two neighbouring blocks alike).
+QByteArray patternBytes(qint64 bytes)
+{
+    QByteArray data(bytes, '\0');
+    for (qint64 k = 0; k < bytes; ++k) {
+        data[k] = static_cast<char>((k * 7 + k / 4096) & 0xFF);
+    }
+    return data;
+}
+
+/// The verify RL of Node partition `p` for the device `id`, the image unpacked into `extractDir`.
+QString verifyRl(const QString& id, const NodePartition& p, const QString& extractDir, qint64 bytes = -1)
+{
+    const qint64 length = bytes >= 0 ? bytes : p.imageBytes;
+    return ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                         {QStringLiteral("-s"), id, QStringLiteral("RL"), QString::number(p.sector),
+                                          QString::number(qMax<qint64>(1, (length + 511) / 512)),
+                                          QDir::toNativeSeparators(extractDir + QStringLiteral("/.verify/") + QLatin1String(p.name)
+                                                                   + QStringLiteral(".img"))});
+}
+
+/// "" when every RL the runner saw carries `-s <number>` and the flash refused no unaddressed one;
+/// else the first offending line (test 18's rule, checked in every verify case).
+QString unaddressedVerifyRead(const FakeFlash& flash, const FakeToolRunner& runner)
+{
+    static const QRegularExpression anyRl(QStringLiteral("^upgrade_tool\\b.*\\sRL\\s"));
+    static const QRegularExpression addressed(QStringLiteral("^upgrade_tool -s \\d+ RL "));
+    for (const QString& command : runner.invocations()) {
+        if (anyRl.match(command).hasMatch() && !addressed.match(command).hasMatch()) {
+            return command;
+        }
+    }
+    return flash.unaddressedReads() == 0 ? QString() : QStringLiteral("an unaddressed RL reached the fake");
+}
+
+/// A FlashRig on FakeFlash: the board in Loader mode at LocationID 104, the Node layout known.
+void installVerifyRig(FlashRig& rig, FakeFlash& flash, const QByteArray& ld = kLdLoader)
+{
+    scriptSocFlashWithReadBack(rig.runner, ld, flash);
+    rig.flasher.setMtdParts(kNodeMtdParts);
+}
+
+/// The byte of the unpacked image `name` at `index` (the extractor's fill).
+quint8 imageByteAt(const QString& extractDir, const char* name, qint64 index)
+{
+    QFile file(extractDir + QLatin1Char('/') + QLatin1String(name) + QStringLiteral(".img"));
+    if (!file.open(QIODevice::ReadOnly) || !file.seek(index)) {
+        return 0;
+    }
+    const QByteArray one = file.read(1);
+    return one.isEmpty() ? quint8(0) : static_cast<quint8>(one.at(0));
+}
+
+QList<int> percentsOf(const QSignalSpy& spy, const QString& stage)
+{
+    QList<int> percents;
+    for (const QList<QVariant>& args : spy) {
+        if (args.at(0).toString() == stage) {
+            percents << args.at(1).toInt();
+        }
+    }
+    return percents;
+}
+
+} // namespace
+
+void tst_firmwaretools::rockchip_compareReadBackEqual()
+{
+    QTemporaryDir dir;
+    const QString image = dir.filePath(QStringLiteral("rootfs.img"));
+    const QString back = dir.filePath(QStringLiteral("back.img"));
+    const QByteArray bytes = patternBytes(4096);
+    QVERIFY(FirmwareFixtures::writeFile(image, bytes));
+    QVERIFY(FirmwareFixtures::writeFile(back, bytes));
+    ReadBackResult result = RockchipTool::compareReadBack(image, back);
+    QVERIFY(result.ok);
+    QCOMPARE(result.bytes, qint64(4096));
+    QCOMPARE(result.mismatchOffset, qint64(-1));
+    QVERIFY(result.error.isEmpty());
+    QVERIFY(result.name.isEmpty());          // the caller's
+    QCOMPARE(result.milliseconds, qint64(0));
+    // A read-back longer than the image (the RL reads whole sectors, the flash is padded): the
+    // compare covers the image's bytes only.
+    QVERIFY(FirmwareFixtures::writeFile(back, bytes + QByteArray(512, '\xff') + QByteArray(100, 'x')));
+    const ReadBackResult padded = RockchipTool::compareReadBack(image, back);
+    QVERIFY(padded.ok);
+    QCOMPARE(padded.bytes, qint64(4096));
+    QVERIFY(padded == result);
+    result.name = QStringLiteral("rootfs");
+    QVERIFY(!(padded == result));
+}
+
+void tst_firmwaretools::rockchip_compareReadBackMismatch()
+{
+    QTemporaryDir dir;
+    const qint64 size = 2 * 1024 * 1024 + 100;   // three blocks of 1 MiB, the last one short
+    const QByteArray bytes = patternBytes(size);
+    const QString image = dir.filePath(QStringLiteral("boot.img"));
+    QVERIFY(FirmwareFixtures::writeFile(image, bytes));
+    const QString back = dir.filePath(QStringLiteral("back.img"));
+    for (const qint64 at : {qint64(0), qint64(1024 * 1024 - 1), qint64(1024 * 1024), size - 1}) {
+        QByteArray read = bytes;
+        read[at] = static_cast<char>(bytes.at(at) ^ 0x5A);
+        QVERIFY(FirmwareFixtures::writeFile(back, read));
+        const ReadBackResult result = RockchipTool::compareReadBack(image, back);
+        QVERIFY2(!result.ok, qPrintable(QString::number(at)));
+        QCOMPARE(result.mismatchOffset, at);
+        QCOMPARE(int(result.readByte), int(static_cast<quint8>(read.at(at))));
+        QCOMPARE(int(result.imageByte), int(static_cast<quint8>(bytes.at(at))));
+        QCOMPARE(result.bytes, size);
+        QVERIFY(result.error.isEmpty());   // compared: no error, a mismatch
+    }
+    // Two differences: the first one is reported.
+    QByteArray twice = bytes;
+    twice[1500000] = static_cast<char>(bytes.at(1500000) ^ 1);
+    twice[700] = static_cast<char>(bytes.at(700) ^ 1);
+    QVERIFY(FirmwareFixtures::writeFile(back, twice));
+    QCOMPARE(RockchipTool::compareReadBack(image, back).mismatchOffset, qint64(700));
+}
+
+void tst_firmwaretools::rockchip_compareReadBackShort()
+{
+    QTemporaryDir dir;
+    const QString image = dir.filePath(QStringLiteral("env.img"));
+    const QString back = dir.filePath(QStringLiteral("back.img"));
+    QVERIFY(FirmwareFixtures::writeFile(image, patternBytes(4096)));
+    QVERIFY(FirmwareFixtures::writeFile(back, patternBytes(1024)));
+    const ReadBackResult result = RockchipTool::compareReadBack(image, back);
+    QVERIFY(!result.ok);
+    QCOMPARE(result.error, QStringLiteral("short read: 1024 of 4096 bytes"));
+    QCOMPARE(result.mismatchOffset, qint64(-1));
+    QCOMPARE(result.bytes, qint64(4096));
+}
+
+void tst_firmwaretools::rockchip_compareReadBackUnreadable()
+{
+    QTemporaryDir dir;
+    const QString image = dir.filePath(QStringLiteral("rootfs.img"));
+    const QString back = dir.filePath(QStringLiteral("missing/back.img"));
+    QVERIFY(FirmwareFixtures::writeFile(image, patternBytes(512)));
+    const ReadBackResult noReadBack = RockchipTool::compareReadBack(image, back);
+    QVERIFY(!noReadBack.ok);
+    QVERIFY2(noReadBack.error.startsWith(QStringLiteral("cannot read %1: ").arg(QDir::toNativeSeparators(back))), qPrintable(noReadBack.error));
+    QCOMPARE(noReadBack.mismatchOffset, qint64(-1));
+    const QString noImagePath = dir.filePath(QStringLiteral("nope.img"));
+    const ReadBackResult noImage = RockchipTool::compareReadBack(noImagePath, image);
+    QVERIFY(!noImage.ok);
+    QVERIFY2(noImage.error.startsWith(QStringLiteral("cannot read %1: ").arg(QDir::toNativeSeparators(noImagePath))), qPrintable(noImage.error));
+}
+
+void tst_firmwaretools::rockchip_compareReadBackLarge()
+{
+    QTemporaryDir dir;
+    const qint64 size = 12 * 1024 * 1024;   // the stacked board's boot partition
+    const QByteArray bytes = patternBytes(size);
+    const QString image = dir.filePath(QStringLiteral("boot.img"));
+    const QString back = dir.filePath(QStringLiteral("back.img"));
+    QVERIFY(FirmwareFixtures::writeFile(image, bytes));
+    QVERIFY(FirmwareFixtures::writeFile(back, bytes));
+    const ReadBackResult equal = RockchipTool::compareReadBack(image, back);
+    QVERIFY(equal.ok);
+    QCOMPARE(equal.bytes, size);
+    QByteArray last = bytes;
+    last[size - 1] = static_cast<char>(bytes.at(size - 1) ^ 0xFF);
+    QVERIFY(FirmwareFixtures::writeFile(back, last));
+    const ReadBackResult flipped = RockchipTool::compareReadBack(image, back);
+    QVERIFY(!flipped.ok);
+    QCOMPARE(flipped.mismatchOffset, size - 1);
+    QCOMPARE(int(flipped.imageByte), int(static_cast<quint8>(bytes.at(size - 1))));
+}
+
+void tst_firmwaretools::soc_verifyReadsBackEveryRow()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    QVERIFY(!rig.flasher.verifyAfterWrite());   // off by default
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.verifyAfterWrite());
+    QSignalSpy verified(&rig.flasher, &SocFlasher::partitionVerified);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    const QString dir = rig.extractDir();
+
+    // WL0 RL0 WL1 RL1 ... WL6 RL6, then RD: every RL addressed to the device LD listed, right after its WL.
+    QStringList expected;
+    for (const NodePartition& p : kNodePartitions) {
+        expected << FlashRig::wlCommand(p, dir) << verifyRl(QStringLiteral("104"), p, dir);
+    }
+    expected << QStringLiteral("upgrade_tool RD");
+    const QStringList commands = rig.runner.invocations();
+    QCOMPARE(commands.filter(QRegularExpression(QStringLiteral("^upgrade_tool (WL |-s 104 RL |RD$)"))), expected);
+    for (const NodePartition& p : kNodePartitions) {
+        const int at = static_cast<int>(commands.indexOf(verifyRl(QStringLiteral("104"), p, dir)));
+        QCOMPARE(rig.runner.optionsAt(at).timeoutMs, 0);   // never timed out, like a WL
+        QCOMPARE(QDir::fromNativeSeparators(rig.runner.optionsAt(at).workingDirectory), dir + QStringLiteral("/.verify"));
+        QCOMPARE(flash.writesBefore(p.sector), static_cast<int>(&p - kNodePartitions) + 1);
+    }
+    QCOMPARE(flash.readCommands().size(), qsizetype(kNodeRows));
+    QVERIFY2(unaddressedVerifyRead(flash, rig.runner).isEmpty(), qPrintable(unaddressedVerifyRead(flash, rig.runner)));
+
+    // The lines, the results, the signal.
+    QVERIFY(rig.logged(QStringLiteral("verifying rootfs: reading 7481 sectors back from sector 8064 (upgrade_tool -s 104 RL)")));
+    QVERIFY(rig.logged(QStringLiteral("$ ") + verifyRl(QStringLiteral("104"), kNodePartitions[5], dir)));
+    QVERIFY(rig.logged(QStringLiteral("rootfs verified: 3830272 bytes read back equal the image (")));
+    const QList<ReadBackResult> results = rig.flasher.verifyResults();
+    QCOMPARE(results.size(), qsizetype(kNodeRows));
+    QCOMPARE(verified.count(), qsizetype(kNodeRows));
+    for (int k = 0; k < kNodeRows; ++k) {
+        const ReadBackResult& r = results.at(k);
+        QCOMPARE(r.name, QString::fromLatin1(kNodePartitions[k].name));
+        QVERIFY(r.ok);
+        QCOMPARE(r.bytes, kNodePartitions[k].imageBytes);
+        QCOMPARE(r.mismatchOffset, qint64(-1));
+        QVERIFY(r.error.isEmpty());
+        QVERIFY(r.milliseconds >= 0);
+        QVERIFY(verified.at(k).at(0).value<ReadBackResult>() == r);
+    }
+    // The temporaries served and went; the flow ended as without verify.
+    QVERIFY(QDir(dir + QStringLiteral("/.verify")).entryList({QStringLiteral("*.img")}, QDir::Files).isEmpty());
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("Upgrade firmware ok; board is back on ADB"));
+}
+
+void tst_firmwaretools::soc_verifySectorCountCeil()
+{
+    {
+        FlashRig rig;
+        FakeFlash flash;
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        rig.flasher.setSelectedPartitions({QStringLiteral("env"), QStringLiteral("idblock"), QStringLiteral("rootfs")});
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        const QStringList counts = [&flash] {
+            QStringList list;
+            for (const QString& rl : flash.readCommands()) {
+                list << rl.section(QLatin1Char(' '), 5, 5);
+            }
+            return list;
+        }();
+        QCOMPARE(counts, (QStringList{QStringLiteral("128"), QStringLiteral("340"), QStringLiteral("7481")}));   // 65536, 174080, 3830272 bytes
+    }
+    {
+        // A 1-byte image still reads one whole sector, and compares its one byte.
+        FlashRig rig;
+        FakeFlash flash;
+        rig.runner.addHandler(FlashRig::exf(), [](FakeToolInvocation* i) {
+            FirmwareFixtures::nodeExtractor(i);
+            const QString dir = QDir::fromNativeSeparators(i->arguments().value(2));
+            FirmwareFixtures::writeFile(dir + QStringLiteral("/userdata.img"), "u");
+        });
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        rig.flasher.setSelectedPartitions({QStringLiteral("userdata")});
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        QCOMPARE(flash.readCommands(), QStringList{verifyRl(QStringLiteral("104"), kNodePartitions[6], rig.extractDir(), 1)});
+        QCOMPARE(flash.readCommands().first().section(QLatin1Char(' '), 5, 5), QStringLiteral("1"));
+        QCOMPARE(rig.flasher.verifyResults().first().bytes, qint64(1));
+        QVERIFY(rig.flasher.verifyResults().first().ok);
+    }
+}
+
+void tst_firmwaretools::soc_verifyMismatchFails()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    const NodePartition& rootfs = kNodePartitions[5];
+    flash.corruptByte(rootfs.sector, 4660);
+    QSignalSpy verified(&rig.flasher, &SocFlasher::partitionVerified);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    const quint8 imageByte = imageByteAt(rig.extractDir(), "rootfs", 4660);
+    const QString flashOffset = QString::number(rootfs.offset + 4660, 16).toUpper();
+    QCOMPARE(flashOffset, QStringLiteral("3F1234"));   // rootfs at 0x3F0000 (sector 8064) + 4660
+    const QString text = QStringLiteral("verifying rootfs failed: byte 4660 of the image differs (flash offset 0x%1): read 0x3c, image 0x%2; "
+                                        "the board is left in Loader mode, nothing else is written")
+                             .arg(flashOffset)
+                             .arg(static_cast<uint>(imageByte), 2, 16, QLatin1Char('0'));
+    QCOMPARE(rig.finished.first().at(0).toBool(), false);
+    QCOMPARE(rig.finished.first().at(1).toString(), text);
+    QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Failed);
+    // Nothing after it: no WL of userdata, no RD, no ADB wait - the board stays in Loader mode.
+    QCOMPARE(rig.wlCommands().size(), qsizetype(6));
+    QVERIFY(!rig.wlCommands().join(QLatin1Char('\n')).contains(QStringLiteral("userdata.img")));
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+    QCOMPARE(rig.runner.count(FlashRig::getState()), 0);
+    // The temporary is kept for a look.
+    const QString temp = rig.extractDir() + QStringLiteral("/.verify/rootfs.img");
+    QVERIFY(QFileInfo(temp).isFile());
+    QCOMPARE(int(imageByteAt(rig.extractDir() + QStringLiteral("/.verify"), "rootfs", 4660)), 0x3c);
+    // The result's fields.
+    const QList<ReadBackResult> results = rig.flasher.verifyResults();
+    QCOMPARE(results.size(), qsizetype(6));   // five ok, the failed one last
+    const ReadBackResult last = results.last();
+    QCOMPARE(last.name, QStringLiteral("rootfs"));
+    QVERIFY(!last.ok);
+    QCOMPARE(last.bytes, rootfs.imageBytes);
+    QCOMPARE(last.mismatchOffset, qint64(4660));
+    QCOMPARE(int(last.readByte), 0x3c);
+    QCOMPARE(int(last.imageByte), int(imageByte));
+    QVERIFY(last.error.startsWith(QStringLiteral("byte 4660 of the image differs")));
+    QCOMPARE(verified.count(), qsizetype(6));
+    QVERIFY(!verified.last().at(0).value<ReadBackResult>().ok);
+    QVERIFY(unaddressedVerifyRead(flash, rig.runner).isEmpty());
+}
+
+void tst_firmwaretools::soc_verifyShortReadFails()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.flasher.setSelectedPartitions({QStringLiteral("boot"), QStringLiteral("rootfs")});
+    flash.shortRead(kNodePartitions[4].sector, 1024);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("verifying boot failed: upgrade_tool RL read 1024 of 3043840 bytes (short read)"));
+    const ReadBackResult last = rig.flasher.verifyResults().last();
+    QCOMPARE(last.error, QStringLiteral("short read: 1024 of 3043840 bytes"));
+    QCOMPARE(last.mismatchOffset, qint64(-1));
+    QCOMPARE(rig.wlCommands().size(), qsizetype(1));
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+    QVERIFY(unaddressedVerifyRead(flash, rig.runner).isEmpty());
+}
+
+void tst_firmwaretools::soc_verifyRlFailsFails()
+{
+    const struct
+    {
+        QByteArray output;
+        int exitCode;
+        const char* text;
+    } cases[] = {
+        {"Read LBA failed!\r\n", 1, "verifying env failed: Read LBA failed!"},
+        {"Read LBA failed!\r\n", 0, "verifying env failed: Read LBA failed!"},   // exit 0, a failure by its text
+        {QByteArray(), 1, "verifying env failed: no output (exit code 1)"},
+    };
+    for (const auto& c : cases) {
+        FlashRig rig;
+        FakeFlash flash;
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        flash.failReads(c.output, c.exitCode);
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QCOMPARE(rig.finished.first().at(1).toString(), QString::fromLatin1(c.text));
+        QCOMPARE(rig.wlCommands().size(), qsizetype(1));   // env written, read back, stopped
+        QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+        QVERIFY(!rig.flasher.verifyResults().last().ok);
+    }
+    // upgrade_tool that cannot be started for the read.
+    FlashRig rig;
+    FakeFlash flash;
+    rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool -s \\S+ RL ")),
+                          [](FakeToolInvocation* i) { i->failToStart(QStringLiteral("access denied")); });
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(1).toString(), QStringLiteral("verifying env failed: cannot run upgrade_tool: access denied"));
+    QCOMPARE(rig.flasher.verifyResults().last().error, QStringLiteral("cannot run upgrade_tool: access denied"));
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+}
+
+void tst_firmwaretools::soc_verifyNoSuchDevice()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    flash.noSuchDevice();
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(1).toString(),
+             QStringLiteral("verifying env failed: No found specific rockusb device! (LocationID 104 is gone)"));
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 0);
+    QCOMPARE(rig.wlCommands().size(), qsizetype(1));
+    QVERIFY(unaddressedVerifyRead(flash, rig.runner).isEmpty());
+}
+
+void tst_firmwaretools::soc_verifyOffByDefault()
+{
+    // The fake flash scripted, verify not asked for: 0.7.0's invocation list, not one RL.
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QStringList expected{QStringLiteral("upgrade_tool LD"), QStringLiteral("upgrade_tool LD"),
+                         ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"), {QStringLiteral("EXF"), QDir::toNativeSeparators(rig.image),
+                                                                                       QDir::toNativeSeparators(rig.extractDir())})};
+    expected << nodeWlCommands(rig.extractDir());
+    expected << QStringLiteral("upgrade_tool RD") << QStringLiteral("adb get-state") << QStringLiteral("adb shell \"cat /proc/version; uptime\"");
+    QCOMPARE(rig.runner.invocations(), expected);
+    QVERIFY(flash.readCommands().isEmpty());
+    QVERIFY(rig.flasher.verifyResults().isEmpty());
+    QVERIFY(!rig.logged(QStringLiteral("verif")));
+}
+
+void tst_firmwaretools::soc_verifyMaskromNotAvailable()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash, kLdMaskrom);
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(logCount(rig.logs, QStringLiteral("verify after writing: not available in MASKROM mode (UF writes and checks the whole image "
+                                               "itself)")),
+             1);
+    QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
+    QVERIFY(flash.readCommands().isEmpty());
+    QVERIFY(rig.flasher.verifyResults().isEmpty());
+}
+
+void tst_firmwaretools::soc_verifyProgressStage()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    // The read-back reports the row's own percentage, from the RL's "(nn%)" lines.
+    QCOMPARE(percentsOf(rig.progress, QStringLiteral("Verifying rootfs (6 of 7)")),
+             (QList<int>{0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100}));
+    const QStringList stages = textsOf(rig.progress);
+    const qsizetype lastWriting = stages.lastIndexOf(QStringLiteral("Writing rootfs (6 of 7)"));
+    const qsizetype firstVerifying = stages.indexOf(QStringLiteral("Verifying rootfs (6 of 7)"));
+    const qsizetype nextWriting = stages.indexOf(QStringLiteral("Writing userdata (7 of 7)"));
+    QVERIFY(lastWriting >= 0 && firstVerifying > lastWriting && nextWriting > firstVerifying);
+    // The writes keep their percentage over all bytes (rootfs: 53 % half way, as without verify).
+    QVERIFY(progressOf(rig.progress).contains({QStringLiteral("Writing rootfs (6 of 7)"), 53}));
+}
+
+void tst_firmwaretools::soc_verifyUsesTheDetectedLocationId()
+{
+    // No board at step 1; the step-4 poll finds it in Loader mode at LocationID 154: every RL says so.
+    const QByteArray loader154 = kBanner + "List of rockusb connected(1)\r\n"
+                                           "DevNo=1\tVid=0x2207,Pid=0x110e,LocationID=154\tMode=Loader\tSerialNo=\r\n";
+    FlashRig rig;
+    FakeFlash flash;
+    auto present = std::make_shared<bool>(false);
+    rig.runner.addHandler(FlashRig::ld(), [present, loader154](FakeToolInvocation* i) {
+        i->emitOutput(*present ? loader154 : kLdEmpty);
+        i->finish(0);
+    });
+    rig.runner.addScript(FlashRig::adbDevices(), kAdbNone);
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.flasher.setSelectedPartitions({QStringLiteral("boot"), QStringLiteral("rootfs")});
+    QObject::connect(&rig.flasher, &SocFlasher::downloadModeNeeded, &rig.flasher, [present] { *present = true; });
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(flash.readCommands(), (QStringList{verifyRl(QStringLiteral("154"), kNodePartitions[4], rig.extractDir()),
+                                                verifyRl(QStringLiteral("154"), kNodePartitions[5], rig.extractDir())}));
+    QVERIFY(rig.logged(QStringLiteral("verifying boot: reading 5945 sectors back from sector 1920 (upgrade_tool -s 154 RL)")));
+    QVERIFY(unaddressedVerifyRead(flash, rig.runner).isEmpty());
+}
+
+void tst_firmwaretools::soc_verifyJffs2ComparesImageLength()
+{
+    {
+        // userdata: a jffs2 image as large as its 3 MiB partition.
+        FlashRig rig;
+        FakeFlash flash;
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        rig.flasher.setSelectedPartitions({QStringLiteral("userdata")});
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        QCOMPARE(rig.flasher.verifyResults().first().bytes, qint64(3145728));
+        QCOMPARE(flash.readCommands().first().section(QLatin1Char(' '), 5, 5), QStringLiteral("6144"));
+    }
+    {
+        // A 1000-byte userdata.img in a 3 MiB partition: 2 sectors read, the 1000 image bytes
+        // compared - the flash behind them (0xff here) is not the image's business.
+        FlashRig rig;
+        FakeFlash flash;
+        rig.runner.addHandler(FlashRig::exf(), [](FakeToolInvocation* i) {
+            FirmwareFixtures::nodeExtractor(i);
+            const QString dir = QDir::fromNativeSeparators(i->arguments().value(2));
+            FirmwareFixtures::writeFile(dir + QStringLiteral("/userdata.img"), QByteArray(1000, 'j'));
+        });
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        rig.flasher.setSelectedPartitions({QStringLiteral("userdata")});
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        QCOMPARE(flash.readCommands().first().section(QLatin1Char(' '), 4, 5), QStringLiteral("18304 2"));
+        QCOMPARE(rig.flasher.verifyResults().first().bytes, qint64(1000));
+        QVERIFY(rig.logged(QStringLiteral("userdata verified: 1000 bytes read back equal the image (")));
+        // The WL still names the whole partition (jffs2 needs it).
+        QCOMPARE(rig.wlCommands(), QStringList{FlashRig::wlCommand(kNodePartitions[6], rig.extractDir())});
+    }
+}
+
+void tst_firmwaretools::soc_verifyCancelRefused()
+{
+    FlashRig rig;
+    FakeFlash flash;
+    installVerifyRig(rig, flash);
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.flasher.setSelectedPartitions({QStringLiteral("boot")});
+    flash.hangReads();
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(flash.readCommands().size(), qsizetype(1));
+    QTRY_COMPARE(rig.runner.liveInvocations().size(), qsizetype(1));
+    FakeToolInvocation* rl = rig.runner.liveInvocations().first();
+    QVERIFY(rl->commandLine().startsWith(QStringLiteral("upgrade_tool -s 104 RL ")));
+    QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Flashing);
+    bool rlCancelled = false;
+    QObject::connect(rl, &ToolInvocation::finished, &rig.flasher, [&rlCancelled](const ToolResult& r) { rlCancelled = r.cancelled; });
+
+    rig.flasher.cancel();
+    QVERIFY(rig.logged(QStringLiteral("cannot cancel while upgrade_tool writes the flash")));
+    QTest::qWait(30);
+    QVERIFY(rig.flasher.isRunning());
+    QVERIFY(rig.finished.isEmpty());
+    QCOMPARE(rig.runner.liveInvocations().size(), qsizetype(1));   // the RL runs on
+
+    flash.releaseReads();
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QVERIFY(!rlCancelled);
+    QCOMPARE(rig.runner.count(FlashRig::rd()), 1);
+    QVERIFY(rig.flasher.verifyResults().first().ok);
+}
+
+void tst_firmwaretools::soc_verifyNeverUnaddressed()
+{
+    // The rule every case above checks (unaddressedVerifyRead()): no RL without -s <number>. The
+    // fake counts one that reaches it, which this proves first; then a whole verified flash.
+    FakeToolRunner runner;
+    FakeFlash flash;
+    flash.script(runner);
+    ToolInvocation* plain = runner.run(QStringLiteral("upgrade_tool"), {QStringLiteral("RL"), QStringLiteral("0"), QStringLiteral("1"),
+                                                                       QStringLiteral("x.img")});
+    int plainExit = -1;
+    QObject::connect(plain, &ToolInvocation::finished, &runner, [&plainExit](const ToolResult& r) { plainExit = r.exitCode; });
+    QTRY_COMPARE(plainExit, 99);
+    QCOMPARE(flash.unaddressedReads(), 1);
+    QVERIFY(!unaddressedVerifyRead(flash, runner).isEmpty());
+
+    FlashRig rig;
+    FakeFlash rigFlash;
+    installVerifyRig(rig, rigFlash);
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY(rig.finished.first().at(0).toBool());
+    QCOMPARE(rigFlash.unaddressedReads(), 0);
+    const QStringList reads = rig.runner.invocations().filter(QRegularExpression(QStringLiteral("\\sRL\\s")));
+    QCOMPARE(reads.size(), qsizetype(kNodeRows));
+    for (const QString& read : reads) {
+        QVERIFY2(QRegularExpression(QStringLiteral("^upgrade_tool -s \\d+ RL ")).match(read).hasMatch(), qPrintable(read));
+    }
+    QVERIFY(unaddressedVerifyRead(rigFlash, rig.runner).isEmpty());
 }
 
 // ---------------------------------------------------------------------------------------------

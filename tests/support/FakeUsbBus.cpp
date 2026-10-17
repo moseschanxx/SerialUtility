@@ -1,6 +1,7 @@
 #include "support/FakeUsbBus.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QMap>
 #include <QPointer>
@@ -8,6 +9,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <functional>
 
 #include "firmware/ToolRunner.h"
 #include "support/FakeToolRunner.h"
@@ -79,6 +81,16 @@ struct FakeUsbBus::Private
         int resetExit = 0;
         QStringList writes;
         QStringList resets;
+        // ---- (v0.8.0, verify-rl) the read-back model ----
+        struct ReadRule
+        {
+            ReadBack behaviour = ReadBack::Equal;
+            qint64 offset = 0;
+        };
+        QMap<quint64, QString> written;        ///< sector -> the file its WL wrote (native path, as in the command)
+        QMap<QString, ReadRule> readBack;      ///< file name ("" = every row) -> how an RL answers
+        QStringList reads;
+        int ownWritesInFlight = 0;             ///< its WLs running now
     };
     struct Foreign
     {
@@ -89,6 +101,7 @@ struct FakeUsbBus::Private
     {
         QPointer<FakeToolInvocation> invocation;
         QString serial;
+        std::function<void()> complete;   ///< (v0.8.0) how it ends on releaseWrites() (a WL or an RL)
     };
 
     explicit Private(FakeUsbBus* owner) : q(owner) {}
@@ -111,6 +124,7 @@ struct FakeUsbBus::Private
     int overlaps = 0;
     int unaddressed = 0;
     int cancelled = 0;
+    int readsOwnWrite = 0;   ///< (v0.8.0) an RL started while a WL of the same id ran
     QList<Hung> hung;
 
     Entry* find(const QString& serial)
@@ -364,6 +378,18 @@ struct FakeUsbBus::Private
             return;
         }
         entry->writes << i->commandLine();
+        // (v0.8.0) The flash model: what this WL put at its sector, and the WL in flight for the
+        // read-back ordering rule (an RL never next to a WL of the same id).
+        entry->written.insert(args.value(3).toULongLong(), args.value(5));
+        ++entry->ownWritesInFlight;
+        {
+            const QString serial = entry->serial;
+            QObject::connect(i, &ToolInvocation::finished, q, [this, serial](const ToolResult&) {
+                if (Entry* e = find(serial)) {
+                    --e->ownWritesInFlight;
+                }
+            });
+        }
         if (!entry->writeStartError.isEmpty()) {
             i->failToStart(entry->writeStartError);   // nothing reached the board
             return;
@@ -378,7 +404,9 @@ struct FakeUsbBus::Private
         if (entry->hang) {
             i->emitOutput("Write LBA from file (10%)\r");
             i->hang();
-            hung.append({QPointer<FakeToolInvocation>(i), entry->serial});
+            const QPointer<FakeToolInvocation> held(i);
+            const QString serial = entry->serial;
+            hung.append({held, serial, [this, held, serial] { completeWrite(held, serial); }});
             return;
         }
         const int step = qMax(1, writeDurationMs / 10);
@@ -408,6 +436,92 @@ struct FakeUsbBus::Private
             }
         }
         guard->emitOutput("Write LBA from file (100%)\r\n");
+        guard->finish(0);
+    }
+
+    /// (v0.8.0, verify-rl) `-s ID RL <sector> <count> <file>`: the flash model's bytes at that
+    /// sector for that id, or what setReadBack() says.
+    void onRl(FakeToolInvocation* i)
+    {
+        const QStringList args = i->arguments();   // -s ID RL start count file
+        const QString id = args.value(1);
+        Entry* entry = byId(id);
+        countWriteOrReset(i, false);   // an RL is counted like a WL for the LD gate, in both directions
+        if (!entry || entry->ldMaskrom) {
+            refuseUnknownId(i);
+            return;
+        }
+        if (entry->ownWritesInFlight > 0) {
+            ++readsOwnWrite;
+        }
+        entry->reads << i->commandLine();
+        const quint64 sector = args.value(3).toULongLong();
+        const qint64 count = args.value(4).toLongLong();
+        const QString target = QDir::fromNativeSeparators(args.value(5));
+        const QString source = QDir::fromNativeSeparators(entry->written.value(sector));
+        const QString fileName = QFileInfo(source.isEmpty() ? target : source).fileName();
+        const Entry::ReadRule rule = entry->readBack.value(fileName, entry->readBack.value(QString()));
+        switch (rule.behaviour) {
+        case ReadBack::Fails:
+            i->emitOutput("rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\nRead LBA failed!\r\n", kCommandMs);
+            i->finish(1);
+            return;
+        case ReadBack::NoSuchDevice:
+            refuseUnknownId(i);
+            return;
+        case ReadBack::Hangs: {
+            i->emitOutput("Read LBA from file (10%)\r");
+            i->hang();
+            const QPointer<FakeToolInvocation> held(i);
+            const QByteArray bytes = readBackBytes(source, count, Entry::ReadRule());
+            hung.append({held, entry->serial, [this, held, target, bytes] { completeRead(held, target, bytes); }});
+            return;
+        }
+        case ReadBack::Equal:
+        case ReadBack::FlippedByte:
+        case ReadBack::Short:
+            break;
+        }
+        const QByteArray bytes = readBackBytes(source, count, rule);
+        const int step = qMax(1, writeDurationMs / 10);
+        for (int percent = 10; percent < 100; percent += 10) {
+            i->emitOutput("Read LBA from file (" + QByteArray::number(percent) + "%)\r", step);
+        }
+        const QPointer<FakeToolInvocation> guard(i);
+        QTimer::singleShot(writeDurationMs, q, [this, guard, target, bytes] { completeRead(guard, target, bytes); });
+    }
+
+    /// The bytes an RL of `count` sectors brings back of `source` (all 0xff past its end or when
+    /// nothing was written there), as `rule` changes them.
+    static QByteArray readBackBytes(const QString& source, qint64 count, const Entry::ReadRule& rule)
+    {
+        QByteArray bytes;
+        QFile file(source);
+        if (!source.isEmpty() && file.open(QIODevice::ReadOnly)) {
+            bytes = file.read(count * 512);
+        }
+        if (bytes.size() < count * 512) {
+            bytes.append(QByteArray(count * 512 - bytes.size(), '\xff'));
+        }
+        if (rule.behaviour == ReadBack::FlippedByte && rule.offset >= 0 && rule.offset < bytes.size()) {
+            bytes[rule.offset] = '\x3c';
+        } else if (rule.behaviour == ReadBack::Short) {
+            bytes = bytes.left(rule.offset);
+        }
+        return bytes;
+    }
+
+    void completeRead(const QPointer<FakeToolInvocation>& guard, const QString& target, const QByteArray& bytes)
+    {
+        if (!guard) {
+            return;
+        }
+        if (!FirmwareFixtures::writeFile(target, bytes)) {
+            guard->emitOutput("Read LBA failed!\r\n");
+            guard->finish(1);
+            return;
+        }
+        guard->emitOutput("Read LBA from file (100%)\r\n");
         guard->finish(0);
     }
 
@@ -676,13 +790,39 @@ void FakeUsbBus::releaseWrites()
 {
     for (Private::Entry& entry : d->boards) {
         entry.hang = false;
+        // (v0.8.0) A held read-back behaves as Equal from now on.
+        for (auto it = entry.readBack.begin(); it != entry.readBack.end(); ++it) {
+            if (it.value().behaviour == ReadBack::Hangs) {
+                it.value() = Private::Entry::ReadRule();
+            }
+        }
     }
     const QList<Private::Hung> hung = d->hung;
     d->hung.clear();
     for (const Private::Hung& h : hung) {
-        d->completeWrite(h.invocation, h.serial);
+        if (h.complete) {
+            h.complete();
+        }
     }
 }
+
+void FakeUsbBus::setReadBack(const QString& serial, const QString& fileName, ReadBack behaviour, qint64 offset)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        Private::Entry::ReadRule rule;
+        rule.behaviour = behaviour;
+        rule.offset = offset;
+        entry->readBack.insert(fileName, rule);
+    }
+}
+
+QStringList FakeUsbBus::readsTo(const QString& serial) const
+{
+    const Private::Entry* entry = d->find(serial);
+    return entry ? entry->reads : QStringList();
+}
+
+int FakeUsbBus::readsDuringOwnWrite() const { return d->readsOwnWrite; }
 
 void FakeUsbBus::moveToAdb(const QString& serial)
 {
@@ -758,7 +898,8 @@ void FakeUsbBus::script(FakeToolRunner& runner)
     runner.addHandler(upgradeToolCommand(QStringLiteral("LD$")), [this](FakeToolInvocation* i) { d->onLd(i); });
     runner.addHandler(upgradeToolCommand(QStringLiteral("-s \\S+ WL ")), [this](FakeToolInvocation* i) { d->onWl(i); });
     runner.addHandler(upgradeToolCommand(QStringLiteral("-s \\S+ RD$")), [this](FakeToolInvocation* i) { d->onRd(i); });
-    runner.addHandler(upgradeToolCommand(QStringLiteral("(WL|RD|UF)\\b")), [this](FakeToolInvocation* i) { d->onUnaddressed(i); });
+    runner.addHandler(upgradeToolCommand(QStringLiteral("-s \\S+ RL ")), [this](FakeToolInvocation* i) { d->onRl(i); });   // (v0.8.0)
+    runner.addHandler(upgradeToolCommand(QStringLiteral("(WL|RD|UF|RL)\\b")), [this](FakeToolInvocation* i) { d->onUnaddressed(i); });
     runner.addHandler(QRegularExpression(QStringLiteral("^adb devices$")), [this](FakeToolInvocation* i) { d->onAdbDevices(i); });
     runner.addHandler(QRegularExpression(QStringLiteral("^adb -s \\S+ ")), [this](FakeToolInvocation* i) { d->onAdbSerial(i); });
 }

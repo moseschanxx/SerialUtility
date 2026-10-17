@@ -255,7 +255,7 @@ QString readAll(const QString& path)
 }
 
 /// (v0.8.0) Every su-fw run records its boards in Inventory::defaultFilePath() - the test-mode data
-/// folder of this suite, which outlives a run of the suite: each case starts without it.
+/// folder of this run (cleanupTestCase() removes it): each case starts without it.
 void clearInventory()
 {
     const QFileInfo file(Inventory::defaultFilePath());
@@ -330,6 +330,7 @@ class Tst_firmwarecli : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
     void cleanup();
 
@@ -464,6 +465,13 @@ private slots:
     void fleetBoardsRecorded();
     void recorderLinesRespectQuietAndLog();
 
+    // ---- Verify after write (v0.8.0, verify-rl) ------------------------------------------------------
+    void flashSocVerifyOption();
+    void flashSocVerifyMismatchExits1();
+    void pullFlashVerify();
+    void fleetVerifyCli();
+    void verifyHelp();
+
     // ---- The executable ------------------------------------------------------------------------------
     void realExecutable();
 
@@ -495,7 +503,9 @@ void Tst_firmwarecli::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("BuildAI-Test"));
-    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwarecli"));
+    // (v0.8.0) The pid in the name: the test-mode data folder (firmware.lock, inventory.json) is this
+    // run's own, so two runs of the suite at once (two build folders) never meet on the lock.
+    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwarecli-%1").arg(QCoreApplication::applicationPid()));
     QVERIFY(m_tempDir.isValid());
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_tempDir.filePath(QStringLiteral("settings")));
@@ -506,11 +516,20 @@ void Tst_firmwarecli::initTestCase()
     QLoggingCategory::setFilterRules(QStringLiteral("buildai.*.info=false"));   // as su-fw does
 }
 
+void Tst_firmwarecli::cleanupTestCase()
+{
+    // (v0.8.0) The run's own data folder goes with it (its name carries this process's pid).
+    const QString data = AppSettings::dataDirectory();
+    if (QStandardPaths::isTestModeEnabled() && data.endsWith(QStringLiteral("-%1").arg(QCoreApplication::applicationPid()))) {
+        QDir(data).removeRecursively();
+    }
+}
+
 void Tst_firmwarecli::init()
 {
     QSettings().clear();
     qunsetenv(kSecretVariable);
-    clearInventory();   // (v0.8.0) the data folder outlives the suite's runs
+    clearInventory();   // (v0.8.0) every case starts without the inventory file
     ++m_caseNumber;
 }
 
@@ -3691,6 +3710,274 @@ void Tst_firmwarecli::recorderLinesRespectQuietAndLog()
     clearInventory();
     const CliResult text = rig.run({QStringLiteral("status")});
     QVERIFY(text.hasText(line));
+}
+
+// =======================================================================================
+// Verify after write (v0.8.0, verify-rl)
+// =======================================================================================
+
+namespace {
+
+/// The done object of a --json run (the last line).
+QJsonObject doneOf(const CliResult& result)
+{
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    return allParse && !objects.isEmpty() ? objects.last() : QJsonObject();
+}
+
+/// Every "text" of a --json run's log events, in order.
+QStringList logTextsOf(const CliResult& result)
+{
+    bool allParse = false;
+    QStringList texts;
+    for (const QJsonObject& object : jsonLines(result, &allParse)) {
+        if (object.value(QStringLiteral("event")).toString() == QLatin1String("log")) {
+            texts << object.value(QStringLiteral("text")).toString();
+        }
+    }
+    return texts;
+}
+
+bool anyStartsWith(const QStringList& texts, const QString& prefix)
+{
+    for (const QString& text : texts) {
+        if (text.startsWith(prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+void Tst_firmwarecli::flashSocVerifyOption()
+{
+    CliRig rig;
+    FakeFlash flash;
+    scriptSocFlashWithReadBack(rig.runner, kLdLoader, flash);
+    const QString image = makeImage(QStringLiteral("flash/update.img"));
+    const QString dir = extractDirOf(image);
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot,rootfs"),
+                                QStringLiteral("--layout"), kNodeMtdParts, QStringLiteral("--verify")};
+    // Text: the read-back lines between the writes.
+    const CliResult text = rig.run(arguments);
+    QVERIFY2(text.code == 0, qPrintable(text.dump()));
+    const QString rlBoot = QStringLiteral("upgrade_tool -s 104 RL 1920 5945 ") + QDir::toNativeSeparators(dir + QStringLiteral("/.verify/boot.img"));
+    QVERIFY(text.hasText(QStringLiteral("verifying boot: reading 5945 sectors back from sector 1920 (upgrade_tool -s 104 RL)")));
+    QVERIFY(text.hasText(QStringLiteral("$ ") + rlBoot));
+    QVERIFY(text.hasTextStarting(QStringLiteral("boot verified: 3043840 bytes read back equal the image (")));
+    QVERIFY(text.hasTextStarting(QStringLiteral("rootfs verified: 3830272 bytes read back equal the image (")));
+    QVERIFY(text.hasTextStarting(QStringLiteral("Flashing SoC: Verifying boot (1 of 2) ")));   // progress every 10 %
+    QCOMPARE(flash.readCommands().size(), qsizetype(2));
+    QCOMPARE(flash.readCommands().first(), rlBoot);
+    QCOMPARE(text.lastText(), QStringLiteral("su-fw: exit 0 (done): Upgrade firmware ok; board is back on ADB"));
+
+    // JSON: "verify" and the "verified" array.
+    rig.runner.reset();
+    FakeFlash second;
+    scriptSocFlashWithReadBack(rig.runner, kLdLoader, second);
+    const CliResult json = rig.run(arguments + QStringList{QStringLiteral("--json")});
+    QVERIFY2(json.code == 0, qPrintable(json.dump()));
+    const QJsonObject done = doneOf(json);
+    QCOMPARE(done.value(QStringLiteral("verify")).toBool(), true);
+    const QJsonArray verified = done.value(QStringLiteral("verified")).toArray();
+    QCOMPARE(verified.size(), qsizetype(2));
+    const QJsonObject boot = verified.at(0).toObject();
+    QCOMPARE(boot.value(QStringLiteral("name")).toString(), QStringLiteral("boot"));
+    QCOMPARE(boot.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(boot.value(QStringLiteral("bytes")).toInteger(), qint64(3043840));
+    QCOMPARE(boot.value(QStringLiteral("mismatch")).toInteger(), qint64(-1));
+    QVERIFY(boot.value(QStringLiteral("seconds")).isDouble());
+    QCOMPARE(verified.at(1).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("rootfs"));
+    QCOMPARE(verified.at(1).toObject().value(QStringLiteral("ok")).toBool(), true);
+
+    // Without --verify: "verify":false and no "verified".
+    rig.runner.reset();
+    FakeFlash third;
+    scriptSocFlashWithReadBack(rig.runner, kLdLoader, third);
+    QStringList plain = arguments;
+    plain.removeAll(QStringLiteral("--verify"));
+    const CliResult off = rig.run(plain + QStringList{QStringLiteral("--json")});
+    QVERIFY2(off.code == 0, qPrintable(off.dump()));
+    QCOMPARE(doneOf(off).value(QStringLiteral("verify")).toBool(), false);
+    QVERIFY(!doneOf(off).contains(QStringLiteral("verified")));
+    QVERIFY(third.readCommands().isEmpty());
+}
+
+void Tst_firmwarecli::flashSocVerifyMismatchExits1()
+{
+    CliRig rig;
+    FakeFlash flash;
+    scriptSocFlashWithReadBack(rig.runner, kLdLoader, flash);
+    flash.corruptByte(kNodeSectors[5], 4660);
+    const QString image = makeImage(QStringLiteral("flash/update.img"));
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                                      QStringLiteral("boot,rootfs"), QStringLiteral("--layout"), kNodeMtdParts, QStringLiteral("--verify"),
+                                      QStringLiteral("--json")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    const QString text = QStringLiteral("verifying rootfs failed: byte 4660 of the image differs (flash offset 0x%1): read 0x3c, image 0x6e; the "
+                                        "board is left in Loader mode, nothing else is written")
+                             .arg(QString::number(quint64(kNodeSectors[5]) * 512 + 4660, 16).toUpper());
+    const QJsonObject done = doneOf(result);
+    QCOMPARE(done.value(QStringLiteral("text")).toString(), text);   // the flasher's text is the result
+    QCOMPARE(done.value(QStringLiteral("exit")).toInt(), 1);
+    QCOMPARE(done.value(QStringLiteral("verify")).toBool(), true);
+    const QJsonArray verified = done.value(QStringLiteral("verified")).toArray();
+    QCOMPARE(verified.size(), qsizetype(2));
+    QCOMPARE(verified.at(0).toObject().value(QStringLiteral("ok")).toBool(), true);
+    const QJsonObject rootfs = verified.at(1).toObject();
+    QCOMPARE(rootfs.value(QStringLiteral("name")).toString(), QStringLiteral("rootfs"));
+    QCOMPARE(rootfs.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(rootfs.value(QStringLiteral("mismatch")).toInteger(), qint64(4660));
+    QCOMPARE(rootfs.value(QStringLiteral("bytes")).toInteger(), qint64(3830272));
+    QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool RD$"))), 0);   // left in Loader mode
+    // The text form ends the same way.
+    rig.runner.reset();
+    FakeFlash again;
+    scriptSocFlashWithReadBack(rig.runner, kLdLoader, again);
+    again.corruptByte(kNodeSectors[5], 4660);
+    const CliResult plain = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                                     QStringLiteral("boot,rootfs"), QStringLiteral("--layout"), kNodeMtdParts, QStringLiteral("--verify")});
+    QCOMPARE(plain.code, 1);
+    QCOMPARE(plain.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + text);
+    QVERIFY(plain.hasText(QStringLiteral("Flash SoC failed: ") + text));
+}
+
+void Tst_firmwarecli::pullFlashVerify()
+{
+    {
+        // Loader mode: every partition read back.
+        ChainRig chain;
+        FakeFlash flash;
+        flash.script(chain.rig.runner);   // before the chain's scripts: its WL / RL win
+        chain.rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), kLdLoader);
+        QVERIFY(chain.start(caseDir(QStringLiteral("work"))));
+        const CliResult result = chain.rig.run(chain.arguments(caseDir(QStringLiteral("cache")))
+                                               + QStringList{QStringLiteral("--layout"), kNodeMtdParts, QStringLiteral("--verify"),
+                                                             QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QCOMPARE(flash.readCommands().size(), qsizetype(kNodePartitionCount));
+        const QStringList texts = logTextsOf(result);
+        QVERIFY(anyStartsWith(texts, QStringLiteral("$ upgrade_tool -s 104 RL 8064 7481 ")));
+        QVERIFY(anyStartsWith(texts, QStringLiteral("rootfs verified: 3830272 bytes read back equal the image (")));
+        const QJsonObject done = doneOf(result);
+        QCOMPARE(done.value(QStringLiteral("verify")).toBool(), true);
+        QCOMPARE(done.value(QStringLiteral("verified")).toArray().size(), qsizetype(kNodePartitionCount));
+    }
+    {
+        // MASKROM mode: UF checks the whole image itself; the line says so, "verify" alone.
+        ChainRig chain;
+        QVERIFY(chain.start(caseDir(QStringLiteral("work-maskrom"))));
+        const CliResult result = chain.rig.run(chain.arguments(caseDir(QStringLiteral("cache-maskrom")))
+                                               + QStringList{QStringLiteral("--verify"), QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QVERIFY(logTextsOf(result).contains(
+            QStringLiteral("verify after writing: not available in MASKROM mode (UF writes and checks the whole image itself)")));
+        QCOMPARE(chain.rig.runner.count(QRegularExpression(QStringLiteral("\\sRL\\s"))), 0);
+        const QJsonObject done = doneOf(result);
+        QCOMPARE(done.value(QStringLiteral("verify")).toBool(), true);
+        QVERIFY(!done.contains(QStringLiteral("verified")));
+    }
+}
+
+void Tst_firmwarecli::fleetVerifyCli()
+{
+    FleetCliRig fleet;
+    const QString image = withEnvImage();
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serials"), QStringLiteral("F=c4130950110960e0,G=5a33c81a6e996266"),
+                                QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--verify"),
+                                QStringLiteral("--yes"), QStringLiteral("--json")};
+    CliResult result = fleet.run(arguments);
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    QVERIFY(allParse);
+    int rlLines = 0;
+    int boardSteps = 0;
+    for (const QJsonObject& object : objects) {
+        const QString text = object.value(QStringLiteral("text")).toString();
+        if (object.contains(QStringLiteral("board")) && text.startsWith(QStringLiteral("$ upgrade_tool -s "))
+            && text.contains(QStringLiteral(" RL 8064 7481 "))) {
+            ++rlLines;
+        }
+        if (object.value(QStringLiteral("event")).toString() == QLatin1String("step") && object.contains(QStringLiteral("board"))) {
+            ++boardSteps;
+            QCOMPARE(object.value(QStringLiteral("verified")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+            QCOMPARE(object.value(QStringLiteral("verifyFailed")).toString(), QString());
+            QCOMPARE(object.value(QStringLiteral("verifyMismatch")).toInteger(), qint64(-1));
+        }
+    }
+    QCOMPARE(rlLines, 2);
+    QCOMPARE(boardSteps, 2);
+    const QStringList texts = logTextsOf(result);
+    const qsizetype header = texts.indexOf(QRegularExpression(QStringLiteral("^board  serial .*  writing  verify  seconds  detail$")));
+    QVERIFY2(header >= 0, qPrintable(result.dump()));
+    const qsizetype column = texts.at(header).indexOf(QStringLiteral("verify"));
+    QCOMPARE(texts.at(header + 1).mid(column, 2), QStringLiteral("ok"));
+    QCOMPARE(texts.at(header + 2).mid(column, 2), QStringLiteral("ok"));
+    QJsonObject done = objects.last();
+    QCOMPARE(done.value(QStringLiteral("verify")).toBool(), true);
+    for (const QJsonValue& board : done.value(QStringLiteral("boards")).toArray()) {
+        QCOMPARE(board.toObject().value(QStringLiteral("verified")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+        QCOMPARE(board.toObject().value(QStringLiteral("verifyFailed")).toString(), QString());
+        QCOMPARE(board.toObject().value(QStringLiteral("verifyMismatch")).toInteger(), qint64(-1));
+    }
+    for (const QString& serial : {benchSerial(5), benchSerial(6)}) {
+        QCOMPARE(fleet.bus.readsTo(serial).size(), qsizetype(1));
+        QVERIFY(fleet.bus.readsTo(serial).first().startsWith(QStringLiteral("upgrade_tool -s ")));
+    }
+    QCOMPARE(fleet.bus.unaddressedCommands(), 0);
+    QCOMPARE(fleet.bus.readsDuringOwnWrite(), 0);
+
+    // G's read-back differs: exit 1, G left in Loader mode with its addressed retry lines.
+    fleet.bus.setReadBack(benchSerial(6), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::FlippedByte, 4660);
+    result = fleet.run(arguments);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    done = doneOf(result);
+    const QJsonArray boards = done.value(QStringLiteral("boards")).toArray();
+    QCOMPARE(boards.size(), qsizetype(2));
+    const QJsonObject g = boards.at(1).toObject();
+    QCOMPARE(g.value(QStringLiteral("tag")).toString(), QStringLiteral("G"));
+    QCOMPARE(g.value(QStringLiteral("result")).toString(), QStringLiteral("failed"));
+    QCOMPARE(g.value(QStringLiteral("verifyFailed")).toString(), QStringLiteral("rootfs"));
+    QCOMPARE(g.value(QStringLiteral("verifyMismatch")).toInteger(), qint64(4660));
+    QCOMPARE(g.value(QStringLiteral("leftInLoader")).toBool(), true);
+    const QJsonArray retry = g.value(QStringLiteral("retry")).toArray();
+    QCOMPARE(retry.size(), qsizetype(2));
+    QVERIFY(retry.at(0).toString().startsWith(QStringLiteral("upgrade_tool -s %1 WL 8064 10240 ").arg(g.value(QStringLiteral("loader")).toString())));
+    QCOMPARE(retry.at(1).toString(), QStringLiteral("upgrade_tool -s %1 RD").arg(g.value(QStringLiteral("loader")).toString()));
+    QCOMPARE(boards.at(0).toObject().value(QStringLiteral("result")).toString(), QStringLiteral("done"));
+    const QStringList failedTexts = logTextsOf(result);
+    QVERIFY(failedTexts.contains(QStringLiteral("  retry: ") + retry.at(0).toString()));
+    const qsizetype failedHeader = failedTexts.indexOf(QRegularExpression(QStringLiteral("^board  serial .*  verify  .*$")));
+    QVERIFY(failedHeader >= 0);
+    const qsizetype failedColumn = failedTexts.at(failedHeader).indexOf(QStringLiteral("verify"));
+    QCOMPARE(failedTexts.at(failedHeader + 2).mid(failedColumn, 11), QStringLiteral("FAIL rootfs"));
+}
+
+void Tst_firmwarecli::verifyHelp()
+{
+    for (const char* command : {"flash-soc", "pull-flash"}) {
+        const QString name = QString::fromLatin1(command);
+        QVERIFY2(FirmwareCli::commandOptions(name).contains(QStringLiteral("verify")), command);
+        const QString help = FirmwareCli::helpText(name);
+        QVERIFY2(help.contains(QStringLiteral("\n  --verify             After every partition written, read it back (upgrade_tool RL) and "
+                                              "compare\n")),
+                 command);
+        QVERIFY2(help.contains(QStringLiteral("Costs about one read per\n                       write.")), command);
+        QVERIFY2(help.contains(QStringLiteral("[--verify]")), command);
+    }
+    for (const char* command : {"status", "partitions", "pull", "mcu-info", "mcu-update", "mcu-set-role", "inventory"}) {
+        QVERIFY2(!FirmwareCli::commandOptions(QString::fromLatin1(command)).contains(QStringLiteral("verify")), command);
+    }
+    QVERIFY(FirmwareCli::helpText(QStringLiteral("flash-soc")).contains(QStringLiteral("a verify read-back that differs")));
+    QVERIFY(FirmwareCli::helpText().contains(QStringLiteral("\"verify\" and, with --verify, \"verified\"")));
+    // --verify on a command that has no write is a usage error.
+    CliRig rig;
+    const CliResult result = rig.run({QStringLiteral("status"), QStringLiteral("--verify")});
+    QCOMPARE(result.code, 2);
+    QVERIFY(rig.runner.invocations().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarecli)

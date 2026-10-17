@@ -104,6 +104,44 @@ void scriptLoaderLayoutRead(FakeToolRunner& runner, const QByteArray& envImage, 
 const QRegularExpression& loaderEnvReadPattern();
 const QRegularExpression& loaderPartitionListPattern();
 
+// ---- (v0.8.0, verify-rl) Verify after write: a flash that remembers what was written ------------
+/// (v0.8.0, verify-rl) A flash model for the single-board suites: every `upgrade_tool WL <sector>
+/// <count> <file>` (and `-s <id> WL ...`) is recorded as sector -> file and answered as scriptSocFlash()'s
+/// WL script does; every `upgrade_tool -s <id> RL <sector> <count> <file>` writes the bytes of the file
+/// written at that sector (padded with 0xff to count * 512; nothing written there -> all 0xff) to
+/// the command's file, with "Read LBA from file (10%)" ... "(100%)" lines, exit 0 - unless told
+/// otherwise: corruptByte() replaces one byte of the next read from that sector; shortRead() cuts
+/// it to `bytes`; failReads() makes every RL answer `output` with `exitCode` (0 with "Read LBA
+/// failed!" is a failure by text); noSuchDevice() answers "No found specific rockusb device!" exit 255.
+/// readCommands() lists the RL lines in order; writesBefore(sector) is how many WL lines preceded
+/// the RL from that sector (the ordering rule). An unaddressed RL answers "fake: unaddressed read
+/// refused" with exit 99 and is counted (unaddressedReads()). hangReads() holds every RL at 10 %
+/// until releaseReads() (which ends the held ones as equal reads and stops holding). Its handlers
+/// match every RL with -s, the Loader-mode layout read's `RL 0 128` included: a test that needs
+/// that read registers scriptLoaderLayoutRead() first. The state is shared with the handlers, so
+/// the object may go before the runner.
+struct FakeFlash
+{
+    FakeFlash();
+    void script(FakeToolRunner& runner);
+    void corruptByte(quint64 sector, qint64 index, quint8 value = 0x3c);
+    void shortRead(quint64 sector, qint64 bytes);
+    void failReads(const QByteArray& output, int exitCode);
+    void noSuchDevice();
+    void hangReads();
+    void releaseReads();
+    QStringList readCommands() const;
+    QStringList writeCommands() const;
+    int unaddressedReads() const;
+    int writesBefore(quint64 sector) const;   ///< -1 when no RL read from `sector`
+
+    struct State;
+    std::shared_ptr<State> state;
+};
+/// scriptSocFlash() with its WL script replaced by the flash's WL handler, plus the RL handler (the
+/// flash's handlers are registered first: the first matching handler wins).
+void scriptSocFlashWithReadBack(FakeToolRunner& runner, const QByteArray& ld, FakeFlash& flash);
+
 /// The WL command lines a flash ran, in order.
 QStringList wlCommands(const FakeToolRunner& runner);
 /// The WL command line of Node partition `k` unpacked into `extractDir`.

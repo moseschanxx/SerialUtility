@@ -198,7 +198,7 @@ struct FirmwareTab::Private
     QLabel* profileCaption = nullptr;       ///< (v0.8.0) "Board profile:"
     QComboBox* profileCombo = nullptr;
     QLabel* profileLabel = nullptr;
-    QCheckBox* verifyCheckBox = nullptr;    ///< (v0.8.0, verify-rl's) hidden until that package
+    QCheckBox* verifyCheckBox = nullptr;    ///< (v0.8.0, verify-rl) "Verify after writing", remembered
     QLabel* socImageCaption = nullptr;
     QLabel* socImageLabel = nullptr;
     QLabel* partitionsCaption = nullptr;
@@ -520,8 +520,7 @@ void FirmwareTab::Private::setupUi()
     flashSocButton = makeButton("flashSocButton");
     cancelButton = makeButton("cancelButton");
     verifyCheckBox = new QCheckBox(q);
-    verifyCheckBox->setObjectName(QStringLiteral("verifyCheckBox"));
-    verifyCheckBox->setVisible(false);   // verify-rl wires it; until then it is not offered
+    verifyCheckBox->setObjectName(QStringLiteral("verifyCheckBox"));   // (v0.8.0) next to Flash SoC
     auto* flashRow = makeRow();
     flashRow->addWidget(flashSocButton);
     flashRow->addWidget(cancelButton);
@@ -672,6 +671,14 @@ void FirmwareTab::Private::wireWidgets()
         }
         job->setProfileOverride(id);
     });
+    // (v0.8.0) Verify after writing: remembered, and the job's choice at once (syncJob() hands it
+    // over again before every operation).
+    connect(verifyCheckBox, &QCheckBox::toggled, q, [this](bool on) {
+        if (!restoring && on != AppSettings::instance().firmwareVerifyAfterWrite()) {
+            AppSettings::instance().setFirmwareVerifyAfterWrite(on);
+        }
+        job->setVerifyAfterWrite(on);
+    });
 
     // ---- MCU ----
     connect(packageEdit, &QLineEdit::editingFinished, q, [this]() {
@@ -818,6 +825,10 @@ void FirmwareTab::Private::retranslate()
     profileCombo->setToolTip(FirmwareTab::tr("The attached board when the tool cannot tell it; Auto-detect reads it from the "
                                              "board's Loader PID, product string or flash layout"));
     verifyCheckBox->setText(FirmwareTab::tr("Verify after writing"));
+    verifyCheckBox->setToolTip(FirmwareTab::tr("Read every partition back after it was written (upgrade_tool RL) and compare it with "
+                                               "the image byte for byte; a difference fails the flash and leaves the board in Loader "
+                                               "mode with nothing else written. Costs about one read per write; MASKROM mode (UF) "
+                                               "checks the image itself"));
     installDriversButton->setText(FirmwareTab::tr("Install drivers"));
     installDriversButton->setToolTip(FirmwareTab::tr("Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)"));
     socImageCaption->setText(FirmwareTab::tr("Image:"));
@@ -907,6 +918,9 @@ void FirmwareTab::Private::loadSettings()
     const int profileIndex = profileCombo->findData(s.firmwareProfile());
     profileCombo->setCurrentIndex(profileIndex >= 0 ? profileIndex : 0);
     job->setProfileOverride(selectedProfileOverride());
+    // (v0.8.0) Verify after writing as it was left (default off: the daily update stays as fast).
+    verifyCheckBox->setChecked(s.firmwareVerifyAfterWrite());
+    job->setVerifyAfterWrite(verifyCheckBox->isChecked());
     restoring = false;
 
     job->refreshImage();
@@ -1268,6 +1282,7 @@ void FirmwareTab::Private::syncJob()
     job->setGitDescribe(settings.firmwareGitDescribe());
     job->setExtraFiles(settings.firmwareExtraFiles());
     job->setProfileOverride(selectedProfileOverride());   // (v0.8.0) the Board profile box
+    job->setVerifyAfterWrite(verifyCheckBox->isChecked());   // (v0.8.0) Flash SoC and Pull & Flash alike
 }
 
 void FirmwareTab::Private::renderImage(bool reread)
@@ -1673,7 +1688,8 @@ void FirmwareTab::Private::updateControls()
                             static_cast<QWidget*>(localImageButton), static_cast<QWidget*>(packageEdit),
                             static_cast<QWidget*>(packageButton), static_cast<QWidget*>(readMcuButton),
                             static_cast<QWidget*>(roleRxRadio), static_cast<QWidget*>(roleTxRadio),
-                            static_cast<QWidget*>(pullAndFlashButton), static_cast<QWidget*>(installDriversButton)}) {
+                            static_cast<QWidget*>(pullAndFlashButton), static_cast<QWidget*>(installDriversButton),
+                            static_cast<QWidget*>(verifyCheckBox)}) {
         widget->setEnabled(idle);
     }
     rollbackButton->setEnabled(idle && hasPreviousImage);
@@ -2079,6 +2095,9 @@ void FirmwareTab::applyPreferences()
     }
     d->job->setLoaderWaitSeconds(s.firmwareLoaderWaitSeconds());
     d->job->setAdbReturnSeconds(s.firmwareAdbReturnSeconds());
+    if (d->verifyCheckBox->isChecked() != s.firmwareVerifyAfterWrite()) {
+        d->verifyCheckBox->setChecked(s.firmwareVerifyAfterWrite());   // (v0.8.0) the setting changed elsewhere
+    }
     const QString cache = s.firmwareCacheDirectory();
     if (cache != cacheDirectory()) {
         d->cacheDirEdit->setText(nativePath(cache));

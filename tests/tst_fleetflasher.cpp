@@ -325,6 +325,19 @@ private slots:
     void profileGateUsesTheMappedPid();
     void overrideContradictsMappedPidStops();
 
+    // ---- Verify after write (v0.8.0, verify-rl) -----------------------------------------------
+    void fleetVerifyHappyPath();
+    void fleetVerifyMismatchLeavesBoardInLoader();
+    void fleetVerifyShortRead();
+    void fleetVerifyRlFails();
+    void fleetVerifyNoSuchDevice();
+    void fleetVerifyTwoRows();
+    void fleetVerifyCountsForTheGate();
+    void fleetVerifyOffByDefault();
+    void fleetVerifyCancelDrainsAfterTheRl();
+    void fleetVerifyProgressLines();
+    void fleetVerifyEndOfRunCorrection();
+
 private:
     QString caseDir() const { return m_tempDir.filePath(QStringLiteral("case%1/update.extracted").arg(m_caseNumber)); }
 
@@ -2249,7 +2262,8 @@ void Tst_fleetflasher::reportTableAndJson()
     // The table: the header, aligned columns, "-" cells, the detail of a done board.
     const QStringList table = report.tableLines();
     QCOMPARE(table.size(), qsizetype(6));
-    QVERIFY(table.first().startsWith(QStringLiteral("board  serial            port            loader  result    mapping  writing  seconds  detail")));
+    // (v0.8.0) The "verify" column between "writing" and "seconds"; "-" when the run did not verify.
+    QVERIFY(table.first().startsWith(QStringLiteral("board  serial            port            loader  result    mapping  writing  verify  seconds  detail")));
     const qsizetype resultColumn = table.first().indexOf(QStringLiteral("result"));
     const qsizetype detailColumn = table.first().indexOf(QStringLiteral("detail"));
     for (const QString& line : table) {
@@ -2258,17 +2272,18 @@ void Tst_fleetflasher::reportTableAndJson()
     QCOMPARE(table.at(1).mid(resultColumn, 4), QStringLiteral("done"));
     QCOMPARE(table.at(1).mid(detailColumn), QStringLiteral("5.10.209+, up 0 min, rfmcu: pid=412 uart=owned mcu=alive"));
     QCOMPARE(table.at(2).mid(detailColumn), QStringLiteral("5.10.209+, up 0 min, rfmcu: pid=412 uart=owned mcu=alive (moved)"));
-    QVERIFY(table.at(3).contains(QStringLiteral("  -               -       skipped   -        -        -        not on ADB: ")));
-    QVERIFY(table.at(4).contains(QStringLiteral("  111     not back  1.8      27.9     48.1     partitions written and the board reset")));
+    QVERIFY(table.at(3).contains(QStringLiteral("  -               -       skipped   -        -        -       -        not on ADB: ")));
+    QVERIFY(table.at(4).contains(QStringLiteral("  111     not back  1.8      27.9     -       48.1     partitions written and the board reset")));
     QCOMPARE(table.at(5).mid(resultColumn, 6), QStringLiteral("failed"));
     QVERIFY(table.at(5).contains(QStringLiteral("  114  ")));   // the loader column keeps the id after the end
 
     // The JSON fields.
     const QJsonObject json = report.json();
     for (const char* key : {"fleet", "dryRun", "image", "partitions", "maxParallel", "seconds", "mappingSeconds", "writingSeconds", "stop",
-                            "unattributed", "summary", "boards"}) {
+                            "unattributed", "summary", "boards", "verify"}) {
         QVERIFY2(json.contains(QLatin1String(key)), key);
     }
+    QCOMPARE(json.value(QStringLiteral("verify")).toBool(), false);   // (v0.8.0)
     QCOMPARE(json.value(QStringLiteral("fleet")).toBool(), true);
     QCOMPARE(json.value(QStringLiteral("image")).toString(), QDir::toNativeSeparators(QStringLiteral("C:/img/update.img")));
     QCOMPARE(json.value(QStringLiteral("seconds")).toDouble(), 53.0);
@@ -2282,9 +2297,13 @@ void Tst_fleetflasher::reportTableAndJson()
     const QJsonObject aJson = FleetReport::boardJson(a);
     for (const char* key : {"tag", "serial", "adb", "expectedPort", "port", "loader", "stage", "result", "ok", "seconds", "mappingSeconds",
                             "writingSeconds", "detail", "written", "retry", "adbBack", "leftInLoader", "kernel", "uptime", "boardInfo", "rfmcu",
-                            "profile"}) {
+                            "profile", "verified", "verifyFailed", "verifyMismatch"}) {
         QVERIFY2(aJson.contains(QLatin1String(key)), key);
     }
+    // (v0.8.0) Nothing verified: [] / "" / -1.
+    QCOMPARE(aJson.value(QStringLiteral("verified")).toArray(), QJsonArray());
+    QCOMPARE(aJson.value(QStringLiteral("verifyFailed")).toString(), QString());
+    QCOMPARE(aJson.value(QStringLiteral("verifyMismatch")).toInteger(), qint64(-1));
     QCOMPARE(aJson.value(QStringLiteral("profile")).toString(), QStringLiteral("node"));   // (v0.8.0)
     QCOMPARE(FleetReport::boardJson(c).value(QStringLiteral("profile")).toString(), QString());
     QCOMPARE(aJson.value(QStringLiteral("result")).toString(), QStringLiteral("done"));
@@ -2338,13 +2357,42 @@ void Tst_fleetflasher::reportTableAndJson()
     dry.setBoards({readyBoard, c});
     QCOMPARE(dry.summary(), QStringLiteral("dry run: 1 of 2 boards ready; 1 skipped"));
     QCOMPARE(dry.exitCode(), 1);
-    QCOMPARE(dry.tableLines().first(), QStringLiteral("board  serial            adb     expected port  result   detail"));
+    QCOMPARE(dry.tableLines().first(), QStringLiteral("board  serial            adb     expected port  result   detail"));   // no verify column
     QVERIFY(dry.tableLines().at(1).contains(QStringLiteral("device  unknown        ready")));
     QCOMPARE(dry.json().value(QStringLiteral("summary")).toObject(),
              (QJsonObject{{QStringLiteral("selected"), 2}, {QStringLiteral("ready"), 1}, {QStringLiteral("skipped"), 1}}));
     dry.setBoards({readyBoard});
     QCOMPARE(dry.summary(), QStringLiteral("dry run: 1 of 1 boards ready"));
     QCOMPARE(dry.exitCode(), 0);
+
+    // (v0.8.0) A run that verified: "ok" / "FAIL <row>" / "-" (wrote nothing), the JSON fields.
+    FleetBoard va = a;
+    va.verified = {QStringLiteral("rootfs")};
+    FleetBoard ve = e;
+    ve.verifyFailed = QStringLiteral("rootfs");
+    ve.verifyMismatch = 4660;
+    ve.detail = QStringLiteral("verifying rootfs failed: byte 4660 of the image differs (flash offset 0x3F1234): read 0x3c, image 0x6e");
+    FleetReport verifiedRun;
+    verifiedRun.setVerifyAfterWrite(true);
+    QVERIFY(verifiedRun.verifyAfterWrite());
+    QVERIFY(!report.verifyAfterWrite());
+    verifiedRun.setBoards({va, c, ve});
+    const QStringList verifyTable = verifiedRun.tableLines();
+    const qsizetype verifyColumn = verifyTable.first().indexOf(QStringLiteral("verify"));
+    QCOMPARE(verifyTable.at(1).mid(verifyColumn, 2), QStringLiteral("ok"));
+    QCOMPARE(verifyTable.at(2).mid(verifyColumn, 2), QStringLiteral("- "));
+    QCOMPARE(verifyTable.at(3).mid(verifyColumn, 11), QStringLiteral("FAIL rootfs"));
+    QVERIFY(verifyTable.at(3).endsWith(ve.detail));
+    QCOMPARE(verifiedRun.json().value(QStringLiteral("verify")).toBool(), true);
+    const QJsonObject veJson = FleetReport::boardJson(ve);
+    QCOMPARE(FleetReport::boardJson(va).value(QStringLiteral("verified")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+    QCOMPARE(veJson.value(QStringLiteral("verifyFailed")).toString(), QStringLiteral("rootfs"));
+    QCOMPARE(veJson.value(QStringLiteral("verifyMismatch")).toInteger(), qint64(4660));
+    QVERIFY(veJson.value(QStringLiteral("verified")).toArray().isEmpty());
+    QVERIFY(!(va == a));   // FleetBoard::operator== compares the verify fields too
+    FleetReport dryVerified = dry;
+    dryVerified.setVerifyAfterWrite(true);
+    QCOMPARE(dryVerified.tableLines().first(), dry.tableLines().first());   // the dry-run table is unchanged
 
     QCOMPARE(FleetReport::alignColumns({{QStringLiteral("a"), QStringLiteral("bb")}, {QStringLiteral("ccc"), QStringLiteral("d")}}),
              (QStringList{QStringLiteral("a    bb"), QStringLiteral("ccc  d")}));
@@ -2561,6 +2609,398 @@ void Tst_fleetflasher::overrideContradictsMappedPidStops()
     QCOMPARE(rig.bus.resetsTo(serialOf(1)).size(), qsizetype(1));
     QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(serialOf(2)))), 0);
     QCOMPARE(rig.count(addressedWl()), 0);
+}
+
+// =============================================================================================
+// Verify after write (v0.8.0, verify-rl): one RL per written row, a failure = a failed WL
+// =============================================================================================
+
+namespace {
+
+/// The board's working folder (where its WL / RL run and its read-back lands).
+QString boardFolder(const QString& extractDir, const QString& serial)
+{
+    return extractDir + QStringLiteral("/.fleet/") + serial;
+}
+
+/// The verify RL of rootfs for the board with LocationID `id` and its folder.
+QString rootfsRl(const QString& id, const QString& folder)
+{
+    return ToolRunner::formatCommandLine(QStringLiteral("upgrade_tool"),
+                                         {QStringLiteral("-s"), id, QStringLiteral("RL"), QStringLiteral("8064"), QStringLiteral("7481"),
+                                          QDir::toNativeSeparators(folder + QStringLiteral("/rootfs.img"))});
+}
+
+/// The "verify" cell of `serial`'s row in the real run's table.
+QString verifyCellOf(const QStringList& table, const QString& serial)
+{
+    const qsizetype column = table.first().indexOf(QStringLiteral("verify"));
+    const qsizetype next = table.first().indexOf(QStringLiteral("seconds"));
+    for (const QString& line : table) {
+        if (line.contains(serial)) {
+            return line.mid(column, next - column).trimmed();
+        }
+    }
+    return QStringLiteral("<no row>");
+}
+
+const QRegularExpression& addressedRl()
+{
+    static const QRegularExpression pattern(QStringLiteral("^upgrade_tool -s \\d+ RL "));
+    return pattern;
+}
+
+} // namespace
+
+void Tst_fleetflasher::fleetVerifyHappyPath()
+{
+    FleetRig rig(caseDir());
+    QVERIFY(!rig.flasher.verifyAfterWrite());
+    rig.flasher.setVerifyAfterWrite(true);
+    QVERIFY(rig.flasher.verifyAfterWrite());
+    QSignalSpy verified(&rig.flasher, &FleetFlasher::partitionVerified);
+    QVERIFY(rig.run());
+    QVERIFY2(rig.ok(), qPrintable(rig.dump()));
+    const QStringList commands = rig.runner.invocations();
+    const QStringList table = rig.flasher.report().tableLines();
+    QVERIFY(table.first().contains(QStringLiteral("  writing  verify  seconds  ")));
+    for (int k = 0; k < kBench; ++k) {
+        const FleetBoard b = rig.boardOf(serialOf(k));
+        QVERIFY2(b.result == FleetBoard::Result::Done, qPrintable(b.detail));
+        QCOMPARE(b.written, QStringList{QStringLiteral("rootfs")});
+        QCOMPARE(b.verified, QStringList{QStringLiteral("rootfs")});
+        QVERIFY(b.verifyFailed.isEmpty());
+        QCOMPARE(b.verifyMismatch, qint64(-1));
+        // One RL, addressed with its id, in its own folder, right after its WL and before its RD.
+        const QString folder = boardFolder(caseDir(), b.serial);
+        const QString rl = rootfsRl(b.locationId, folder);
+        QCOMPARE(rig.bus.readsTo(b.serial), QStringList{rl});
+        const int wlAt = static_cast<int>(commands.indexOf(rig.bus.writesTo(b.serial).first()));
+        const int rlAt = static_cast<int>(commands.indexOf(rl));
+        const int rdAt = static_cast<int>(commands.indexOf(QStringLiteral("upgrade_tool -s %1 RD").arg(b.locationId)));
+        QVERIFY2(wlAt >= 0 && rlAt > wlAt && rdAt > rlAt, qPrintable(rig.dump()));
+        QCOMPARE(QDir::fromNativeSeparators(rig.runner.optionsAt(rlAt).workingDirectory), folder);
+        QCOMPARE(rig.runner.optionsAt(rlAt).timeoutMs, 0);
+        QVERIFY(!QFileInfo::exists(folder + QStringLiteral("/rootfs.img")));   // the temporary went
+        QVERIFY(rig.lineIndex(b.label() + QStringLiteral(" verifying rootfs: reading 7481 sectors back from sector 8064 (upgrade_tool -s %1 RL)")
+                                              .arg(b.locationId))
+                >= 0);
+        QVERIFY(rig.lineStarting(b.label() + QStringLiteral(" rootfs verified: 3830272 bytes read back equal the image (")) >= 0);
+        QCOMPARE(verifyCellOf(table, b.serial), QStringLiteral("ok"));
+        const QJsonObject json = FleetReport::boardJson(b);
+        QCOMPARE(json.value(QStringLiteral("verified")).toArray(), QJsonArray{QStringLiteral("rootfs")});
+        QCOMPARE(json.value(QStringLiteral("verifyFailed")).toString(), QString());
+        QCOMPARE(json.value(QStringLiteral("verifyMismatch")).toInteger(), qint64(-1));
+    }
+    QCOMPARE(verified.count(), qsizetype(kBench));
+    QCOMPARE(rig.count(addressedRl()), kBench);
+    QCOMPARE(rig.flasher.report().json().value(QStringLiteral("verify")).toBool(), true);
+    QCOMPARE(rig.bus.readsDuringOwnWrite(), 0);
+    QCOMPARE(rig.bus.ldDuringWrites(), 0);
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+    QCOMPARE(rig.bus.cancelledWrites(), 0);
+}
+
+void Tst_fleetflasher::fleetVerifyMismatchLeavesBoardInLoader()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::FlippedByte, 4660);
+    QVERIFY(rig.run());
+    QVERIFY(!rig.ok());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    const QString n = b.locationId;
+    const PartitionImage row = rig.flasher.partitions().first();
+    const QString detail = QStringLiteral("verifying rootfs failed: byte 4660 of the image differs (flash offset 0x%1): read 0x3c, image 0x6e")
+                               .arg(QString::number(row.offset + 4660, 16).toUpper());
+    QVERIFY(detail.contains(QStringLiteral("0x3F1234")));   // the fake image's byte is 'n'
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, detail);
+    QVERIFY(b.leftInLoader);
+    QCOMPARE(b.verifyFailed, QStringLiteral("rootfs"));
+    QCOMPARE(b.verifyMismatch, qint64(4660));
+    QVERIFY(b.written.isEmpty());   // not verified, so not written
+    QVERIFY(b.verified.isEmpty());
+    const QStringList retry = {QStringLiteral("upgrade_tool -s %1 WL 8064 10240 %2").arg(n, QDir::toNativeSeparators(row.file)),
+                               QStringLiteral("upgrade_tool -s %1 RD").arg(n)};
+    QCOMPARE(b.retry, retry);
+    const int failed = rig.lineIndex(b.label() + QLatin1Char(' ') + detail);
+    QVERIFY2(failed >= 0, qPrintable(rig.dump()));
+    QVERIFY(rig.lines.at(failed + 1).startsWith(b.label() + QStringLiteral(" left in Loader mode on port %1, LocationID %2: nothing else is written "
+                                                                             "to it. Retry by hand, addressed: ")
+                                                                  .arg(portOf(1), n)));
+    QCOMPARE(rig.lines.at(failed + 2), b.label() + QStringLiteral("   retry: ") + retry.at(0));
+    QCOMPARE(rig.lines.at(failed + 3), b.label() + QStringLiteral("   retry: ") + retry.at(1));
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());   // no RD: nothing else is written to it
+    QCOMPARE(rig.bus.writesTo(serialOf(1)).size(), qsizetype(1));   // and nothing written again
+    QVERIFY(QFileInfo(boardFolder(caseDir(), serialOf(1)) + QStringLiteral("/rootfs.img")).isFile());   // kept for a look
+    QVERIFY(serialHintsAreSafe(rig.lines));
+    for (int k = 0; k < kBench; ++k) {
+        if (k != 1) {
+            QCOMPARE(rig.boardOf(serialOf(k)).result, FleetBoard::Result::Done);
+        }
+    }
+    QCOMPARE(verifyCellOf(rig.flasher.report().tableLines(), serialOf(1)), QStringLiteral("FAIL rootfs"));
+    QCOMPARE(FleetReport::boardJson(b).value(QStringLiteral("verifyMismatch")).toInteger(), qint64(4660));
+    QCOMPARE(FleetReport::boardJson(b).value(QStringLiteral("verifyFailed")).toString(), QStringLiteral("rootfs"));
+    QCOMPARE(rig.flasher.report().exitCode(), 1);
+    QCOMPARE(rig.bus.readsDuringOwnWrite(), 0);
+}
+
+void Tst_fleetflasher::fleetVerifyShortRead()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::Short, 1024);
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, QStringLiteral("verifying rootfs failed: upgrade_tool RL read 1024 of 3830272 bytes (short read)"));
+    QVERIFY(b.leftInLoader);
+    QCOMPARE(b.verifyFailed, QStringLiteral("rootfs"));
+    QCOMPARE(b.verifyMismatch, qint64(-1));
+    QCOMPARE(b.retry.size(), qsizetype(2));
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+}
+
+void Tst_fleetflasher::fleetVerifyRlFails()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QString(), FakeUsbBus::ReadBack::Fails);
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, QStringLiteral("verifying rootfs failed: Read LBA failed!"));
+    QVERIFY(b.leftInLoader);
+    QCOMPARE(b.retry.size(), qsizetype(2));
+    QVERIFY(b.retry.first().startsWith(QStringLiteral("upgrade_tool -s %1 WL 8064 10240 ").arg(b.locationId)));
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral("   retry: ") + b.retry.last()) >= 0);
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());
+}
+
+void Tst_fleetflasher::fleetVerifyNoSuchDevice()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::NoSuchDevice);
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.detail, QStringLiteral("verifying rootfs failed: No found specific rockusb device! (LocationID %1 is gone)").arg(b.locationId));
+    QVERIFY(b.retry.isEmpty());   // no valid id to put into a line
+    QVERIFY(b.leftInLoader);      // the port still shows its Loader mode
+    QCOMPARE(b.verifyFailed, QStringLiteral("rootfs"));
+    QVERIFY(rig.lineIndex(b.label() + QStringLiteral(" port %1 shows PID_110E: find its LocationID with `upgrade_tool LD` before any retry, and "
+                                                     "address it with -s")
+                                          .arg(portOf(1)))
+            >= 0);
+    QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());
+    QVERIFY(serialHintsAreSafe(rig.lines));
+}
+
+void Tst_fleetflasher::fleetVerifyTwoRows()
+{
+    FleetRig rig(caseDir(), {QStringLiteral("boot"), QStringLiteral("rootfs")});
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::FlippedByte, 10);
+    QVERIFY(rig.run());
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QCOMPARE(b.result, FleetBoard::Result::Failed);
+    QCOMPARE(b.written, QStringList{QStringLiteral("boot")});
+    QCOMPARE(b.verified, QStringList{QStringLiteral("boot")});
+    QCOMPARE(b.verifyFailed, QStringLiteral("rootfs"));
+    QCOMPARE(b.verifyMismatch, qint64(10));
+    QCOMPARE(b.retry.size(), qsizetype(2));   // the rootfs WL, then the RD: boot is on the board and verified
+    QVERIFY(b.retry.first().startsWith(QStringLiteral("upgrade_tool -s %1 WL 8064 10240 ").arg(b.locationId)));
+    QCOMPARE(b.retry.last(), QStringLiteral("upgrade_tool -s %1 RD").arg(b.locationId));
+    QCOMPARE(rig.bus.readsTo(serialOf(1)).size(), qsizetype(2));
+    const FleetBoard a = rig.boardOf(serialOf(0));
+    QCOMPARE(a.result, FleetBoard::Result::Done);
+    QCOMPARE(a.written, (QStringList{QStringLiteral("boot"), QStringLiteral("rootfs")}));
+    QCOMPARE(a.verified, a.written);
+    // Every RL of a board came after its own WL of that row and before its next WL.
+    QCOMPARE(rig.bus.readsDuringOwnWrite(), 0);
+    QCOMPARE(rig.bus.ldDuringWrites(), 0);
+}
+
+void Tst_fleetflasher::fleetVerifyCountsForTheGate()
+{
+    // A, B, C; two at a time. B's read-back hangs while A ends and frees its slot: C's first check
+    // must see the RL as a write in flight - no LD starts next to it.
+    FleetRig rig(caseDir());
+    rig.flasher.setBoards(benchBoards({0, 1, 2}));
+    rig.flasher.setMaxParallel(2);
+    rig.flasher.setVerifyAfterWrite(true);
+    QCOMPARE(rig.flasher.ldPolicy(), FleetFlasher::LdPolicy::Gate);
+    rig.bus.setReadBack(serialOf(1), QString(), FakeUsbBus::ReadBack::Hangs);
+    int ldsAtHang = -1;
+    int ldsAtRelease = -1;
+    QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig, &ldsAtHang](FakeToolInvocation* i) {
+        const QString b = rig.bus.board(serialOf(1)).locationId;
+        if (ldsAtHang < 0 && !b.isEmpty() && i->commandLine().startsWith(QStringLiteral("upgrade_tool -s %1 RL ").arg(b))) {
+            ldsAtHang = rig.count(QRegularExpression(QStringLiteral("^upgrade_tool LD$")));
+        }
+    });
+    QObject::connect(&rig.flasher, &FleetFlasher::boardFinished, &rig.flasher, [&rig, &ldsAtRelease](const FleetBoard& board) {
+        if (board.serial == serialOf(2)) {
+            ldsAtRelease = rig.count(QRegularExpression(QStringLiteral("^upgrade_tool LD$")));
+            rig.bus.releaseWrites();
+        }
+    });
+    QVERIFY(rig.run());
+    QVERIFY2(rig.ok(), qPrintable(rig.dump()));
+    QVERIFY(ldsAtHang >= 0 && ldsAtRelease >= 0);
+    QCOMPARE(ldsAtRelease, ldsAtHang);   // no LD while the RL ran
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    QVERIFY2(rig.lineIndex(c.label() + QStringLiteral(" checked: port %1 shows PID_110E (LD not run: 1 writes in flight)").arg(portOf(2))) >= 0,
+             qPrintable(rig.dump()));
+    QCOMPARE(rig.bus.ldDuringWrites(), 0);   // an RL is counted in both directions
+    QCOMPARE(rig.bus.readsDuringOwnWrite(), 0);
+    QCOMPARE(rig.bus.cancelledWrites(), 0);
+    for (int k = 0; k < 3; ++k) {
+        QCOMPARE(rig.boardOf(serialOf(k)).verified, QStringList{QStringLiteral("rootfs")});
+    }
+}
+
+void Tst_fleetflasher::fleetVerifyOffByDefault()
+{
+    FleetRig rig(caseDir());
+    QVERIFY(rig.run());
+    QVERIFY2(rig.ok(), qPrintable(rig.dump()));
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("\\sRL\\s"))), 0);
+    const QStringList table = rig.flasher.report().tableLines();
+    for (int k = 0; k < kBench; ++k) {
+        const FleetBoard b = rig.boardOf(serialOf(k));
+        QCOMPARE(b.result, FleetBoard::Result::Done);
+        QCOMPARE(b.written, QStringList{QStringLiteral("rootfs")});
+        QVERIFY(b.verified.isEmpty());
+        QVERIFY(rig.bus.readsTo(b.serial).isEmpty());
+        QCOMPARE(rig.bus.writesTo(b.serial).size(), qsizetype(1));
+        QCOMPARE(rig.bus.resetsTo(b.serial).size(), qsizetype(1));
+        QCOMPARE(verifyCellOf(table, b.serial), QStringLiteral("-"));
+    }
+    QCOMPARE(rig.flasher.report().json().value(QStringLiteral("verify")).toBool(), false);
+    QCOMPARE(rig.bus.ldDuringWrites(), 0);
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+    QVERIFY(!rig.anyLineContains(QStringLiteral("verif")));
+}
+
+void Tst_fleetflasher::fleetVerifyCancelDrainsAfterTheRl()
+{
+    // One at a time: A is done, B's RL hangs, C waits mapped. A cancel resets and skips C; B
+    // finishes its RL and its RD once released - an RL is never cut.
+    FleetRig rig(caseDir());
+    rig.flasher.setBoards(benchBoards({0, 1, 2}));
+    rig.flasher.setMaxParallel(1);
+    rig.flasher.setVerifyAfterWrite(true);
+    rig.bus.setReadBack(serialOf(1), QString(), FakeUsbBus::ReadBack::Hangs);
+    bool cancelled = false;
+    bool released = false;
+    QTimer driver;
+    QObject::connect(&driver, &QTimer::timeout, &driver, [&]() {
+        if (!cancelled && rig.bus.readsTo(serialOf(1)).size() == 1 && rig.boardOf(serialOf(0)).result == FleetBoard::Result::Done) {
+            cancelled = true;
+            rig.flasher.cancel();
+            QVERIFY(rig.flasher.isDraining());
+        } else if (cancelled && !released && rig.boardOf(serialOf(2)).result == FleetBoard::Result::Skipped) {
+            released = true;
+            QVERIFY(rig.bus.resetsTo(serialOf(1)).isEmpty());   // B still reading back: no RD yet
+            rig.bus.releaseWrites();
+        }
+    });
+    driver.start(5);
+    QVERIFY(rig.run());
+    QVERIFY(cancelled && released);
+    QVERIFY(rig.lineIndex(QStringLiteral("cancel: the boards not started are reset and skipped; 1 write(s) in progress finish first (every row and "
+                                         "the reset)"))
+            >= 0);
+    const FleetBoard b = rig.boardOf(serialOf(1));
+    QVERIFY2(b.result == FleetBoard::Result::Done, qPrintable(b.detail));
+    QCOMPARE(b.verified, QStringList{QStringLiteral("rootfs")});
+    QCOMPARE(rig.bus.resetsTo(serialOf(1)).size(), qsizetype(1));
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    QCOMPARE(c.result, FleetBoard::Result::Skipped);
+    QCOMPARE(c.detail, QStringLiteral("cancelled before its write started; reset back to ADB"));
+    QVERIFY(rig.bus.writesTo(serialOf(2)).isEmpty());
+    QCOMPARE(rig.boardOf(serialOf(0)).result, FleetBoard::Result::Done);
+    QCOMPARE(rig.bus.cancelledWrites(), 0);   // an RL is never cancelled either
+    QCOMPARE(rig.flasher.phase(), FleetFlasher::Phase::Cancelled);
+}
+
+void Tst_fleetflasher::fleetVerifyProgressLines()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setBoards(benchBoards({0}));
+    rig.flasher.setVerifyAfterWrite(true);
+    QList<QPair<QString, int>> seen;
+    QObject::connect(&rig.flasher, &FleetFlasher::boardProgress, &rig.flasher,
+                     [&seen](const FleetBoard&, const QString& stage, int percent) { seen.append({stage, percent}); });
+    QVERIFY(rig.run());
+    QVERIFY2(rig.ok(), qPrintable(rig.dump()));
+    QList<int> verifying;
+    qsizetype firstVerify = -1;
+    qsizetype lastWrite = -1;
+    for (qsizetype i = 0; i < seen.size(); ++i) {
+        if (seen.at(i).first == QLatin1String("Verifying rootfs (1 of 1)")) {
+            verifying << seen.at(i).second;
+            firstVerify = firstVerify < 0 ? i : firstVerify;
+        } else if (seen.at(i).first == QLatin1String("Writing rootfs (1 of 1)")) {
+            lastWrite = i;
+        }
+    }
+    QCOMPARE(verifying, (QList<int>{0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100}));   // the RL's own percentage
+    QVERIFY(lastWrite >= 0 && firstVerify > lastWrite);
+}
+
+void Tst_fleetflasher::fleetVerifyEndOfRunCorrection()
+{
+    {
+        // B failed by its verify, still in Loader mode at the closing picture: its record stands,
+        // nothing doubled.
+        FleetRig rig(caseDir());
+        rig.flasher.setVerifyAfterWrite(true);
+        rig.bus.setReadBack(serialOf(1), QStringLiteral("rootfs.img"), FakeUsbBus::ReadBack::FlippedByte, 4660);
+        QVERIFY(rig.run());
+        const FleetBoard b = rig.boardOf(serialOf(1));
+        QCOMPARE(rig.bus.board(serialOf(1)).state, FakeUsbBus::State::Loader);
+        QVERIFY(b.leftInLoader);
+        QCOMPARE(b.retry.size(), qsizetype(2));
+        QVERIFY(!b.detail.contains(QStringLiteral("it is in Loader mode now")));
+        QCOMPARE(rig.lines.count(b.label() + QStringLiteral("   retry: ") + b.retry.first()), qsizetype(1));
+        QCOMPARE(rig.lines.count(b.label() + QStringLiteral("   retry: ") + b.retry.last()), qsizetype(1));
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());   // its port and id are a board's
+    }
+    {
+        // B re-enumerates as its RL starts: the RL meets the gone id (exit 255, no line can be
+        // addressed); the closing picture pairs B with the only new LocationID on its port and
+        // gives it the addressed lines - the rootfs WL first (not verified, so not written).
+        FleetRig rig(caseDir() + QStringLiteral("-renum"));
+        rig.flasher.setVerifyAfterWrite(true);
+        bool renumbered = false;
+        QObject::connect(&rig.runner, &FakeToolRunner::invocationStarted, &rig.runner, [&rig, &renumbered](FakeToolInvocation* i) {
+            const QString b = rig.bus.board(serialOf(1)).locationId;
+            if (!renumbered && !b.isEmpty() && i->commandLine().startsWith(QStringLiteral("upgrade_tool -s %1 RL ").arg(b))) {
+                renumbered = true;
+                rig.bus.reenumerate(serialOf(1));
+            }
+        });
+        QVERIFY(rig.run());
+        QVERIFY(renumbered);
+        const FleetBoard b = rig.boardOf(serialOf(1));
+        const QString fresh = rig.bus.board(serialOf(1)).locationId;
+        QCOMPARE(b.result, FleetBoard::Result::Failed);
+        QVERIFY2(b.detail.startsWith(QStringLiteral("verifying rootfs failed: No found specific rockusb device! (LocationID ")), qPrintable(b.detail));
+        QCOMPARE(b.locationId, fresh);
+        QVERIFY(b.leftInLoader);
+        const PartitionImage row = rig.flasher.partitions().first();
+        QCOMPARE(b.retry, (QStringList{QStringLiteral("upgrade_tool -s %1 WL 8064 10240 %2").arg(fresh, QDir::toNativeSeparators(row.file)),
+                                       QStringLiteral("upgrade_tool -s %1 RD").arg(fresh)}));
+        QCOMPARE(b.verifyFailed, QStringLiteral("rootfs"));
+        QVERIFY(b.written.isEmpty());
+        QVERIFY(rig.flasher.unattributedDevices().isEmpty());
+    }
 }
 
 QTEST_GUILESS_MAIN(Tst_fleetflasher)

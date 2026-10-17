@@ -298,6 +298,7 @@ class Tst_firmwaretab : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
     void cleanup();
 
@@ -351,6 +352,9 @@ private slots:
     // ---- The inventory (v0.8.0) -------------------------------------------------------------------
     void tabRecordsStatusAndFlash();
 
+    // ---- Verify after write (v0.8.0, verify-rl) -----------------------------------------------------
+    void verifyCheckboxRemembered();
+
     // ---- MainWindow integration -----------------------------------------------------
     void showFirmwareTabOnce();
     void sessionActionsDisabledWhileCurrent();
@@ -381,7 +385,9 @@ void Tst_firmwaretab::initTestCase()
 {
     QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("BuildAI-Test"));
-    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwaretab"));
+    // (v0.8.0) The pid in the name: the test-mode data folder (firmware.lock, inventory.json) is this
+    // run's own, so two runs of the suite at once (two build folders) never meet on the lock.
+    QCoreApplication::setApplicationName(QStringLiteral("SerialUtilityTest-firmwaretab-%1").arg(QCoreApplication::applicationPid()));
     QVERIFY(m_tempDir.isValid());
 
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -406,6 +412,15 @@ void Tst_firmwaretab::initTestCase()
                               }),
                path.end());
     qputenv("PATH", path.join(QDir::listSeparator()).toLocal8Bit());
+}
+
+void Tst_firmwaretab::cleanupTestCase()
+{
+    // (v0.8.0) The run's own data folder goes with it (its name carries this process's pid).
+    const QString data = AppSettings::dataDirectory();
+    if (QStandardPaths::isTestModeEnabled() && data.endsWith(QStringLiteral("-%1").arg(QCoreApplication::applicationPid()))) {
+        QDir(data).removeRecursively();
+    }
 }
 
 void Tst_firmwaretab::init()
@@ -613,6 +628,7 @@ void Tst_firmwaretab::appSettingsFirmwareKeys()
     QCOMPARE(s.firmwareAdbReturnSeconds(), 60);
     QVERIFY(s.firmwareGitDescribe());
     QVERIFY(s.firmwareExtraFiles().isEmpty());
+    QVERIFY(!s.firmwareVerifyAfterWrite());   // (v0.8.0) the daily update stays as fast as it was
 
     // Every setter writes through and reports its key.
     QSignalSpy changed(&s, &AppSettings::changed);
@@ -630,6 +646,13 @@ void Tst_firmwaretab::appSettingsFirmwareKeys()
         sawMap = sawMap || args.at(0).toString() == QLatin1String("firmware/remoteFolders");
     }
     QVERIFY(sawMap);
+    // (v0.8.0) "firmware/verifyAfterWrite": the tab's "Verify after writing".
+    s.setFirmwareVerifyAfterWrite(true);
+    QVERIFY(s.firmwareVerifyAfterWrite());
+    QCOMPARE(QSettings().value(QStringLiteral("firmware/verifyAfterWrite")).toBool(), true);
+    QCOMPARE(changed.last().at(0).toString(), QStringLiteral("firmware/verifyAfterWrite"));
+    s.setFirmwareVerifyAfterWrite(false);
+    QVERIFY(!s.firmwareVerifyAfterWrite());
 
     // Clamps 5..600 s.
     s.setFirmwareLoaderWaitSeconds(1);
@@ -671,8 +694,10 @@ void Tst_firmwaretab::settingsRoundTrip()
         tab->setRemoteFolder(folderB);
         tab->setCacheDirectory(cache);
         tab->setSelectedRole(CcProtocol::RoleTx);
+        tab->verifyCheckBox()->setChecked(true);   // (v0.8.0)
     }
     const AppSettings& s = AppSettings::instance();
+    QVERIFY(s.firmwareVerifyAfterWrite());
     QCOMPARE(s.firmwareSourceTarget(), targetB);
     QCOMPARE(s.firmwareRemoteFolder(targetA), folderA);
     QCOMPARE(s.firmwareRemoteFolder(targetB), folderB);
@@ -685,6 +710,8 @@ void Tst_firmwaretab::settingsRoundTrip()
     QCOMPARE(tab->remoteFolder(), folderB);
     QCOMPARE(tab->cacheDirectory(), cache);
     QCOMPARE(QDir::fromNativeSeparators(tab->cacheDirEdit()->text()), cache);
+    QVERIFY(tab->verifyCheckBox()->isChecked());              // (v0.8.0) as it was left
+    QVERIFY(tab->firmwareJob()->verifyAfterWrite());
     // Last session's role is shown, never confirmed: the board may be another one now. Update MCU
     // and Set role wait for a Read or a click in this session.
     QVERIFY(tab->roleTxRadio()->isChecked());
@@ -2180,10 +2207,11 @@ void Tst_firmwaretab::profileComboAndLabel()
     QCOMPARE(combo->itemData(2).toString(), QStringLiteral("stacked"));
     QCOMPARE(combo->currentIndex(), 0);
     QCOMPARE(tab->profileLabel()->text(), QStringLiteral("Profile: unknown"));
-    // verify-rl's checkbox exists, hidden until that package wires it.
+    // verify-rl's checkbox exists and (v0.8.0, verify-rl) is offered now; verifyCheckboxRemembered
+    // covers it.
     QVERIFY(tab->verifyCheckBox());
     QCOMPARE(tab->verifyCheckBox()->objectName(), QStringLiteral("verifyCheckBox"));
-    QVERIFY(tab->verifyCheckBox()->isHidden());
+    QVERIFY(!tab->verifyCheckBox()->isHidden());
 
     // Choosing a profile: remembered, and the job's override at once.
     combo->setCurrentIndex(2);
@@ -2346,6 +2374,68 @@ void Tst_firmwaretab::socPowerDialog()
 // =======================================================================================
 // The inventory (v0.8.0)
 // =======================================================================================
+
+void Tst_firmwaretab::verifyCheckboxRemembered()
+{
+    FakeToolRunner runner;
+    FakeFlash flash;
+    scriptSocFlashWithReadBack(runner, kLdLoader, flash);
+    AppSettings::instance().setFirmwareMtdParts(QString(), kNodeMtdParts);
+    QVERIFY(!AppSettings::instance().firmwareVerifyAfterWrite());
+    {
+        auto tab = makeTab(&runner);
+        QCheckBox* box = tab->verifyCheckBox();
+        QVERIFY(box);
+        QVERIFY(!box->isHidden());   // offered next to Flash SoC
+        QCOMPARE(box->parentWidget(), tab->flashSocButton()->parentWidget());
+        QCOMPARE(box->text(), QStringLiteral("Verify after writing"));
+        QVERIFY(!box->toolTip().isEmpty());
+        QVERIFY(!box->isChecked());                     // loaded from the setting: off
+        QVERIFY(!tab->firmwareJob()->verifyAfterWrite());
+        box->click();                                   // toggling stores it, and the job follows
+        QVERIFY(box->isChecked());
+        QVERIFY(AppSettings::instance().firmwareVerifyAfterWrite());
+        QVERIFY(tab->firmwareJob()->verifyAfterWrite());
+    }
+    auto tab = makeTab(&runner);
+    QVERIFY(tab->verifyCheckBox()->isChecked());        // a new tab loads it
+    QVERIFY(tab->firmwareJob()->verifyAfterWrite());
+    tab->socFlasher()->setPollIntervalMs(10);
+    const QString image = tempPath(QStringLiteral("flash-verify/update.img"));
+    QVERIFY(writeFile(image, rkfwBytes()));
+    tab->setImagePath(image);
+    QVERIFY(waitForTable(*tab));
+    tab->setSelectedPartitions({QStringLiteral("boot")});
+    tab->firmwareJob()->setVerifyAfterWrite(false);     // syncJob() hands the checkbox over at Flash SoC
+    QStringList stages;
+    connect(tab->firmwareJob(), &FirmwareJob::progress, tab.get(), [&stages](const QString& stage, int) { stages << stage; });
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    tab->flashSoc();
+    QVERIFY(tab->isBusy());
+    QVERIFY(!tab->verifyCheckBox()->isEnabled());       // no change while the flash runs
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QVERIFY2(finished.at(0).at(1).toBool(), qPrintable(finished.at(0).at(2).toString()));
+    QVERIFY(tab->socFlasher()->verifyAfterWrite());
+    QVERIFY(tab->verifyCheckBox()->isEnabled());
+    const QString dir = extractDirOf(image);
+    const QString rl = QStringLiteral("upgrade_tool -s 104 RL 1920 5945 ") + QDir::toNativeSeparators(dir + QStringLiteral("/.verify/boot.img"));
+    QCOMPARE(flash.readCommands(), QStringList{rl});
+    const QString log = tab->logView()->toPlainText();
+    QVERIFY(log.contains(QStringLiteral("verifying boot: reading 5945 sectors back from sector 1920 (upgrade_tool -s 104 RL)")));
+    QVERIFY(log.contains(QStringLiteral("$ ") + rl));
+    QVERIFY(log.contains(QStringLiteral("boot verified: 3043840 bytes read back equal the image (")));
+    bool verifyingShown = false;
+    for (const QString& stage : std::as_const(stages)) {
+        verifyingShown = verifyingShown || stage.startsWith(QStringLiteral("Flashing SoC: Verifying boot (1 of 1) "));
+    }
+    QVERIFY(verifyingShown);                            // the progress text comes from the job, as every stage
+    QCOMPARE(tab->firmwareJob()->verifyResults().size(), qsizetype(1));
+    QVERIFY(tab->firmwareJob()->verifyResults().first().ok);
+    // Unchecked again: stored.
+    tab->verifyCheckBox()->click();
+    QVERIFY(!AppSettings::instance().firmwareVerifyAfterWrite());
+    QVERIFY(!tab->firmwareJob()->verifyAfterWrite());
+}
 
 void Tst_firmwaretab::tabRecordsStatusAndFlash()
 {

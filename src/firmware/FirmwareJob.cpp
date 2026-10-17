@@ -238,6 +238,9 @@ struct FirmwareJob::Private
     QMap<QString, QString> rememberedProducts;   ///< serial -> the trimmed answer ("" = none)
     QPointer<ToolInvocation> productInvocation;
 
+    // ---- Verify after write (v0.8.0, verify-rl) -----------------------------------------------
+    bool verifyAfterWrite = false;  ///< handed to the SocFlasher / FleetFlasher at every flash
+
     // ---- Construction ------------------------------------------------------------------------
     void wire();
     void log(const QString& line);
@@ -435,7 +438,8 @@ void FirmwareJob::Private::wire()
     // ---- SoC flasher ----
     connect(flasher, &SocFlasher::statusChanged, q, [this](const SocFlasher::DeviceStatus& status) { onStatus(status); });
     connect(flasher, &SocFlasher::mtdPartsRead, q, [this](const QString& mtdparts) {
-        // Step 2 of a flash read it from the board the flow found on ADB.
+        // Step 2's read belongs to the ADB board of the status; a layout read in Loader mode
+        // belongs to no serial (stored under "" only).
         const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : QString();
         storeLayout(serial, mtdparts);
     });
@@ -470,6 +474,12 @@ void FirmwareJob::Private::wire()
         setPersistent(text);
     });
     connect(flasher, &SocFlasher::toolOutput, q, [this](const QString& line) { emit q->toolOutput(line); });
+    // (v0.8.0) The read-back's verdict per row; its log lines come through logLine() as every line.
+    connect(flasher, &SocFlasher::partitionVerified, q, [this](const ReadBackResult& result) {
+        qCInfo(lcFirmware).noquote() << "partition verified:" << result.name << (result.ok ? "ok" : "FAILED") << result.bytes
+                                     << "bytes, mismatch" << result.mismatchOffset << result.error;
+        emit q->partitionVerified(result);
+    });
     connect(flasher, &SocFlasher::logLine, q, [this](const QString& line) { log(line); });
     connect(flasher, &SocFlasher::boardInfo, q, [this](const QString& text) {
         boardInfoText = text.trimmed();
@@ -861,6 +871,12 @@ bool FirmwareJob::confirmSocPower() const { return d->confirmSocPower; }
 void FirmwareJob::setLayoutConflictHandler(LayoutConflictHandler handler) { d->layoutHandler = std::move(handler); }
 void FirmwareJob::setLoaderPartitionsHandler(LoaderPartitionsHandler handler) { d->loaderPartitionsHandler = std::move(handler); }
 void FirmwareJob::setSocPowerHandler(SocPowerHandler handler) { d->socPowerHandler = std::move(handler); }
+
+// ---- Verify after write (v0.8.0, verify-rl) -------------------------------------------------------
+
+void FirmwareJob::setVerifyAfterWrite(bool on) { d->verifyAfterWrite = on; }
+bool FirmwareJob::verifyAfterWrite() const { return d->verifyAfterWrite; }
+QList<ReadBackResult> FirmwareJob::verifyResults() const { return d->flasher->verifyResults(); }
 
 ProfileDetection FirmwareJob::Private::computeImageProfile() const
 {
@@ -1850,6 +1866,7 @@ void FirmwareJob::Private::startFlash()
     flasher->setForceLoaderPartitions(forceLoaderPartitions);
     flasher->setLayoutConflictHandler(layoutHandler);
     flasher->setLoaderPartitionsHandler(loaderPartitionsHandler);
+    flasher->setVerifyAfterWrite(verifyAfterWrite);   // (v0.8.0) every flash, Pull & Flash's too
     flowProfileValid = false;   // this flash detects the board afresh
     if (operation == kOpPullFlash) {
         // Pull & Flash writes every partition: the SocFlasher default, which also stops before
@@ -2137,6 +2154,7 @@ void FirmwareJob::Private::startFleet()
     fleet->setPortProvider(portProvider);
     fleet->setPlanProfile(plan);
     fleet->setProfileOverride(profileOverride);
+    fleet->setVerifyAfterWrite(verifyAfterWrite);   // (v0.8.0)
     const QString text = FirmwareJob::tr("Flashing fleet: starting...");
     setProgressBusy(text);
     setPersistent(text);

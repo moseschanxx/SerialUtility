@@ -986,6 +986,12 @@ the run (a stop, exit 1, rerun); a concurrent adb user on the PC shows only as A
 ForeignLoader verdicts; Linux (sysfs port keys, the Linux upgrade_tool's `-s` and numbering) is
 tested with fakes only.
 
+**Verify after write (v0.8.0, 4.16).** With `--verify` each clean WL of a board is followed by its
+read-back, `upgrade_tool -s <id> RL <sector> <ceil(bytes / 512)> <file>` in the board's folder - the
+board's one process, counted like a WL for the LD gate in both directions - and a read-back that
+differs fails the board exactly as a failed WL does (no RD, `leftInLoader`, the addressed retry lines
+with that row first); the table gains the column "verify".
+
 ### 4.14 Board profiles (v0.8.0)
 
 The Node (RV1106BG2) and the Stacked core (RV1106G2, `port/integration`) share the medium (SPI NOR,
@@ -1134,6 +1140,400 @@ label, the daily checks, the two dialogs). The 0.7.0 pins (`singleBoardPathUncha
 product string (`DEVPKEY_Device_BusReportedDeviceDesc` in UsbProbe; until then the product is read
 from the board over adb); a JSON profile file; a CC1310 bootloader minimum version for rule 4; a
 per-profile SSH profile / remote folder (FACTS D8).
+
+### 4.15 The layout of a board met in Loader mode (v0.8.0)
+
+A board met in Loader mode - at step 1, or arriving during the wait after step 3 (no board at the
+start, then one put into Loader / MASKROM mode by hand or by a session tab's `reboot loader`) -
+cannot tell its `/proc/cmdline`. 0.7.0 then used the image's env.img layout blindly or failed
+"partition layout unknown"; 0.8.0's rule 2 (4.14) needs the board's own layout to compare with the
+image's, and an image without an env layout needs it to place its rows at all. The contract is the
+paragraph "The layout of a board met in Loader mode" of `src/firmware/SocFlasher.h` and "Reads from
+the board" of `src/firmware/RockchipTool.h`; the facts are `docs/firmware-update/RV1106G2_FACTS.md`
+rows 9, 10, 17, 18, 26, 27, 32.
+
+**When** (`SocFlasher::Private::toStepFive()`): the Loader device the step-4 poll adopts after step 1
+or after step 3's wait - after the several-devices refusal and the override refusal (4.14), so there
+is exactly one device and it is this one - goes through the read first when the flow did not come
+through step 2 and the board's own layout is unknown: `mtdParts()` empty (nothing remembered for
+"*", no `--layout`), or a remembered layout whose `BoardProfiles::byLayout()` profile contradicts
+the adopted device's Loader PID (`byLoaderPid()`). The "*" memory is the layout read last from ANY
+board on the PC: after a Node's status a G2 met in Loader mode would inherit the Node's layout, rule 2
+would refuse the correct G2 image and `--force-layout` would become the habit. So that case is
+logged ("the remembered layout is a Node (RV1106BG2)'s; the board's Loader PID 0x110c says Stacked
+(RV1106G2): reading the board's own") and the read runs as if nothing were remembered. The image's
+env.img layout does not count as known. A board rebooted by step 2 (its `/proc/cmdline` was read) and
+a MASKROM board (UF needs no layout) read nothing. The read runs before the plan: the board's layout
+is an input of the plan key and of the rules, so the order at step 5 is read, `ensurePlan()`, rules,
+writes. The pinned 0.7.0 command lists pass `--layout`, so none of them gains a PL / RL.
+
+**How** (all addressed with the adopted device's `DeviceStatus::locationId`; a device whose `LD` line
+carried no LocationID is never read - "the board's layout could not be read in Loader mode:
+upgrade_tool LD printed no LocationID for it"):
+
+1. The env partition, the vendor's own way for exactly these boards (`rkdownload.sh`'s
+   `RL 0 1 /tmp/env.img`, row 26), 128 sectors because the env is 64 KiB at sector 0 on both boards
+   (row 18): "reading the flash layout of the board in Loader mode (env partition, upgrade_tool RL 0
+   128)", `upgrade_tool -s <id> RL 0 128 <extractDirectory()>/.layout/env.bin`
+   (`RockchipTool::readLbaOn()`, no timeout, run in the `.layout` folder), then
+   `mtdPartsFromEnvImage()` + `parseMtdParts()` -> "partition layout of the board (env partition read
+   in Loader mode): <mtdparts>" (`LayoutSource::LoaderEnv`). A file left from an earlier read is
+   removed before the read (it is never parsed as this board's); the file is deleted after a
+   successful parse and kept otherwise, for a look. Otherwise: "the env partition of the board holds no
+   usable layout (<why>); reading the partition table instead (upgrade_tool PL)", why = "not started:
+   <error>" / "exit code <n>: <the last lines>" (also an exit 0 whose text says it failed) / "no
+   mtdparts in the env partition" / "an unreadable mtdparts in the env partition: <text>" / "cannot
+   write <file>".
+2. The partition table, `upgrade_tool -s <id> PL` (`partitionListOn()`, the LD timeout): its shape on a
+   NOR board whose table lives in env.img is UNVERIFIED (open question 7), so it is tried only when the
+   verified source yields nothing, and `RockchipTool::parsePartitionList()` is strict: rows "<index>
+   <offset> <size> <name>", "<offset> <size> <name>", "<index> <name> <offset> <size>" or "<name>
+   <offset> <size>" (numbers in 512-byte sectors, hex `0x` / `0X` or decimal; names `[A-Za-z0-9_-]+`;
+   a size `-` or 0 = "to the end", last row only); the banner, blank lines, "List of ..." lines and
+   lines with fewer than two numbers are skipped; every other line must be a row; the table needs two
+   rows at least, the first at sector 0, offsets strictly ascending without overlap, no name twice -
+   anything else is "no usable table", never a wrong layout. -> "partition layout of the board
+   (upgrade_tool PL): <mtdparts>" (`LoaderPartitionList`). Its raw output goes to `toolOutput()` (the
+   log pane, su-fw's log) and to `lcFirmware`, so the first G2 answers the question.
+3. Both failing is not a failure of the flow: "the board's layout could not be read in Loader mode:
+   <why>" (not started / "upgrade_tool PL timed out" / "exit code <n>" / "no partition line"), then
+   0.7.0's path - the image's env.img layout when it has one, else "partition layout unknown: ...".
+
+**The rendered layout** (`renderMtdParts()` in SocFlasher.cpp, next to `normalizedLayout()`):
+"<device>:" (the env's own device id, "sfc_nor" for a PL table - both boards' device, row 9) and one
+"<size>[@<offset>](<name>)" per partition, sizes and offsets in K / M where exact, else bytes, `-` for
+"to the end"; `@<offset>` where a partition does not start where the previous one ended, and always on
+idblock, whose place the BootROM fixes and every vendor string spells out (`256K@64K(idblock)` on both
+boards). So the Node's PL table renders exactly `sfc_nor:64K(env),256K@64K(idblock),256K(uboot),
+384K(meta),3M(boot),5M(rootfs),3M(userdata)`, and an env value with "mtdparts=" or "@0" comes out the
+same: the plan key and the "*" memory see one form.
+
+**After the read** the layout is `mtdParts()`, reported with `mtdPartsRead(layout)`; the flow's
+detection is run again with it as evidence (it only tells something when the PID did not), then
+step 5: the plan, the rules with this layout as the board's (rule 2 refuses a differing image unless
+forced), the writes. FirmwareJob stores it under the Loader-mode key "" (the "*" memory) and under NO
+serial: its `mtdPartsRead` wiring passes the status's serial only when the status is Adb, else "" -
+0.7.0 passed `layoutSerial`, the last ADB serial the job had seen, which in the tab (2 s refresh) or
+in su-fw after a status of another board is a guess from no evidence.
+
+**Which source the writes used** (`layoutSource()`, decided at step 5, `None` before and in MASKROM
+mode): the Loader-mode read when the plan's layout parses equal to it (also when the image's env.img
+says the same: the board's own was looked for, and both agree); else `Image` when the plan placed the
+rows in the image's env.img layout; else `Board` when step 2's `/proc/cmdline` carried it; else `Owner`
+(remembered / `--layout`). The line before the writes follows it: "flash layout in use (from the
+image's env.img)" / "(from the board)" (Board and Owner, 0.7.0's texts) / "(from the board's env
+partition, read in Loader mode)" / "(from upgrade_tool PL in Loader mode)". `layoutSourceText()` gives
+"the layout given for the board" / "the board's /proc/cmdline" / "the image's env.img" / "upgrade_tool
+PL in Loader mode" / "the board's env partition, read in Loader mode" ("" for None).
+
+**Cancel and silence.** A read is no write: the phase stays `WaitingForLoader` while it runs (no new
+`Phase` value: the tab's phase texts stay), the RL / PL is the flow's `stepInvocation`, and `cancel()`
+ends the flow with "cancelled" and cancels the invocation. The RL has no timeout (a slow read is no
+failed one); after 5 min without output the log says "upgrade_tool has printed nothing for %1 min
+while reading the board's layout; it is left running (Cancel ends it: a read changes nothing on the
+board)". The PL has the LD timeout.
+
+**Unverified** (no board has run any of it; everything ran on FakeToolRunner): the shape of
+`upgrade_tool PL` on a NOR board whose table lives in env.img (open question 7; the parser is written
+for the tool's documented table and refuses anything else); whether the Linux upgrade_tool v2.26 takes
+`-s` with PL / RL; RL's progress line ("Read LBA from file (nn%)" is assumed from WL's; nothing
+depends on it).
+
+**First-board check** (with the owner): the first G2 in Loader mode (`adb reboot loader` by hand,
+`upgrade_tool LD` lists it as the only device): run `upgrade_tool -s <id> PL` by hand once, before any
+write, and record its raw output in TEST_REPORT (open question 7); then, with nothing remembered for
+"*", `su-fw flash-soc --serial <G2> --partitions userdata --image <G2 update.img>` - the log must show
+the env-read line and a parsed layout (or the PL fallback), then "flash layout in use (from ...)" equal
+to the image's env layout.
+
+**Classes.** `RockchipTool::partitionListOn()`, `readLbaOn()`, `parsePartitionList()`,
+`kEnvPartitionSectors`; `SocFlasher::LayoutSource`, `layoutSource()`, `layoutSourceText()`; the one
+FirmwareJob wiring change above. Test fixtures: `kPlNode`, `kPlStacked`, `kPlDecimal`, `kPlGarbage`,
+`kPlHeaderOnly`, `scriptLoaderLayoutRead()` (registered before `scriptSocFlash()`, which itself has no
+PL / RL).
+
+**Decisions and why** (the package prompt's list): every PL / RL is addressed (a wrong device's table
+is a wrong layout); the read only for a board met in Loader mode whose own layout is unknown, a
+remembered layout of the other profile counting as unknown; env first (verified), PL second
+(unverified, strict), the image's third, unknown last; the read before the plan and every rule; a
+layout read in Loader mode remembered under "*" and no serial; cancellable, no new phase; RL without a
+timeout, PL with the LD one; the temporary under `<extract folder>/.layout`; one rendered form; MASKROM
+and step-2 boards read nothing. Choices of the implementation: `@` always on idblock (else the
+rendering could not equal the vendor's string); the parser also refuses overlap, a repeated name, a
+fifth column; a stale `env.bin` is removed before the read; a Loader read that equals the image's
+layout reports the Loader source.
+
+**Tests.** `tst_firmwaretools` (+27): the PL parser (documented shape, every order and radix, size 0 /
+`-`, the rejects, the stacked table), the two command lines, the env constant; the flow: env read, env
+failing three ways then PL, PL timing out / failing / garbage / not starting then the image's layout
+or "unknown", a known layout and MASKROM and ADB boards reading nothing, rule 2 fed by the read, the
+normalized string, every read addressed, cancel during RL and PL, the source texts, a board arriving
+after the wait, a remembered layout of the other profile; `tst_firmwarejob` (+1): the read stored
+under "" only, also after a status showed another board.
+
+**Not in 0.8.0.** The fleet reads no layout in Loader mode (its boards come through ADB); su-fw's
+`layoutSource` JSON field and the tab's partition label still say "board" / "image" (FirmwareCli /
+FirmwareTab could show `SocFlasher::layoutSourceText()`).
+
+### 4.16 Verify after write (v0.8.0)
+
+**What and why.** A `WL` that exits 0 says that upgrade_tool wrote; it does not prove that the flash
+holds the image - a flaky cable, a hub brown-out or a tool that lies all look the same. On the
+stacked board, which has no documented MASKROM entry (4.14), a boot partition that is silently wrong
+is expensive. With *verify after write* every partition written in Loader mode is read back right
+after its write and compared with the image byte for byte. It is opt-in: the daily Node update stays
+as fast as it was. The contracts are the "Verify after write" paragraphs of
+`src/firmware/SocFlasher.h`, `FleetFlasher.h`, `FirmwareJob.h`, `FirmwareCli.h` and
+`src/ui/FirmwareTab.h`, FleetReport.h's "v0.8.0 additions", and `RockchipTool::readLbaOn()` /
+`compareReadBack()` / `ReadBackResult`; the facts are `docs/firmware-update/RV1106G2_FACTS.md` rows
+10, 13, 15, 26, 27 and D10.
+
+**The command.** `upgrade_tool -s <LocationID> RL <offset / 512> <ceil(bytes / 512)> <file>`
+(`RockchipTool::readLbaOn()`, the read-back of `WL`; the vendor's rkdownload.sh reads the env
+partition the same way). Always addressed - no unaddressed read exists: the single-board flow uses
+the LocationID of the device its `LD` adopted (`DeviceStatus::locationId`, kept by `toStepFive()` for
+the whole flow), the fleet the id it mapped for the board. Its WL / RD stay unaddressed and byte for
+byte: the profiles package refuses the single-board flow when `LD` lists more than one device in
+download mode (4.14), so the one device the RL addresses is the one the WL wrote. No timeout, never
+cancelled, the silence line as for a WL (a timed-out read would call a slow one "not verified").
+
+**The compare** (`RockchipTool::compareReadBack(image, readBack)`): over the image's length, never the
+partition's - a jffs2 userdata (row 15) or an erofs boot (rows 11, 13) is smaller than its partition,
+and what lies behind its last byte on the flash is not the image's business. The RL reads ceil(bytes /
+512) sectors (at least one); the last sector's tail is ignored. Both files are streamed in 1 MiB
+blocks (a 12 MiB boot never sits in memory twice). The result: ok, or the first differing byte as an
+offset into the image with the byte read and the image's, or "short read: <n> of <m> bytes" (a
+shorter read-back), or "cannot read <native path>: <reason>".
+
+**The single board** (`SocFlasher`). A clean WL is followed, before the next row, by `verifyRow()`:
+"verifying rootfs: reading 7481 sectors back from sector 8064 (upgrade_tool -s 104 RL)", the RL into
+`<extractDirectory()>/.verify/<name>.img` (a stale file there is removed first: it is never compared
+as this read's), in the Flashing phase, outside `stepInvocation` exactly like a WL; progress
+"Verifying rootfs (6 of 7)" with the RL's own percentage (its "(nn%)" lines parse like WL's). Then
+"rootfs verified: 3830272 bytes read back equal the image (4.1 s)", the temporary deleted,
+`partitionVerified()`, `verifyResults()`, and only then the next WL. Every failure ends the flow
+Failed with no RD - the board stays in Loader mode, nothing else is written, the owner decides:
+
+- a mismatch: "verifying rootfs failed: byte 4660 of the image differs (flash offset 0x3F1234): read
+  0x3c, image 0xff; the board is left in Loader mode, nothing else is written";
+- a short read: "verifying rootfs failed: upgrade_tool RL read 1024 of 3830272 bytes (short read)";
+- an RL that failed: "verifying env failed: <its last lines>" (exit != 0, or exit 0 with a failure
+  text, `reportsWriteFailure()`), or "... cannot run upgrade_tool: <error>";
+- a gone id: "verifying env failed: No found specific rockusb device! (LocationID 104 is gone)";
+- no id at all (upgrade_tool v2.37 always prints one; guarded anyway): "... no LocationID for the
+  board (upgrade_tool LD printed none): the read-back needs -s", before any RL.
+
+The temporary stays after a failure, for a look. MASKROM mode (UF) logs "verify after writing: not
+available in MASKROM mode (UF writes and checks the whole image itself)" and reads nothing back.
+`cancel()` during the RL is refused with the WL's text ("cannot cancel while upgrade_tool writes the
+flash"), and FirmwareJob keeps the step uncancellable as during a WL.
+
+**The fleet** (`FleetFlasher`). After a clean WL of row k the "rootfs written: ..." line and
+`partitionWritten()` come as before; then, once no gate `LD` is in flight, `startVerify()`: "verifying
+rootfs: reading 7481 sectors back from sector 8064 (upgrade_tool -s 113 RL)", the RL into
+`<extract folder>/.fleet/<serial>/<name>.img` and run in that folder (where upgrade_tool already
+writes its Log), as the board's one process (so never next to its own WL), counted in
+`inFlightUpgradeTools`: no gate `LD` starts while it runs and it does not start while one runs - an
+RL is counted like a WL in both directions. `boardProgress("Verifying rootfs (1 of 1)", the RL's
+percentage)`. A good read-back adds the row to `written` and `verified` (`written` only now: a row
+whose read-back failed is not written completely), logs "rootfs verified: ...", emits
+`partitionVerified(board, result)` and goes to the next row's re-check, as without verify. A failure
+is the failed-WL path: Failed with "verifying rootfs failed: <...>" (the fleet's wording has no "the
+board is left in Loader mode ..." sentence: the board's own "left in Loader mode on port P,
+LocationID n: nothing else is written to it. Retry by hand, addressed: ..." line follows), no RD,
+`leftInLoader`, `verifyFailed` = the row, `verifyMismatch` = the offset (-1 unless a mismatch), and the
+addressed retry lines - that row's WL first (it is not in `written`), the rows after it, then the RD.
+A gone id gets the WL's gone-id handling (retry empty, "port P shows ...: find its LocationID with
+`upgrade_tool LD` before any retry, and address it with -s"). The drain finishes an RL as it
+finishes a WL (a board that started finishes every row, its read-backs and its RD). The end-of-run
+correction and pairing treat a board failed by its verify as one failed by a WL: a `leftInLoader`
+board keeps its lines (nothing doubled); one whose id re-enumerated is paired with the new id and its
+lines start with the row that was not verified.
+
+**What the user reads.** FleetReport's real-run table gains the column "verify" between "writing" and
+"seconds": "-" when the run did not verify or the board wrote nothing, "ok" when every row in
+`written` is in `verified`, "FAIL <row>" when a read-back failed (the detail says why); the dry-run
+table is unchanged. `json()` gains "verify", `boardJson()` "verified" / "verifyFailed" /
+"verifyMismatch", and su-fw's per-board "step" event carries the same three. A single board's done
+object carries "verify" always and, with `--verify` after partition writes, "verified":
+[{"name","ok","bytes","mismatch","seconds"}] (absent in MASKROM mode). The exit codes are unchanged: a
+failed verify is 1.
+
+**Inputs.** `su-fw flash-soc ... --verify` (one board or a fleet) and `su-fw pull-flash ... --verify`
+(`FirmwareCli` -> `FirmwareJob::setVerifyAfterWrite()` before the operation); the Firmware tab's
+"Verify after writing" checkbox next to Flash SoC (`AppSettings::firmwareVerifyAfterWrite()`,
+"firmware/verifyAfterWrite", default off, stored on toggle, handed to the job by `syncJob()` before
+Flash SoC and Pull & Flash, disabled while an operation runs). The job hands it to the SocFlasher in
+`startFlash()` and to the FleetFlasher in `startFleet()`, and mirrors the single board's
+`partitionVerified()` (to `lcFirmware` as well); the fleet's verdicts are in its boards. su-fw prints
+English only, as before.
+
+**Decisions and why** (the package prompt's list). Every RL is addressed (`readLbaOn()` only), with
+the device the flow adopted; no second several-devices check (4.14's refusal is the guarantee). An RL
+never runs while a WL of the same board is in flight (the owner's rule; the single board is
+sequential, the fleet keeps one process per board); across boards an RL may overlap another board's
+WL, as WLs overlap today. An RL is counted like a WL for the LD gate, in both directions (`LD` opens
+every rockusb device, and `LD` next to an RL is as unmeasured as next to a WL). The compare is over
+the image's length. A mismatch is a failed board and is never re-written by the tool: a flipped byte
+after a WL that said OK means the flash, the cable or the tool lied, and writing again blindly could
+lie again; the fleet handles it exactly as a failed WL, so the owner's recipe for a failed write
+covers a failed verify. No re-check before an RL: the re-check guards writes, and an RL fails loudly
+on a gone id (exit 255). Cancel during an RL is refused with the existing text (single board) or
+drained (fleet): the RL is part of the board's write session, cutting it would be harmless but would
+leave "verified" unknown, and one rule is simpler than two. The temporary is per row, deleted on
+success, kept on failure. Verify is opt-in and not available in MASKROM mode (UF checks itself). One
+table column, the dry-run table unchanged, JSON fields added and none renamed. Choices of the
+implementation: the read-back's progress is the row's own percentage in both flows (a write keeps its
+percentage over all bytes); in a fleet a row counts as written only once it is verified;
+`partitionVerified()` carries the failure text in `error` for every failure, a mismatch included; at
+least one sector is read; a stale temporary is removed before the read.
+
+**Tests** (35 new cases, all on fakes). `tst_firmwaretools` (+18): `compareReadBack()` - equal (also a longer,
+padded read-back), a mismatch at 0, at 1 MiB - 1, at 1 MiB and at the end (the first of two), short,
+unreadable, 12 MiB; the single-board flow on `FakeFlash` (tests/support/FirmwareFixtures: a flash that
+remembers what each WL wrote and answers every RL with it) - every row read back right after its WL
+(invocation order WL0 RL0 ... RD, the RL's options), the sector counts (ceil, a 1-byte row), the
+mismatch (the flash offset computed from the Node layout), the short read, a failing / text-failing /
+unstartable RL, the gone id, off by default (0.7.0's list), MASKROM, the progress stage, the
+LocationID of the step-4 poll, a jffs2 image shorter than its partition, cancel refused while the RL
+runs, never unaddressed. `tst_fleetflasher` (+11, and `reportTableAndJson` extended for the column and
+the fields): the happy path on seven boards, a mismatch / short read / failing RL / gone id (each the
+failed-WL path), two rows, the LD gate counting an RL, off by default, a drain that waits for a hung
+RL, the progress lines, the end-of-run correction and pairing; `FakeUsbBus` got the same read-back
+model per board (`setReadBack()`, `readsTo()`, `readsDuringOwnWrite()`, RLs in `ldDuringWrites()` and
+`unaddressedCommands()`). `tst_firmwarecli` (+5): `--verify` lines and JSON, a mismatch exits 1,
+pull-flash (Loader and MASKROM), the fleet's column and fields, the help. `tst_firmwaretab` (+1): the
+checkbox, its setting, and a Flash SoC that reads back; `settingsRoundTrip` / `appSettingsFirmwareKeys`
+cover the key. Every 0.7.0 pin (`singleBoardPathUnchanged`, `flashAllInLoaderMode`,
+`happyPathSevenBoards`, `ldGateSharesOneListing`, ...) passes unchanged: verify is off there.
+
+**Unmeasured** (no board has run any of it). The RL's cost per MiB on either board - the Node's
+3.8 MiB rootfs, the G2's 8-10 MiB boot (D10): the log prints the seconds per row, and the first-board
+ladder measures it; RL's progress line text (assumed "Read LBA from file (nn%)" like WL's: only the
+percentage parse depends on it, and a missing percentage only means no progress ticks); an RL next
+to another board's WL (as unmeasured as two WLs, which the bench measured only in 0.7.0's F+G log);
+the Linux upgrade_tool v2.26's RL (and its `-s`).
+
+**First boards** (the integrator with the owner). The Node bench: `su-fw flash-soc --serial F
+--partitions rootfs --verify --image <known-good>` (the RL seconds for 3.8 MiB), then the fleet with
+`--verify` on two boards, then seven (the column). The first G2, after the bring-up ladder's
+`userdata` step: `--partitions userdata --verify`, then `--partitions boot --verify` - the RL seconds
+for the 8-10 MiB boot, the number D10 asks for.
+
+**Not in 0.8.0.** A read-back of a MASKROM `UF` flash; a verify-only command (read back without
+writing); re-writing a row after a failed verify (deliberately never).
+
+### 4.17 The bench inventory (v0.8.0)
+
+**What and why.** One record per board, keyed by its ADB serial: what the tool knows about it. An
+agent reads it before a flash ("which image does board X run?") and the owner after ("what happened
+to each board?"). The contracts are `src/firmware/Inventory.h` and `src/firmware/InventoryRecorder.h`.
+Nothing in it is measured by the inventory itself; it records what the operations report. A field
+keeps its last known value: a record is only ever extended, never cleared by an operation that did
+not learn the field.
+
+**The file.** `AppSettings::dataDirectory()/inventory.json`, shared by the tab and every su-fw on the
+PC, never between PCs:
+`{"version":1,"updated":"<ISO 8601 + offset>","boards":{"<serial>":{...}}}`. A record holds:
+
+- `serial`, `profile`, `port`, `layout`, `gadgetSerialString` (`yes` / `no`);
+- `lastImage` {`file`, `chipTag`, `md5`, `gitDescribe`, `partitions`, `written`};
+- `mcu` {`version`, `role`, `read`};
+- `lastOperation` {`name`, `result`, `message`, `time`};
+- `firstSeen`, `lastSeen`.
+
+A field that was never learned is absent. Times carry the local offset, so a file read on another
+PC still says when. No secret and no path except the image's file name: the file is meant to be
+pasted into a chat.
+
+**Writes.** One JSON file, one lock, one atomic rename (decision 1):
+
+1. `QLockFile <file>.lock` is waited for up to 3 s. A lock left by a dead process, or older than
+   30 s, is taken over.
+2. The file is read again under the lock.
+3. The change is applied to that fresh copy.
+4. `QSaveFile` writes the whole file. Reads and commits are retried briefly on Windows sharing
+   races.
+
+Two su-fw processes ending at once both land, in some order, and nothing is lost. A corrupt file
+(not JSON, not an object, "boards" not an object) makes `load()` false with "<path>: <reason>". The
+next write moves it to `inventory.json.corrupt-yyyyMMdd-HHmmss` (never overwritten silently; the
+owner logs it) and starts afresh. A newer "version" is read; its unknown fields are dropped by the
+next write (accepted in 0.8.0).
+
+**The recorder.** `InventoryRecorder` sits outside the job: FirmwareJob reads no inventory and
+changes nothing for it. FirmwareCli creates one in `createJob()` and resets it before the job.
+FirmwareTab creates one in its constructor, parented to the tab. It listens to the job's signals and
+writes one update per event. A failed write is logged ("inventory: cannot write ...") and never
+fails an operation. The events:
+
+- `statusChanged`:
+  - One ADB board with a serial: it becomes `lastSerial()` and the record gets lastSeen.
+  - Throttled: a write only when the stored lastSeen is a minute old. The tab refreshes every 2 s.
+  - While `gadgetSerialString` is unknown, and only when writing, the USB enumeration runs. Exactly
+    one ADB gadget gives `yes` (its serial is the status's) or `no` (a bus address, the Node's
+    `6&...`, FACTS open question 5).
+  - Any other status (Loader, MASKROM, none, several boards) clears `lastSerial()`. Nothing is
+    guessed from an earlier status (decision 3).
+- `boardProfileChanged`: the profile, only from a detection (Loader PID, product string, layout),
+  never from the override (decision 14). It comes after the status, so a first `su-fw status` ends
+  with layout and profile.
+- `mtdPartsRead` and `boardPortLearned` with a serial set the layout and the port. With an empty
+  serial (a layout read in Loader mode) nothing is written, and "inventory: the board in Loader mode
+  has no serial; not recorded" is logged once per flow.
+- `mcuInfoChanged` sets the version, role and read time.
+- `stepFinished` of flash / mcu / set-role / info, for `lastSerial()`:
+  - `lastOperation` is set (done / failed / cancelled).
+  - A flash that ended ok also sets `lastImage`. Its rows are `selectedPartitions()`, or every row
+    of the image for UF. Its MD5 is the whole file, streamed, cached per path and mtime.
+  - The same MD5 merges the rows (first-appearance order) and refreshes `written`. Another MD5
+    replaces the image. A failed or cancelled write keeps the old image (decision 4).
+- `operationFinished(pull-flash)` sets `lastOperation`.
+- `boardFinished` (fleet):
+  - Port, layout, profile (only without an override) and `lastOperation` {fleet-flash,
+    resultText(), detail}.
+  - Done or NotBack also set the image with `FleetBoard::written`.
+  - A dry run's Ready boards get lastSeen and the port only. Its other boards get nothing
+    (decision 16).
+  - A board adb did not list keeps its old lastSeen.
+
+**su-fw.**
+
+- `su-fw inventory [--serial S] [--json]`:
+  - It needs no job, no tool, no lock (decision 9).
+  - The table has the columns serial, profile, port, image, tag, md5 (8 digits), written, mcu, last
+    operation, result, time, last seen; `FleetReport::alignColumns()` lays it out.
+  - The done object carries `"inventory": {"file","boards"}`.
+  - Exit codes: 0 listed, 1 unreadable, 2 usage, 3 no record for S.
+- Every flash logs "image md5: <hex>" after the image lines, and its done object carries `imageMd5`.
+  pull-flash logs it after its pull step.
+- `flash-soc --expect-image MD5 [--force]`:
+  - Only with `--serial` / `--serials` (decision 6). With `--all-boards` the serials are known only
+    inside the operation, after adb talked to the boards.
+  - The inventory file is checked before `applyLayout()`; for `--all`, right after the plan. No tool
+    and no lock are involved, so a refused run has done nothing.
+  - A board is refused when its record's MD5 matches (case-insensitive) and its `partitions` hold
+    every named row (with `--all`: every row of the image). Exit 1.
+  - The MD5 with rows missing is written, with a line naming the recorded and the missing rows. This
+    is the daily `--partitions rootfs` / `boot`, and the G2 ladder.
+  - A fleet refuses as a whole. `--force` writes anyway.
+- Usage errors (2): a value that is not 32 hex digits, no named board, `--force` alone.
+
+**Not in 0.8.0** (decision 10):
+
+- an inventory table in the tab;
+- absorbing `firmware/boardPorts` and the per-serial `firmware/mtdparts`. The fleet's PortProvider
+  and the layout provider read those settings in pinned paths. The inventory is a report of what
+  happened; the settings stay the tool's working memory. Merging them is a later step.
+
+**Tests:**
+
+- `tst_inventory` (35): the file, the lock, corrupt files, the table, md5, and the recorder on a job
+  over FakeToolRunner / FakeUsbBus / the in-process SSH server;
+- 14 cases in `tst_firmwarecli` and 1 in `tst_firmwaretab`.
+
+**First board:** after the first G2 `su-fw status`, `su-fw inventory --json` answers open question 5
+(`gadgetSerialString`) and shows profile "stacked".
 
 ## 5. Build, run, test
 

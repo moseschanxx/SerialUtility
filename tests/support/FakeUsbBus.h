@@ -44,10 +44,14 @@ class FakeToolRunner;
  * (the enumeration unchanged, LD lists the new id, a WL / RD with the old id answers "No found specific
  * rockusb device!" exit 255); addForeignAdb(serial) adds an `adb devices` entry (state "device") with no
  * Rockchip instance on the bus - a phone. The counters tell what the flasher must never do:
- * ldDuringWrites() (an LD started while a WL / RD was in flight, OR a WL / RD started while an LD
- * was in flight), maxConcurrentWrites() (the wave size), unaddressedCommands(), writesTo(serial) /
- * resetsTo(serial) (the lines addressed to the board's id, in order), cancelledWrites() (WL / RD
- * invocations that got cancel(): must be 0). The upgrade_tool handlers answer the program by its
+ * ldDuringWrites() (an LD started while a WL / RL / RD was in flight, OR a WL / RL / RD started while
+ * an LD was in flight), maxConcurrentWrites() (the wave size: WLs only), unaddressedCommands() (a WL /
+ * RD / UF / RL without -s), writesTo(serial) / resetsTo(serial) / readsTo(serial) (the lines addressed
+ * to the board's id, in order), cancelledWrites() (WL / RL / RD invocations that got cancel(): must be
+ * 0), readsDuringOwnWrite(). (v0.8.0, verify-rl) `upgrade_tool -s ID RL <sector> <count> <file>`
+ * writes the bytes of the file the board's WL at that sector wrote, padded with 0xff to count * 512
+ * (nothing written there: all 0xff), with "Read LBA from file (nn%)" lines over writeDurationMs,
+ * exit 0 - or as setReadBack() says. The upgrade_tool handlers answer the program by its
  * bare name or by a path to it (quoted when it holds a blank, with or without ".exe"), so a
  * flasher given the bundled tool's full path runs on the same bus.
  */
@@ -101,6 +105,18 @@ public:
     Board board(const QString& serial) const;
     QStringList writesTo(const QString& serial) const;
     QStringList resetsTo(const QString& serial) const;
+
+    // ---- (v0.8.0, verify-rl) the read-back model ----
+    enum class ReadBack { Equal, FlippedByte, Short, Fails, NoSuchDevice, Hangs };
+    /// (v0.8.0) How `upgrade_tool -s <its id> RL <sector> <count> <file>` answers for `serial`: the
+    /// file written by the WL recorded at that sector for that id (Equal: padded with 0xff; FlippedByte:
+    /// byte `offset` replaced by 0x3c; Short: the first `offset` bytes only; Fails: "Read LBA failed!"
+    /// exit 1; NoSuchDevice: the exit-255 text; Hangs: held until releaseWrites(), then Equal), per
+    /// file name ("" = every row). Default Equal.
+    void setReadBack(const QString& serial, const QString& fileName, ReadBack behaviour, qint64 offset = 0);
+    QStringList readsTo(const QString& serial) const;    ///< the RL lines addressed to its id, in order
+    int readsDuringOwnWrite() const;                      ///< an RL started while a WL of the SAME id was in flight: must be 0
+    // ldDuringWrites() now counts an RL as a write (both directions); unaddressedCommands() counts an RL without -s.
     int maxConcurrentWrites() const;
     int ldDuringWrites() const;           ///< LD / WL-or-RD overlaps, either direction
     int unaddressedCommands() const;

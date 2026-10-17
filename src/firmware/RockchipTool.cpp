@@ -590,6 +590,77 @@ RkfwHeader RockchipTool::readRkfwHeader(const QString& path, QString* error)
 }
 
 // ---------------------------------------------------------------------------------------------
+// Verify after write (v0.8.0, verify-rl): the read-back against the image
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// The compare reads both files in blocks of this size: a 12 MiB boot image never sits in memory
+/// twice over.
+constexpr qint64 kCompareBlockBytes = 1024 * 1024;
+
+QString cannotRead(const QString& path, const QString& reason)
+{
+    return QCoreApplication::translate("RockchipTool", "cannot read %1: %2").arg(QDir::toNativeSeparators(path), reason);
+}
+
+} // namespace
+
+ReadBackResult RockchipTool::compareReadBack(const QString& imageFile, const QString& readBackFile)
+{
+    // Over the image's length, never the partition's: a jffs2 / erofs image is smaller than its
+    // partition, and what the flash holds behind its last byte is not the image's business (the
+    // RL reads whole sectors, so the read-back is longer by the last sector's tail at least).
+    ReadBackResult result;
+    QFile image(imageFile);
+    if (!image.open(QIODevice::ReadOnly)) {
+        result.error = cannotRead(imageFile, image.errorString());
+        return result;
+    }
+    result.bytes = image.size();
+    QFile readBack(readBackFile);
+    if (!readBack.open(QIODevice::ReadOnly)) {
+        result.error = cannotRead(readBackFile, readBack.errorString());
+        return result;
+    }
+    const qint64 available = readBack.size();
+    if (available < result.bytes) {
+        result.error = QCoreApplication::translate("RockchipTool", "short read: %1 of %2 bytes").arg(available).arg(result.bytes);
+        return result;
+    }
+    qint64 offset = 0;
+    while (offset < result.bytes) {
+        const qint64 want = qMin(kCompareBlockBytes, result.bytes - offset);
+        const QByteArray expected = image.read(want);
+        if (expected.size() != want) {
+            result.error = cannotRead(imageFile, image.errorString());
+            return result;
+        }
+        const QByteArray got = readBack.read(want);
+        if (got.size() != want) {
+            // The file was shorter than its size said (it changed under the compare).
+            result.error = QCoreApplication::translate("RockchipTool", "short read: %1 of %2 bytes")
+                               .arg(offset + got.size())
+                               .arg(result.bytes);
+            return result;
+        }
+        if (expected != got) {
+            for (qsizetype i = 0; i < expected.size(); ++i) {
+                if (expected.at(i) != got.at(i)) {
+                    result.mismatchOffset = offset + i;
+                    result.readByte = static_cast<quint8>(got.at(i));
+                    result.imageByte = static_cast<quint8>(expected.at(i));
+                    return result;
+                }
+            }
+        }
+        offset += want;
+    }
+    result.ok = true;
+    return result;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Partition layout (mtdparts) and the unpacked image (package-file)
 // ---------------------------------------------------------------------------------------------
 

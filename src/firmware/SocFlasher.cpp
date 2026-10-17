@@ -228,6 +228,12 @@ QString severalDevicesMessage(const QList<RockusbDevice>& devices)
  * read like a wait. A layout found becomes mtdParts (loaderLayoutRead) and is reported with
  * mtdPartsRead(); step 5 then plans, applies the rules and decides layoutSource from what the plan
  * used.
+ *
+ * Verify after write (v0.8.0, verify-rl): with verifyAfterWrite a clean WL is followed by
+ * verifyRow() - the RL of that row, addressed to deviceLocationId (the device toStepFive() was
+ * handed), in the Flashing phase and outside stepInvocation exactly like a WL - and only its ok
+ * moves writeIndex on; a failure ends the flow before the next WL and without RD (failVerify()).
+ * verifyStage makes overallPercent() report the row's read percentage.
  */
 struct SocFlasher::Private
 {
@@ -355,6 +361,13 @@ struct SocFlasher::Private
     quint16 loaderReadPid = 0;                             ///< the Loader PID of the device the read addressed
     bool boardLayoutRead = false;                          ///< step 2's /proc/cmdline carried the layout
     bool layoutReading = false;                            ///< the env read (RL) runs: the silence line applies to it
+
+    // ---- verify after write (v0.8.0, verify-rl) -----------------------------------------------
+    bool verifyAfterWrite = false;             ///< the owner's choice (--verify, the tab's checkbox)
+    QList<ReadBackResult> verifyResults;       ///< the rows verified in this flow, row order (a failed one last)
+    bool verifyStage = false;                  ///< the RL of the current row runs: progress is the row's read percentage
+    QElapsedTimer verifyClock;                 ///< from the RL's start
+    QString deviceLocationId;                  ///< the LocationID of the Loader device step 1 / 4 adopted ("" before)
 
     // ---- helpers -------------------------------------------------------------------------
 
@@ -1086,6 +1099,9 @@ struct SocFlasher::Private
         loaderReadPid = 0;
         boardLayoutRead = false;
         layoutReading = false;
+        verifyResults.clear();
+        verifyStage = false;
+        deviceLocationId.clear();
         setPhase(Phase::Detecting);
         // The image's chip tag is a file read (no tool): said at once when it names a profile; else
         // once the plan has read the image's env.img layout (or before UF).
@@ -1450,6 +1466,9 @@ struct SocFlasher::Private
     void toStepFive(RockusbDevice::Mode mode, const QString& deviceId, quint16 pid)
     {
         const quint64 id = flowId;
+        // (v0.8.0, verify-rl) The address of every read-back of this flow: the device the poll
+        // adopted, the only one in download mode (the several-devices refusal ran before).
+        deviceLocationId = deviceId;
         if (mode == RockusbDevice::Mode::Loader && !cameThroughStepTwo && boardLayoutUnknown(pid)) {
             if (id == flowId) {   // a slot of the log line may have ended the flow
                 readLayoutInLoaderMode(deviceId, pid);
@@ -1679,6 +1698,11 @@ struct SocFlasher::Private
             method = FlashMethod::UpgradeFirmware;
             qCInfo(lcFirmware) << "flash method" << method;
             log(QCoreApplication::translate("SocFlasher", "MASKROM mode: writing the whole image with upgrade_tool UF"));
+            if (verifyAfterWrite) {
+                log(QCoreApplication::translate("SocFlasher",
+                                                "verify after writing: not available in MASKROM mode (UF writes and checks the "
+                                                "whole image itself)"));
+            }
             if (!selectedNames.isEmpty()) {
                 log(QCoreApplication::translate("SocFlasher", "the partition selection (%1) is ignored: UF writes every partition")
                         .arg(selectedNames.join(QStringLiteral(", "))));
@@ -1961,6 +1985,11 @@ struct SocFlasher::Private
 
     int overallPercent(int filePercent) const
     {
+        if (verifyStage) {
+            // (v0.8.0) A read-back reports the row's own percentage ("Verifying rootfs (6 of 7)
+            // 40 %": 40 % of rootfs read back), not the bytes of the whole queue.
+            return qBound(0, filePercent, 100);
+        }
         if (writeTotal == 0) {
             return 100;
         }
@@ -2051,9 +2080,191 @@ struct SocFlasher::Private
                                                       : tail));
             return;
         }
+        if (verifyAfterWrite) {
+            verifyRow();   // before the next row: the RL never runs next to this board's WL
+            return;
+        }
         writeDone += static_cast<quint64>(row.fileSize);
         ++writeIndex;
         writeNext();
+    }
+
+    // ---- step 5, Loader: verify after write (v0.8.0, verify-rl) ---------------------------------
+
+    /// `upgrade_tool -s <id> RL <sector> <ceil(bytes / 512)> <extract folder>/.verify/<name>.img`
+    /// for the row just written, addressed to the device step 1 / 4 adopted. Like a WL: never
+    /// cancelled (not the stepInvocation), no timeout, the silence line; the phase stays Flashing,
+    /// so cancel() is refused with the WL's text.
+    void verifyRow()
+    {
+        const quint64 id = flowId;
+        const PartitionImage row = writeQueue.at(writeIndex);
+        ReadBackResult result;
+        result.name = row.name;
+        result.bytes = row.fileSize;
+        if (deviceLocationId.isEmpty()) {
+            // upgrade_tool v2.37 always prints one; guarded anyway: never an unaddressed read.
+            result.error = QCoreApplication::translate("SocFlasher",
+                                                       "no LocationID for the board (upgrade_tool LD printed none): the "
+                                                       "read-back needs -s");
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        const quint64 sector = row.offset / kSectorBytes;
+        // The compare covers the image's bytes; the last sector's tail is read and ignored. At
+        // least one sector: a "to the end" read has no meaning here (readLbaOn() refuses 0).
+        const quint64 sectors = qMax<quint64>(1, (static_cast<quint64>(row.fileSize) + kSectorBytes - 1) / kSectorBytes);
+        log(QCoreApplication::translate("SocFlasher", "verifying %1: reading %2 sectors back from sector %3 (upgrade_tool -s %4 RL)")
+                .arg(row.name)
+                .arg(sectors)
+                .arg(sector)
+                .arg(deviceLocationId));
+        if (id != flowId) {
+            return;
+        }
+        const QString folder = effectiveExtractDirectory() + QStringLiteral("/.verify");
+        const QString temp = folder + QLatin1Char('/') + row.name + QStringLiteral(".img");
+        // A file kept from an earlier failed verify is never compared as this read's: it goes first.
+        if (!QDir().mkpath(folder) || (QFileInfo::exists(temp) && !QFile::remove(temp))) {
+            result.error = QCoreApplication::translate("SocFlasher", "cannot write %1").arg(QDir::toNativeSeparators(temp));
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        verifyStage = true;
+        writeStage = QCoreApplication::translate("SocFlasher", "Verifying %1 (%2 of %3)")
+                         .arg(row.name)
+                         .arg(writeIndex + 1)
+                         .arg(writeQueue.size());
+        emit q->progress(writeStage, overallPercent(0));
+        if (id != flowId) {
+            return;
+        }
+        progressParser = RockchipTool::ProgressParser();
+        lineBuffer.clear();
+        lastFlashOutput.start();
+        silenceTimer->start(kUfSilenceLogMs);
+        verifyClock.start();
+        ToolInvocation* invocation = upgradeTool->readLbaOn(deviceLocationId, sector, sectors, temp);
+        if (!invocation) {
+            silenceTimer->stop();
+            verifyStage = false;
+            result.error = QCoreApplication::translate("SocFlasher", "cannot run upgrade_tool: %1")
+                               .arg(QCoreApplication::translate("SocFlasher", "no device address"));
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        // Not kept in stepInvocation, like a WL: the read-back is part of the board's write session.
+        tracked(invocation);
+        QObject::connect(invocation, &ToolInvocation::outputReceived, q, [this, id](const QByteArray& chunk) {
+            if (id == flowId) {
+                onWriteOutput(chunk);
+            }
+        });
+        QObject::connect(invocation, &ToolInvocation::finished, q, [this, id, temp](const ToolResult& toolResult) {
+            if (id == flowId) {
+                onVerifyFinished(toolResult, temp);
+            }
+        });
+    }
+
+    static QString verifyFailedText(const QString& name, const QString& why)
+    {
+        return QCoreApplication::translate("SocFlasher", "verifying %1 failed: %2").arg(name, why);
+    }
+
+    void onVerifyFinished(const ToolResult& toolResult, const QString& temp)
+    {
+        silenceTimer->stop();
+        reportWriteProgress(progressParser.flush());
+        flushToolLines();
+        verifyStage = false;
+        const PartitionImage row = writeQueue.at(writeIndex);
+        const qint64 milliseconds = verifyClock.elapsed();
+        ReadBackResult result;
+        result.name = row.name;
+        result.bytes = row.fileSize;
+        result.milliseconds = milliseconds;
+        if (!toolResult.started) {
+            result.error = QCoreApplication::translate("SocFlasher", "cannot run upgrade_tool: %1").arg(toolResult.error);
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        const QString output = toolResult.outputText();
+        if (RockchipTool::reportsNoSuchDevice(output)) {
+            // The id is gone (exit 255): nothing was read, and the board left Loader mode or
+            // re-enumerated; the flow ends as a failed one, no RD.
+            result.error = QCoreApplication::translate("SocFlasher", "No found specific rockusb device! (LocationID %1 is gone)")
+                               .arg(deviceLocationId);
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        if (toolResult.timedOut || toolResult.exitCode != 0 || RockchipTool::reportsWriteFailure(output)) {
+            const QString tail = RockchipTool::tailForMessage(output);
+            result.error = tail.isEmpty() ? QCoreApplication::translate("SocFlasher", "no output (exit code %1)").arg(toolResult.exitCode)
+                                          : tail;
+            failVerify(result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        ReadBackResult compared = RockchipTool::compareReadBack(row.file, temp);
+        compared.name = row.name;
+        compared.milliseconds = milliseconds;
+        if (compared.ok) {
+            QFile::remove(temp);   // served; kept only after a failure, for a look
+            const quint64 id = flowId;
+            log(QCoreApplication::translate("SocFlasher", "%1 verified: %2 bytes read back equal the image (%3 s)")
+                    .arg(row.name)
+                    .arg(compared.bytes)
+                    .arg(QString::number(milliseconds / 1000.0, 'f', 1)));
+            if (id != flowId) {
+                return;
+            }
+            verifyResults << compared;
+            emit q->partitionVerified(compared);
+            if (id != flowId) {
+                return;
+            }
+            writeDone += static_cast<quint64>(row.fileSize);
+            ++writeIndex;
+            writeNext();
+            return;
+        }
+        const qint64 got = QFileInfo(temp).isFile() ? QFileInfo(temp).size() : -1;
+        QString text;
+        if (compared.mismatchOffset >= 0) {
+            compared.error = QCoreApplication::translate("SocFlasher", "byte %1 of the image differs (flash offset 0x%2): read 0x%3, image 0x%4")
+                                 .arg(compared.mismatchOffset)
+                                 .arg(QString::number(row.offset + static_cast<quint64>(compared.mismatchOffset), 16).toUpper())
+                                 .arg(static_cast<uint>(compared.readByte), 2, 16, QLatin1Char('0'))
+                                 .arg(static_cast<uint>(compared.imageByte), 2, 16, QLatin1Char('0'));
+            text = verifyFailedText(row.name, compared.error
+                                                  + QCoreApplication::translate("SocFlasher",
+                                                                                "; the board is left in Loader mode, nothing else is "
+                                                                                "written"));
+        } else if (got >= 0 && got < compared.bytes) {
+            text = verifyFailedText(row.name, QCoreApplication::translate("SocFlasher", "upgrade_tool RL read %1 of %2 bytes (short read)")
+                                                  .arg(got)
+                                                  .arg(compared.bytes));
+        } else {
+            text = verifyFailedText(row.name, compared.error);
+        }
+        failVerify(compared, text);
+    }
+
+    /// A read-back that failed (a mismatch, a short read, an RL that failed or could not run):
+    /// partitionVerified() with ok false, the temporary kept, the flow Failed - no RD, nothing else
+    /// written: a flipped byte after a WL that said OK means the flash, the cable or the tool lied,
+    /// and writing again blindly could lie again. The board stays in Loader mode; the owner decides.
+    void failVerify(ReadBackResult result, const QString& text)
+    {
+        const quint64 id = flowId;
+        result.ok = false;
+        verifyResults << result;
+        qCWarning(lcFirmware).noquote() << text;
+        emit q->partitionVerified(result);
+        if (id != flowId) {
+            return;
+        }
+        endFlow(Phase::Failed, false, text);
     }
 
     /// `RD` after the last WL: the board leaves Loader mode and boots what was just written.
@@ -2291,11 +2502,11 @@ QString SocFlasher::layoutSourceText(LayoutSource source)
     return QString();
 }
 
-// ---- verify-rl (v0.8.0): compile-only placeholders until that package lands ----------------------
+// ---- Verify after write (v0.8.0, verify-rl) -----------------------------------------------------
 
-void SocFlasher::setVerifyAfterWrite(bool on) { Q_UNUSED(on); }
-bool SocFlasher::verifyAfterWrite() const { return false; }
-QList<ReadBackResult> SocFlasher::verifyResults() const { return {}; }
+void SocFlasher::setVerifyAfterWrite(bool on) { d->verifyAfterWrite = on; }
+bool SocFlasher::verifyAfterWrite() const { return d->verifyAfterWrite; }
+QList<ReadBackResult> SocFlasher::verifyResults() const { return d->verifyResults; }
 
 bool SocFlasher::isRunning() const { return d->isRunning(); }
 SocFlasher::Phase SocFlasher::phase() const { return d->phase; }

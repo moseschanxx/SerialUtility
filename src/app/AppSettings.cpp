@@ -64,6 +64,7 @@ constexpr auto kFirmwareExtraFiles = "firmware/extraFiles";
 constexpr auto kFirmwareMtdParts = "firmware/mtdparts";
 constexpr auto kFirmwareBoardPorts = "firmware/boardPorts";
 constexpr auto kFirmwareProfile = "firmware/profile";
+constexpr auto kFirmwareVerifyAfterWrite = "firmware/verifyAfterWrite";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -867,6 +868,16 @@ void AppSettings::setFirmwareProfile(const QString& id)
 {
     const std::optional<BoardProfile> profile = BoardProfiles::byId(id);
     SU_WRITE_SETTING(kFirmwareProfile, profile ? profile->id : QString());
+}
+
+bool AppSettings::firmwareVerifyAfterWrite() const
+{
+    return readValue(kFirmwareVerifyAfterWrite, false).toBool();
+}
+
+void AppSettings::setFirmwareVerifyAfterWrite(bool on)
+{
+    SU_WRITE_SETTING(kFirmwareVerifyAfterWrite, on);
 }
 
 #undef SU_WRITE_SETTING

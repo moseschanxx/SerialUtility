@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QPointer>
 #include <QRegularExpression>
@@ -193,7 +194,8 @@ bool FleetBoard::operator==(const FleetBoard& o) const
     return tag == o.tag && serial == o.serial && adbState == o.adbState && expectedPort == o.expectedPort && port == o.port
            && locationId == o.locationId && kernel == o.kernel && layout == o.layout && profile == o.profile && stage == o.stage
            && result == o.result
-           && detail == o.detail && written == o.written && retry == o.retry && adbBack == o.adbBack
+           && detail == o.detail && written == o.written && verified == o.verified && verifyFailed == o.verifyFailed
+           && verifyMismatch == o.verifyMismatch && retry == o.retry && adbBack == o.adbBack
            && leftInLoader == o.leftInLoader && boardInfo == o.boardInfo && uptime == o.uptime && rfmcu == o.rfmcu
            && seconds == o.seconds && mappingSeconds == o.mappingSeconds && writingSeconds == o.writingSeconds;
 }
@@ -353,8 +355,8 @@ QStringList FleetFlasher::bootloaderPartitions()
  * id and returns when the run was replaced or has ended. The boards live in `boards` (selection
  * order) for the whole run; callbacks address them by index. Per board at most one tool process
  * runs at a time (`busy`); the run-level tools (`adb devices`, the snapshots' `LD`, the gate's
- * `LD`) are tracked apart. inFlightUpgradeTools counts the WL / RD processes of the run, which is
- * what the LD gate looks at.
+ * `LD`) are tracked apart. inFlightUpgradeTools counts the WL / RL / RD processes of the run, which
+ * is what the LD gate looks at (v0.8.0: a verify's RL counts like a WL, in both directions).
  */
 struct FleetFlasher::Private
 {
@@ -377,6 +379,8 @@ struct FleetFlasher::Private
         quint16 mappedPid = 0;                 ///< the pid its port showed when it was mapped (its Loader mode)
         ProfileDetection detection;            ///< (v0.8.0) its profile as step 2 b / Mapped detected it (info.profile = its id)
         bool resetOnly = false;                ///< (v0.8.0) stopped at its Mapped by the profile gate: never to be written, a reset is all it needs
+        bool verifying = false;                ///< (v0.8.0, verify-rl) the read-back of rows.at(row) runs (its RL is the board's process)
+        QElapsedTimer verifyClock;             ///< (v0.8.0) from that RL's start
         QString leftEvidenceNow;               ///< "port P shows ...; LD ..." of that check
         QString leftEvidencePast;              ///< the same with "showed"
         QString vanishedPort;                  ///< LoaderNotEnumerated: the port its ADB instance left
@@ -450,6 +454,7 @@ struct FleetFlasher::Private
     PortProvider portProvider;
     ProfileDetection planProfile;              ///< (v0.8.0) known() false = the profile gate is off
     QString profileOverride;                   ///< (v0.8.0) --profile: every board's profile without detection
+    bool verify = false;                       ///< (v0.8.0, verify-rl) every clean WL is read back and compared
 
     // ---- the run ---------------------------------------------------------------------------
     quint64 runId = 0;
@@ -483,7 +488,7 @@ struct FleetFlasher::Private
     quint64 totalBytes = 0;
 
     // ---- the LD gate -----------------------------------------------------------------------
-    int inFlightUpgradeTools = 0;              ///< WL / RD processes of this run
+    int inFlightUpgradeTools = 0;              ///< WL / RL / RD processes of this run
     bool gateLdBusy = false;
     QPointer<ToolInvocation> gateLd;
     QList<RockusbDevice> gateListing;
@@ -2145,13 +2150,17 @@ struct FleetFlasher::Private
 
     QString writeStage(const Board& board) const
     {
+        if (board.verifying) {
+            return FleetFlasher::tr("Verifying %1 (%2 of %3)").arg(rows.at(board.row).name).arg(board.row + 1).arg(rows.size());
+        }
         return FleetFlasher::tr("Writing %1 (%2 of %3)").arg(rows.at(board.row).name).arg(board.row + 1).arg(rows.size());
     }
 
     void reportProgress(int index, int filePercent)
     {
         Board& board = at(index);
-        const int percent = overallPercent(board, filePercent);
+        // (v0.8.0) A read-back reports the row's own percentage, a write the board's bytes.
+        const int percent = board.verifying ? qBound(0, filePercent, 100) : overallPercent(board, filePercent);
         if (percent != board.lastPercent) {
             board.lastPercent = percent;
             emit q->boardProgress(board.info, writeStage(board), percent);
@@ -2180,6 +2189,9 @@ struct FleetFlasher::Private
                             .arg(row.fileSize)
                             .arg(row.offset / kSectorBytes)
                             .arg(row.size == 0 ? QStringLiteral("-1") : QString::number(row.size / kSectorBytes)));
+        if (verify) {
+            board.lastPercent = -1;   // (v0.8.0) the stage changes after a read-back: its first value goes out
+        }
         reportProgress(index, 0);
         board.parser = RockchipTool::ProgressParser();
         board.lineBuffer.clear();
@@ -2293,7 +2305,11 @@ struct FleetFlasher::Private
             afterProcess();
             return;
         }
-        board.info.written << row.name;
+        // (v0.8.0) With verify the row counts as written only once its read-back equalled the image
+        // (a failed verify leaves it out of `written`, so the retry lines start with it).
+        if (!verify) {
+            board.info.written << row.name;
+        }
         board.bytesDone += static_cast<quint64>(row.fileSize);
         const qint64 ms = board.rowClock.elapsed();
         changed(board);
@@ -2303,11 +2319,198 @@ struct FleetFlasher::Private
             return;
         }
         boardLog(board, FleetFlasher::tr("%1 written: %2 bytes in %3 s").arg(row.name).arg(row.fileSize).arg(oneDecimal(ms / 1000.0)));
+        if (verify) {
+            // The board's next process: the RL never runs next to its own WL (one process per
+            // board), and never next to the gate's LD.
+            whenGateFree([this, id, index] {
+                if (alive(id) && !at(index).ended) {
+                    startVerify(index);
+                }
+            });
+            return;
+        }
         ++board.row;
         requestCheck(index, board.row >= rows.size());
         if (alive(id)) {
             fill();
         }
+    }
+
+    // ---- RL: verify after write (v0.8.0, verify-rl) ----------------------------------------------
+
+    /// `upgrade_tool -s <id> RL <sector> <ceil(bytes / 512)> <the board's folder>/<name>.img` in the
+    /// board's working folder, as its one process; it counts as an in-flight upgrade_tool for the LD
+    /// gate. Like a WL: no timeout, never cancelled (a drain lets it finish), the silence line.
+    void startVerify(int index)
+    {
+        Board& board = at(index);
+        const PartitionImage row = rows.at(board.row);
+        const QString folder = workingFolder(board);
+        const QString temp = folder + QLatin1Char('/') + row.name + QStringLiteral(".img");
+        const quint64 sector = row.offset / kSectorBytes;
+        const quint64 sectors = qMax<quint64>(1, (static_cast<quint64>(row.fileSize) + kSectorBytes - 1) / kSectorBytes);
+        const QString n = board.info.locationId;
+        boardLog(board, FleetFlasher::tr("verifying %1: reading %2 sectors back from sector %3 (upgrade_tool -s %4 RL)")
+                            .arg(row.name)
+                            .arg(sectors)
+                            .arg(sector)
+                            .arg(n));
+        ReadBackResult result;
+        result.name = row.name;
+        result.bytes = row.fileSize;
+        // A file kept from an earlier failed verify is never compared as this read's.
+        if (!QDir().mkpath(folder) || (QFileInfo::exists(temp) && !QFile::remove(temp))) {
+            result.error = FleetFlasher::tr("cannot write %1").arg(QDir::toNativeSeparators(temp));
+            failVerify(index, result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        board.verifying = true;
+        board.lastPercent = -1;
+        reportProgress(index, 0);
+        board.parser = RockchipTool::ProgressParser();
+        board.lineBuffer.clear();
+        board.verifyClock.start();
+        board.lastOutput.start();
+        board.silenceTimer->start(silenceMs);
+        ++inFlightUpgradeTools;   // before the process exists: the gate must already see it
+        boardCommand(index, [this, n, sector, sectors, temp, folder] { return upgradeTool->readLbaOn(n, sector, sectors, temp, folder); },
+                     true, [this, index, temp](const ToolResult& r) { onVerifyFinished(index, r, temp); });
+        if (Board& b = at(index); b.process) {
+            const quint64 id = runId;
+            QObject::connect(b.process, &ToolInvocation::outputReceived, q, [this, id, index](const QByteArray& chunk) {
+                if (alive(id)) {
+                    onWriteOutput(index, chunk);
+                }
+            });
+        }
+    }
+
+    static QString verifyFailedText(const QString& name, const QString& why)
+    {
+        return FleetFlasher::tr("verifying %1 failed: %2").arg(name, why);
+    }
+
+    void onVerifyFinished(int index, const ToolResult& r, const QString& temp)
+    {
+        --inFlightUpgradeTools;
+        Board& board = at(index);
+        board.silenceTimer->stop();
+        for (const RockchipTool::Progress& progress : board.parser.flush()) {
+            if (progress.percent >= 0) {
+                reportProgress(index, progress.percent);
+            }
+        }
+        flushToolLines(board);
+        board.verifying = false;
+        const PartitionImage row = rows.at(board.row);
+        ReadBackResult result;
+        result.name = row.name;
+        result.bytes = row.fileSize;
+        result.milliseconds = board.verifyClock.elapsed();
+        const QString output = r.outputText();
+        if (r.started && RockchipTool::reportsNoSuchDevice(output)) {
+            onVerifyNoSuchDevice(index, result);
+            return;
+        }
+        if (!r.started && r.error == unaddressedRefusal()) {
+            result.error = r.error;   // nothing ran: the board sits in Loader mode untouched by it
+            failVerify(index, result, verifyFailedText(row.name, r.error));
+            return;
+        }
+        if (!r.started || r.timedOut || r.exitCode != 0 || RockchipTool::reportsWriteFailure(output)) {
+            const QString tail = RockchipTool::tailForMessage(output);
+            result.error = !r.started      ? FleetFlasher::tr("cannot run upgrade_tool: %1").arg(r.error)
+                           : tail.isEmpty() ? FleetFlasher::tr("no output (exit code %1)").arg(r.exitCode)
+                                            : tail;
+            failVerify(index, result, verifyFailedText(row.name, result.error));
+            return;
+        }
+        ReadBackResult compared = RockchipTool::compareReadBack(row.file, temp);
+        compared.name = row.name;
+        compared.milliseconds = result.milliseconds;
+        if (compared.ok) {
+            QFile::remove(temp);   // served; kept only after a failure, for a look
+            board.info.written << row.name;
+            board.info.verified << row.name;
+            changed(board);
+            boardLog(board, FleetFlasher::tr("%1 verified: %2 bytes read back equal the image (%3 s)")
+                                .arg(row.name)
+                                .arg(compared.bytes)
+                                .arg(oneDecimal(compared.milliseconds / 1000.0)));
+            const quint64 id = runId;
+            emit q->partitionVerified(board.info, compared);
+            if (!alive(id)) {
+                return;
+            }
+            ++board.row;
+            requestCheck(index, board.row >= rows.size());   // the next row's re-check first, as without verify
+            if (alive(id)) {
+                fill();
+            }
+            return;
+        }
+        const qint64 got = QFileInfo(temp).isFile() ? QFileInfo(temp).size() : -1;
+        QString text;
+        if (compared.mismatchOffset >= 0) {
+            compared.error = FleetFlasher::tr("byte %1 of the image differs (flash offset 0x%2): read 0x%3, image 0x%4")
+                                 .arg(compared.mismatchOffset)
+                                 .arg(QString::number(row.offset + static_cast<quint64>(compared.mismatchOffset), 16).toUpper())
+                                 .arg(static_cast<uint>(compared.readByte), 2, 16, QLatin1Char('0'))
+                                 .arg(static_cast<uint>(compared.imageByte), 2, 16, QLatin1Char('0'));
+            text = verifyFailedText(row.name, compared.error);
+        } else if (got >= 0 && got < compared.bytes) {
+            text = verifyFailedText(row.name, FleetFlasher::tr("upgrade_tool RL read %1 of %2 bytes (short read)").arg(got).arg(compared.bytes));
+        } else {
+            text = verifyFailedText(row.name, compared.error);
+        }
+        failVerify(index, compared, text);
+    }
+
+    /// A failed verify is a failed WL (decision 5): no RD, leftInLoader, the row not in `written`,
+    /// the "left in Loader mode ..." line and the addressed retry lines - that row first - so the
+    /// owner's recipe for a failed write covers it; the fleet never writes the row again.
+    void failVerify(int index, ReadBackResult result, const QString& detail)
+    {
+        Board& board = at(index);
+        result.ok = false;
+        board.verifying = false;
+        board.info.verifyFailed = result.name;
+        board.info.verifyMismatch = result.mismatchOffset;
+        board.info.leftInLoader = true;
+        board.info.writingSeconds = board.writeClock.elapsed() / 1000.0;
+        board.info.retry = retryLines(board, board.row);
+        const quint64 id = runId;
+        emit q->partitionVerified(board.info, result);
+        if (!alive(id)) {
+            return;
+        }
+        endBoard(index, FleetBoard::Result::Failed, detail, QStringList{loaderHint(board)} + retryLogLines(board.info.retry));
+        afterProcess();
+    }
+
+    /// "No found specific rockusb device!" from the RL: the id is gone, so no addressed retry line
+    /// can be given (as onNoSuchDevice() for a WL).
+    void onVerifyNoSuchDevice(int index, ReadBackResult result)
+    {
+        Board& board = at(index);
+        const QString port = board.info.port;
+        const PortView view = portView(port);
+        result.ok = false;
+        result.error = FleetFlasher::tr("No found specific rockusb device! (LocationID %1 is gone)").arg(board.info.locationId);
+        board.info.verifyFailed = result.name;
+        board.info.verifyMismatch = -1;
+        board.info.leftInLoader = view.pid != 0 && view.pid == board.mappedPid;
+        board.info.retry.clear();
+        board.info.writingSeconds = board.writeClock.elapsed() / 1000.0;
+        const quint64 id = runId;
+        emit q->partitionVerified(board.info, result);
+        if (!alive(id)) {
+            return;
+        }
+        endBoard(index, FleetBoard::Result::Failed, verifyFailedText(result.name, result.error),
+                 {FleetFlasher::tr("port %1 shows %2: find its LocationID with `upgrade_tool LD` before any retry, and address it with -s")
+                      .arg(port, shownOnPort(view, board.mappedPid))});
+        afterProcess();
     }
 
     /// "No found specific rockusb device!": the id is gone, so no addressed retry line can be given.
@@ -2805,6 +3008,8 @@ void FleetFlasher::setProfileOverride(const QString& id)
 }
 
 QString FleetFlasher::profileOverride() const { return d->profileOverride; }
+void FleetFlasher::setVerifyAfterWrite(bool on) { d->verify = on; }
+bool FleetFlasher::verifyAfterWrite() const { return d->verify; }
 void FleetFlasher::setUsbEnumerator(UsbProbe::Enumerator enumerator) { d->enumerator = std::move(enumerator); }
 void FleetFlasher::setPortProvider(PortProvider provider) { d->portProvider = std::move(provider); }
 
@@ -2854,6 +3059,7 @@ FleetReport FleetFlasher::report() const
     record.setStop(d->stopText);
     record.setResetCount(d->resetCount);
     record.setUnattributed(d->dry ? d->foreign : d->unattributed);
+    record.setVerifyAfterWrite(d->verify);
     return record;
 }
 
