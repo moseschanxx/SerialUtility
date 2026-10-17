@@ -134,22 +134,29 @@ QString productCommand()
 
 /// The ADB gadget's product string as the USB enumeration reports it: Linux reads the sysfs
 /// `product`; Windows names the driver there (UsbProbe.h), so it is not asked at all - the
-/// enumeration is not run every 2 s on the GUI thread for a string that can never match.
-QString adbGadgetProductFromBus()
+/// enumeration is not run every 2 s on the GUI thread for a string that can never match. (fix4)
+/// An enumeration the owner set (SocFlasher::setUsbEnumerator(): the tests) is asked everywhere.
+QString adbGadgetProductFromBus(const UsbProbe::Enumerator& enumerate)
 {
+    QList<UsbDeviceInfo> devices;
+    if (enumerate) {
+        devices = enumerate(UsbProbe::kRockchipVid);
+    } else {
 #ifdef Q_OS_LINUX
+        devices = UsbProbe::presentDevices();
+#else
+        return QString();
+#endif
+    }
     QString product;
     int gadgets = 0;
-    for (const UsbDeviceInfo& device : UsbProbe::presentDevices()) {
+    for (const UsbDeviceInfo& device : std::as_const(devices)) {
         if (device.isAdbGadget()) {
             ++gadgets;
             product = device.description.trimmed();
         }
     }
     return gadgets == 1 ? product : QString();   // several (or none): no evidence for this board
-#else
-    return QString();
-#endif
 }
 
 /// The first non-empty line of a tool's output, trimmed.
@@ -353,6 +360,10 @@ struct SocFlasher::Private
     QString flowProduct;                       ///< the product string read from the board in this flow (step 2)
     bool productReadTried = false;             ///< step 2 asked the board for it in this flow
     bool cameThroughStepTwo = false;           ///< the flow read the board's layout over ADB
+    LayoutProvider layoutProvider;             ///< (fix4) the owner's per-serial memory, for an ADB board
+    QString flowAdbSerial;                     ///< (fix4) the ADB serial of the board the flow found (step 1 / 3)
+    QStringList writtenNames;                  ///< (fix4) the rows this flow wrote completely (writtenPartitions())
+    UsbProbe::Enumerator usbEnumerator;        ///< (fix4) the owner's enumeration; null = UsbProbe::presentDevices()
 
     // ---- the layout of a board met in Loader mode (v0.8.0, layout-pl) ------------------------
     LayoutSource layoutSource = LayoutSource::None;        ///< what the writes of this flow used (step 5 decides)
@@ -553,7 +564,7 @@ struct SocFlasher::Private
             found.mode = DeviceStatus::Mode::Adb;
             found.serial = picked;
             found.detail = QStringLiteral("device");
-            statusProduct = adbGadgetProductFromBus();
+            statusProduct = adbGadgetProductFromBus(usbEnumerator);
             finishQuery(found);
             return;
         }
@@ -566,7 +577,7 @@ struct SocFlasher::Private
         }
         // Only a bus that shows a Rockchip device none of the tools can see is a driver problem.
         if (query.options.probe && devices.isEmpty() && query.problem.isEmpty()) {
-            const QList<UsbDeviceInfo> present = UsbProbe::presentDevices();
+            const QList<UsbDeviceInfo> present = usbEnumerator ? usbEnumerator(UsbProbe::kRockchipVid) : UsbProbe::presentDevices();
             if (!present.isEmpty()) {
                 none.mode = DeviceStatus::Mode::NoDriver;
                 none.hint = UsbProbe::driverHint(present);
@@ -580,6 +591,11 @@ struct SocFlasher::Private
     {
         queryBusy = false;
         queryInvocation.clear();
+        if (result.mode != DeviceStatus::Mode::Adb) {
+            // (fix4, m1) The product string belongs to the ADB board it was read for: a board met
+            // later in Loader / MASKROM mode (no board, several) must not inherit it.
+            statusProduct.clear();
+        }
         status = result;
         auto then = std::move(query.then);
         query.then = nullptr;
@@ -594,16 +610,38 @@ struct SocFlasher::Private
 
     // ---- board profiles (v0.8.0) ------------------------------------------------------------
 
-    /// The evidence a status gives (SocFlasher.h "Board profiles"): a Loader device its PID (and the
-    /// owner's layout), an ADB board the enumeration's product string and the layout, a MASKROM
-    /// device - whose PID is the BootROM's - nothing but the override, and no board nothing at all.
+    /// (fix4, B1) The layout that may name a profile: only one THIS flow read from the board (step
+    /// 2's /proc/cmdline, or the read in Loader mode). The owner's setMtdParts() - the "*" memory,
+    /// the layout read last from ANY board on the PC - and a layout remembered for the serial are
+    /// no evidence: a Node's layout would make a G2 "Node (from the board's flash layout)", skip
+    /// its product read, refuse the right image (rule 1) and be inventoried.
+    QString layoutEvidence() const
+    {
+        return isRunning() && (boardLayoutRead || !loaderLayoutRead.isEmpty()) ? mtdParts : QString();
+    }
+
+    /// (fix4, B1) The layout the owner remembers for the ADB board this flow found (setLayoutProvider(),
+    /// asked with its serial); "" when it knows none or none that parses.
+    QString rememberedForBoard() const
+    {
+        if (!layoutProvider || flowAdbSerial.isEmpty()) {
+            return QString();
+        }
+        const QString layout = layoutProvider(flowAdbSerial).trimmed();
+        return RockchipTool::parseMtdParts(normalizedLayout(layout)).isEmpty() ? QString() : layout;
+    }
+
+    /// The evidence a status gives (SocFlasher.h "Board profiles"): a Loader device its PID, an ADB
+    /// board the enumeration's product string - each with a layout only when this flow read one
+    /// (layoutEvidence()) -, a MASKROM device - whose PID is the BootROM's - nothing but the
+    /// override, and no board nothing at all.
     ProfileEvidence evidenceForStatus(const DeviceStatus& seen) const
     {
         switch (seen.mode) {
         case DeviceStatus::Mode::Loader:
-            return boardEvidence(profileOverride, seen.pid, QString(), mtdParts);
+            return boardEvidence(profileOverride, seen.pid, QString(), layoutEvidence());
         case DeviceStatus::Mode::Adb:
-            return boardEvidence(profileOverride, 0, statusProduct, mtdParts);
+            return boardEvidence(profileOverride, 0, statusProduct, layoutEvidence());
         case DeviceStatus::Mode::Maskrom:
         case DeviceStatus::Mode::NoDriver:
         case DeviceStatus::Mode::None:
@@ -690,13 +728,13 @@ struct SocFlasher::Private
                 endFlow(Phase::Failed, false, contradiction);
                 return false;
             }
-            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, pid, boardProduct(), mtdParts)));
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, pid, boardProduct(), layoutEvidence())));
             return true;
         }
         // MASKROM: its PID is the BootROM's (row 33). A board read over ADB in this flow keeps that
-        // evidence; one met in download mode is known by the override only.
-        setFlowProfile(BoardProfiles::detectBoard(
-            boardEvidence(profileOverride, 0, boardProduct(), cameThroughStepTwo ? mtdParts : QString())));
+        // evidence (its product string, the layout step 2 read); one met in download mode is known
+        // by the override only.
+        setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), layoutEvidence())));
         return true;
     }
 
@@ -987,10 +1025,14 @@ struct SocFlasher::Private
         if (resolved.fromImage) {
             log(QCoreApplication::translate("SocFlasher", "layout from the image's env.img: %1").arg(resolved.layout));
             if (!board.isEmpty() && board != RockchipTool::parseMtdParts(resolved.layout)) {
+                // (fix4) Not "the flash will refuse": this plan's board layout may be the owner's
+                // Loader-mode memory, which a running board's own /proc/cmdline replaces (B1) - an
+                // operator told "refused" before a flash that then runs would learn --force-layout.
                 const QString warning =
                     QCoreApplication::translate("SocFlasher",
-                                                "warning: the image's flash layout differs from the board's: the flash will refuse "
-                                                "unless --force-layout (the tab: the question). image: %1; board: %2")
+                                                "warning: the image's flash layout differs from the board layout known so far: a "
+                                                "board laid out that way is refused unless --force-layout (the tab: the question); a "
+                                                "running board is judged by its own /proc/cmdline. image: %1; board: %2")
                         .arg(resolved.layout, key.layout);
                 qCWarning(lcFirmware).noquote() << warning;
                 emit q->logLine(warning);
@@ -1094,6 +1136,8 @@ struct SocFlasher::Private
         flowProduct.clear();
         productReadTried = false;
         cameThroughStepTwo = false;
+        flowAdbSerial.clear();
+        writtenNames.clear();
         loaderLayoutRead.clear();
         loaderLayoutSource = LayoutSource::None;
         loaderReadPid = 0;
@@ -1198,6 +1242,7 @@ struct SocFlasher::Private
                 return;
             }
             adoptSerial(detected);
+            flowAdbSerial = detected.serial;
             rebootToLoader();
             break;
         case DeviceStatus::Mode::NoDriver:
@@ -1262,17 +1307,30 @@ struct SocFlasher::Private
                 if (id != flowId) {
                     return;   // a slot ended the flow
                 }
-            } else if (!normalizedLayout(mtdParts).isEmpty()) {
+            } else if (const QString own = rememberedForBoard(); !own.isEmpty()) {
+                mtdParts = own;
                 log(QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline has no mtdparts; using the layout "
                                                               "remembered for it: %1")
-                        .arg(normalizedLayout(mtdParts)));
+                        .arg(normalizedLayout(own)));
             } else {
-                log(QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline has no mtdparts"));
+                // (fix4, B1) setMtdParts() is the layout for a board met in Loader mode - the layout
+                // read last from ANY board on this PC - and never this board's: as its layout it would
+                // make rule 2 refuse the right image and place the rows of an env-less image wrong.
+                if (!normalizedLayout(mtdParts).isEmpty()) {
+                    log(QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline has no mtdparts; the layout remembered "
+                                                                  "for a board met in Loader mode (%1) is not this board's and is "
+                                                                  "not used")
+                            .arg(normalizedLayout(mtdParts)));
+                } else {
+                    log(QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline has no mtdparts"));
+                }
+                mtdParts.clear();
             }
             cameThroughStepTwo = true;
-            // (v0.8.0) The layout may tell the profile now; when nothing tells it yet, the board is
-            // asked for its gadget's product string, once per flow.
-            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), mtdParts)));
+            // (v0.8.0) The layout may tell the profile now - (fix4) only one read from the board -;
+            // when nothing tells it yet, the board is asked for its gadget's product string, once
+            // per flow.
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), layoutEvidence())));
             if (id != flowId) {
                 return;
             }
@@ -1298,7 +1356,7 @@ struct SocFlasher::Private
             }
             const bool answered = result.started && !result.timedOut && result.exitCode == 0;
             flowProduct = answered ? firstLine(result.outputText()) : QString();
-            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), mtdParts)));
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), layoutEvidence())));
             if (id != flowId) {
                 return;
             }
@@ -1382,6 +1440,7 @@ struct SocFlasher::Private
                         return;
                     }
                     adoptSerial(seen);
+                    flowAdbSerial = seen.serial;
                     rebootToLoader();
                 } else {
                     pollAgain();
@@ -1659,8 +1718,16 @@ struct SocFlasher::Private
         if (id != flowId) {
             return;   // a slot ended the flow
         }
+        // (fix4, M2) The override may have changed since step 4 adopted the device (the tab's box
+        // during the read): it outranks the PID in detectBoard(), so it is checked against the PID
+        // again before the detection, as at steps 1 and 4.
+        const QString contradiction = ProfileRules::overrideRefusal(profileOverride, loaderReadPid);
+        if (!contradiction.isEmpty()) {
+            endFlow(Phase::Failed, false, contradiction);
+            return;
+        }
         // The layout is evidence too; it only tells something when the PID did not (an unknown PID).
-        setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, loaderReadPid, boardProduct(), mtdParts)));
+        setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, loaderReadPid, boardProduct(), layoutEvidence())));
         if (id != flowId) {
             return;
         }
@@ -2084,6 +2151,7 @@ struct SocFlasher::Private
             verifyRow();   // before the next row: the RL never runs next to this board's WL
             return;
         }
+        writtenNames << row.name;
         writeDone += static_cast<quint64>(row.fileSize);
         ++writeIndex;
         writeNext();
@@ -2219,6 +2287,7 @@ struct SocFlasher::Private
                 return;
             }
             verifyResults << compared;
+            writtenNames << row.name;
             emit q->partitionVerified(compared);
             if (id != flowId) {
                 return;
@@ -2432,6 +2501,8 @@ int SocFlasher::pollIntervalMs() const { return d->pollIntervalMs; }
 void SocFlasher::setWaitForAdb(bool on) { d->waitForAdb = on; }
 bool SocFlasher::waitForAdb() const { return d->waitForAdb; }
 void SocFlasher::setMtdParts(const QString& mtdparts) { d->mtdParts = mtdparts.trimmed(); }
+void SocFlasher::setLayoutProvider(LayoutProvider provider) { d->layoutProvider = std::move(provider); }
+void SocFlasher::setUsbEnumerator(UsbProbe::Enumerator enumerator) { d->usbEnumerator = std::move(enumerator); }
 QString SocFlasher::mtdParts() const { return d->mtdParts; }
 void SocFlasher::setExtractDirectory(const QString& dir) { d->extractDirectory = QDir::fromNativeSeparators(dir.trimmed()); }
 QString SocFlasher::extractDirectory() const { return d->effectiveExtractDirectory(); }
@@ -2507,6 +2578,7 @@ QString SocFlasher::layoutSourceText(LayoutSource source)
 void SocFlasher::setVerifyAfterWrite(bool on) { d->verifyAfterWrite = on; }
 bool SocFlasher::verifyAfterWrite() const { return d->verifyAfterWrite; }
 QList<ReadBackResult> SocFlasher::verifyResults() const { return d->verifyResults; }
+QStringList SocFlasher::writtenPartitions() const { return d->writtenNames; }
 
 bool SocFlasher::isRunning() const { return d->isRunning(); }
 SocFlasher::Phase SocFlasher::phase() const { return d->phase; }

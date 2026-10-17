@@ -49,8 +49,9 @@ class Inventory;
  *    its RKFW chip tag (RockchipTool::readRkfwHeader()), its MD5 (Inventory::md5Hex(), computed
  *    once per path and mtime and cached for the job's life), the cache note's git describe when
  *    the image is the cache's (FirmwareJob::cacheEntry()), the rows the write put on the board,
- *    now} - the rows: the job's selectedPartitions() for a PartitionWrites flash (every writable
- *    row when "all" was selected), every row of the job's partitions() for a MASKROM (UF) flash;
+ *    now} - the rows: (fix4, m4) SocFlasher::writtenPartitions() for a PartitionWrites flash (the
+ *    rows the flow wrote completely, never a selected row it skipped), every row of the job's
+ *    partitions() for a MASKROM (UF) flash;
  *    merged into the record's lastImage.partitions when its md5 is the same, replacing it
  *    otherwise (Inventory.h). The board is lastSerial() - the serial of the LAST statusChanged()
  *    before the stepFinished(): the flow's own Detecting query, which reports the ADB board the

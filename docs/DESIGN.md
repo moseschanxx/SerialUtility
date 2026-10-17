@@ -1054,7 +1054,9 @@ the whole image). Every refusal ends the flow Failed with no RD (nothing was wri
    0x110c); nothing was written". No override.
 2. `layoutRefusal()`: the image's env.img layout against the board's (step 2's read, the owner's
    remembered / `--layout`) - replaces 0.5.1's "the image's wins" everywhere (the plan's line now
-   says "... the flash will refuse unless --force-layout (the tab: the question)"). `--force-layout`
+   says "... a board laid out that way is refused unless --force-layout (the tab: the question); a
+   running board is judged by its own /proc/cmdline" - fix4: the plan's board layout may be the
+   Loader-mode memory, which a running board's own layout replaces). `--force-layout`
    / the tab's **Write the image's layout** writes it, with the note.
 3. `loaderPartitionRefusal()`: idblock / uboot / env / meta on a profile whose MASKROM entry is
    unknown (the Stacked core) - `--force-loader-partitions` / **Write them**.
@@ -1484,7 +1486,8 @@ fails an operation. The events:
 - `mcuInfoChanged` sets the version, role and read time.
 - `stepFinished` of flash / mcu / set-role / info, for `lastSerial()`:
   - `lastOperation` is set (done / failed / cancelled).
-  - A flash that ended ok also sets `lastImage`. Its rows are `selectedPartitions()`, or every row
+  - A flash that ended ok also sets `lastImage`. Its rows are (fix4) `SocFlasher::writtenPartitions()`
+    - the rows the flow wrote completely, never the job's selection -, or every row
     of the image for UF. Its MD5 is the whole file, streamed, cached per path and mtime.
   - The same MD5 merges the rows (first-appearance order) and refreshes `written`. Another MD5
     replaces the image. A failed or cancelled write keeps the old image (decision 4).
@@ -1534,6 +1537,66 @@ fails an operation. The events:
 
 **First board:** after the first G2 `su-fw status`, `su-fw inventory --json` answers open question 5
 (`gadgetSerialString`) and shows profile "stacked".
+
+### 4.18 The pre-hand-over review's fixes (v0.8.0, fix4)
+
+The Fable review of the integrated 0.8.0 tree (1 blocker, 2 major, 6 minor) before the first G2 board;
+each fix is pinned by a test that fails without it.
+
+- **B1 - the "*" layout memory is never a running board's layout nor profile evidence.** "*" (the
+  `firmware/mtdparts` entry for a board met in Loader mode) is the layout read last from ANY board on
+  the PC. 0.8.0 handed it to the flasher as the board's layout on the ADB path too: a G2 whose
+  `/proc/cmdline` carries no `mtdparts` (open question 6) became "Node (from the board's flash
+  layout)" after any Node's status - its product read skipped, the G2 image refused by rule 1, the
+  false profile written into the inventory - and rule 2 compared the G2 image with the Node layout.
+  Now: `SocFlasher::layoutEvidence()` - a layout names a profile only when THIS flow read it (step 2's
+  cmdline, the read in Loader mode); a plain status query gives a layout no evidence at all. Step 2
+  without `mtdparts` asks `SocFlasher::setLayoutProvider()` - FirmwareJob's per-serial memory
+  (`layoutFor(serial)`: its own, then the app's; never "") - for the board's own remembered layout
+  ("...; using the layout remembered for it: ..."), else drops the owner's `setMtdParts()` value
+  ("...; the layout remembered for a board met in Loader mode (...) is not this board's and is not
+  used") and goes on as without a layout (the image's env.img layout, else "partition layout
+  unknown"). `setMtdParts()` stays the Loader-mode layout (`boardLayout()` with its "*" fallback),
+  checked against the Loader PID by layout-pl. su-fw's `--layout` without `--serial` is that
+  Loader-mode layout; with `--serial` it is also the running board's (`applyLayout()` stores both).
+  The plan-time warning no longer promises a refusal: "warning: the image's flash layout differs
+  from the board layout known so far: a board laid out that way is refused unless --force-layout
+  (...); a running board is judged by its own /proc/cmdline" - the job plans with the Loader-mode
+  memory before it knows where the board is.
+- **M1 - Update MCU / Set role wait for the status's profile.** `FirmwareJob::startMcuUpdate()` fails
+  the step with "the board's profile is still being read (its flash layout and gadget product
+  string); try again in a moment" while the status's `/proc/cmdline` or product read is in flight
+  (`cmdlineInvocation` / `productInvocation`), before rule 4 and `McuLink::open()`: a G2 that appeared
+  a second ago is not "unknown" for rule 4. su-fw already waited (`queryBoard()`); refusing (not
+  deferring) keeps the step's frame and the lock simple - the user clicks again.
+- **M2 - the override cannot change under a running flow.** The Board profile box is disabled while
+  an operation runs (`updateControls()`), and `loaderLayoutFound()` runs
+  `ProfileRules::overrideRefusal()` against the read device's PID before its re-detection (the
+  override outranks the PID in `detectBoard()`).
+- **m1** - `SocFlasher::finishQuery()` clears the enumeration's product string for any status that is
+  not Adb (Linux: a Node's string never names a G2 met later in MASKROM mode). `setUsbEnumerator()`
+  injects the enumeration (the tests, every platform).
+- **m2** - `FirmwareJob::computeBoardProfile()` gives a Loader status no layout (a PID the table does
+  not know leaves the board unknown).
+- **m3** - the tab's daily-partition default is keyed by image, mtime AND profile id and is applied
+  from `boardProfileChanged()` too (the image is planned at start-up, the profile arrives with a
+  status later); never while an operation runs; `allPartitionsSelected()` still guards the user's own
+  checks.
+- **m4** - `--expect-image --all` names only the rows `partitionProblem()` allows (a row outside the
+  layout is never written, so never recorded); the inventory records `SocFlasher::writtenPartitions()`
+  (the rows the flow wrote completely, with `--verify` an equal read-back) instead of the selection.
+- **m5** - `tst_inventory::writersInTwoProcesses`: a second `tst_inventory --inventory-writer`
+  process and this one write 60 records each at once; every read in between parses, every record is
+  there at the end, no lock or temporary is left.
+- **m6** - the README's fleet row names `--profile`, `--force-loader-partitions` and
+  `--expect-image MD5 [--force]`; `tst_firmwarecli::readmeRowsMatchTheHelp` compares every su-fw row
+  of the README with the options the command takes and the two flash-soc rows with `--help`'s synopsis.
+
+Tests: tst_firmwaretools +4 (`soc_starLayoutIsNoEvidenceOnAdb`, `soc_overrideChangedDuringLoaderRead`,
+`soc_statusProductNotInherited`, `soc_writtenPartitions`; `soc_layoutUnknown` and
+`soc_profileLinesOncePerResult` adapted to B1), tst_firmwarejob +3, tst_firmwarecli +3, tst_firmwaretab
++2 (`busyAroundFlash` also checks the box; `partitionLayoutReadOnceFromBoard` now expects the daily
+rootfs check once the read layout made the board a Node, m3), tst_inventory +2.
 
 ## 5. Build, run, test
 

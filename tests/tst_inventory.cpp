@@ -9,12 +9,14 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
+#include <QProcess>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSettings>
@@ -22,7 +24,9 @@
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QTemporaryDir>
+#include <QThread>
 
+#include <cstdio>
 #include <memory>
 #include <optional>
 
@@ -208,6 +212,75 @@ struct Lines : QObject
     QStringList failures;
 };
 
+// ---- (fix4, m5) two processes writing one inventory -----------------------------------------------
+
+constexpr int kWriterRounds = 60;
+const QString kWriterOption = QStringLiteral("--inventory-writer");
+
+QString writerSerial(const QString& prefix, int round)
+{
+    return QStringLiteral("%1-%2").arg(prefix).arg(round, 3, 10, QLatin1Char('0'));
+}
+
+/// One writer of writersInTwoProcesses(): `rounds` updates of its own records through a fresh
+/// Inventory each (as every su-fw run and the tab's recorder do), each followed by an unlocked read
+/// that must parse and hold every record this writer wrote so far. Returns "" or what went wrong.
+QString writeRounds(const QString& file, const QString& prefix, int rounds)
+{
+    for (int k = 0; k < rounds; ++k) {
+        QString error;
+        Inventory writer(file);
+        if (!writer.update(writerSerial(prefix, k), [k](InventoryRecord& r) { r.mcuVersion = QString::number(k); }, &error)) {
+            return QStringLiteral("%1: update %2: %3").arg(prefix).arg(k).arg(error);
+        }
+        Inventory reader(file);
+        if (!reader.load(&error)) {
+            return QStringLiteral("%1: read after update %2: %3").arg(prefix).arg(k).arg(error);
+        }
+        for (int j = 0; j <= k; ++j) {
+            if (!reader.record(writerSerial(prefix, j))) {
+                return QStringLiteral("%1: record %2 lost after update %3").arg(prefix).arg(j).arg(k);
+            }
+        }
+    }
+    return QString();
+}
+
+/// The second process: `tst_inventory --inventory-writer <file> <prefix> <rounds>` (main() below).
+/// It says it is ready (<file>.ready), waits for the parent's go (<file>.go) so both write at once,
+/// then writes. Exit 0 = every write landed and every read parsed; else the reason on stderr.
+int runInventoryWriter(const QStringList& args)
+{
+    const QString file = args.value(2);
+    const QString prefix = args.value(3);
+    const int rounds = args.value(4).toInt();
+    if (file.isEmpty() || prefix.isEmpty() || rounds <= 0) {
+        std::fputs("usage: tst_inventory --inventory-writer <file> <prefix> <rounds>\n", stderr);
+        return 2;
+    }
+    QFile ready(file + QStringLiteral(".ready"));
+    if (!ready.open(QIODevice::WriteOnly)) {
+        std::fputs("cannot write the ready file\n", stderr);
+        return 3;
+    }
+    ready.close();
+    QElapsedTimer waited;
+    waited.start();
+    while (!QFileInfo::exists(file + QStringLiteral(".go"))) {
+        if (waited.elapsed() > 30000) {
+            std::fputs("no go within 30 s\n", stderr);
+            return 4;
+        }
+        QThread::msleep(1);
+    }
+    const QString problem = writeRounds(file, prefix, rounds);
+    if (!problem.isEmpty()) {
+        std::fputs(qPrintable(problem + QLatin1Char('\n')), stderr);
+        return 1;
+    }
+    return 0;
+}
+
 } // namespace
 
 // =======================================================================================
@@ -235,6 +308,7 @@ private slots:
     void updateIsAtomic();
     void updateMovesCorruptAside();
     void lockKeepsTwoWritersApart();
+    void writersInTwoProcesses();   // (fix4, m5)
     void lockTimeoutIsAnError();
     void staleLockIsTakenOver();
     void lastSeenAutomatic();
@@ -251,6 +325,7 @@ private slots:
     void recorderMcuInfo();
     void recorderFlashDoneRecordsImage();
     void recorderSameImageMergesRows();
+    void recorderRecordsWrittenRowsOnly();   // (fix4, m4)
     void recorderFlashFailedKeepsImage();
     void recorderCancelledResult();
     void recorderLoaderBoardWithoutSerialNotRecorded();
@@ -517,6 +592,48 @@ void Tst_inventory::lockKeepsTwoWritersApart()
         QCOMPARE(reader.record(QStringLiteral("aaa"))->mcuVersion, QString::number(k));
         QCOMPARE(reader.record(QStringLiteral("bbb"))->mcuVersion, QString::number(k));
     }
+}
+
+void Tst_inventory::writersInTwoProcesses()
+{
+    // (fix4, m5) The claim of decision 1 - the tab and any number of su-fw write one file at once -
+    // with two real processes: this one and a second tst_inventory started as a plain writer (main()
+    // below). Both start on one signal and hammer update() with their own records; every unlocked
+    // read in between must parse (QSaveFile's atomic rename under the lock, Windows sharing retries),
+    // and at the end every record of both is there, the file is valid and no lock or temporary is left.
+    const QString file = path();
+    QProcess child;
+    child.setProgram(QCoreApplication::applicationFilePath());
+    child.setArguments({kWriterOption, file, QStringLiteral("child"), QString::number(kWriterRounds)});
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    child.start();
+    QVERIFY2(child.waitForStarted(10000), qPrintable(child.errorString()));
+    QVERIFY2(QTest::qWaitFor([&file]() { return QFileInfo::exists(file + QStringLiteral(".ready")); }, 30000),
+             qPrintable(QString::fromUtf8(child.readAll())));
+    QVERIFY(writeFile(file + QStringLiteral(".go"), "go"));
+    const QString problem = writeRounds(file, QStringLiteral("parent"), kWriterRounds);
+    QVERIFY2(child.waitForFinished(60000), "the second writer did not end within 60 s");
+    const QString childOutput = QString::fromUtf8(child.readAll());
+    QVERIFY2(problem.isEmpty(), qPrintable(problem));
+    QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(child.exitCode() == 0, qPrintable(QStringLiteral("exit %1: %2").arg(child.exitCode()).arg(childOutput)));
+
+    Inventory merged(file);
+    QString error;
+    QVERIFY2(merged.load(&error), qPrintable(error));
+    QCOMPARE(merged.records().size(), qsizetype(2 * kWriterRounds));
+    for (int k = 0; k < kWriterRounds; ++k) {
+        for (const QString& prefix : {QStringLiteral("parent"), QStringLiteral("child")}) {
+            const std::optional<InventoryRecord> record = merged.record(writerSerial(prefix, k));
+            QVERIFY2(record, qPrintable(writerSerial(prefix, k)));
+            QCOMPARE(record->mcuVersion, QString::number(k));
+        }
+    }
+    QCOMPARE(QJsonDocument::fromJson(readBytes(file)).object().value(QStringLiteral("boards")).toObject().size(), 2 * kWriterRounds);
+    QStringList left = QDir(QFileInfo(file).absolutePath()).entryList(QDir::Files | QDir::Hidden);
+    left.removeAll(QStringLiteral("inventory.json.ready"));
+    left.removeAll(QStringLiteral("inventory.json.go"));
+    QCOMPARE(left, QStringList{QStringLiteral("inventory.json")});   // no lock, no QSaveFile temporary
 }
 
 void Tst_inventory::lockTimeoutIsAnError()
@@ -928,6 +1045,83 @@ void Tst_inventory::recorderSameImageMergesRows()
     }
     QCOMPARE(every, nodeNames());
     QCOMPARE(record.lastImage.partitions, every);
+}
+
+void Tst_inventory::recorderRecordsWrittenRowsOnly()
+{
+    // (fix4, m4) The record holds the rows the flow wrote (SocFlasher::writtenPartitions()), not the
+    // job's selection.
+    {
+        // The user checked rootfs, but the image is being planned again when Flash SoC is pressed: the
+        // job hands the flasher no selection ("without such a plan the flasher decides: every
+        // partition"), so every row is written. 0.8.0 recorded the checks - rootfs only, a board
+        // recorded as running the old build in six rows it had just been written with.
+        FakeToolRunner runner;
+        scriptAdbFlash(runner);
+        auto job = makeJob(&runner);
+        const QString image = withEnvImage();
+        QVERIFY(job->setImagePath(image));
+        QVERIFY(waitForRows(*job, kNodePartitionCount));
+        job->setSelectedPartitions({QStringLiteral("rootfs")});
+        InventoryRecorder recorder(job.get());
+        recorder.setFilePath(path());
+        recorder.setUsbEnumerator(&oneBusAddressGadget);
+        QStringList selectedAtTheEnd;
+        connect(job.get(), &FirmwareJob::stepFinished, &recorder, [&](const QString&) { selectedAtTheEnd = job->selectedPartitions(); });
+        QSignalSpy finished(job.get(), &FirmwareJob::operationFinished);
+        QSignalSpy logs(job.get(), &FirmwareJob::logLine);
+        job->planPartitions();   // a plan in flight
+        QCOMPARE(job->planState(), FirmwareJob::PlanState::Planning);
+        job->flashSoc();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+        QVERIFY2(finished.first().at(1).toBool(), qPrintable(finished.first().at(2).toString()));
+        bool everyRow = false;
+        for (const QList<QVariant>& args : std::as_const(logs)) {
+            everyRow = everyRow || args.at(0).toString().startsWith(QLatin1String("Partitions: every partition of the image"));
+        }
+        QVERIFY(everyRow);
+        QCOMPARE(selectedAtTheEnd, QStringList{QStringLiteral("rootfs")});   // the checks ...
+        QCOMPARE(job->socFlasher()->writtenPartitions(), nodeNames());       // ... and what was written
+        const std::optional<InventoryRecord> record = recordAt(path(), kSerial);
+        QVERIFY(record);
+        QCOMPARE(record->lastImage.partitions, nodeNames());
+        QCOMPARE(record->lastImage.md5, Inventory::md5Hex(image));
+    }
+    {
+        // A row the flow skips is not recorded: the board's /proc/cmdline tells a layout without meta
+        // and the image carries none, so meta is "not in the board's partition layout".
+        const QString file = caseDir(QStringLiteral("skip/inventory.json"));
+        FakeToolRunner runner;
+        runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")),
+                         "console=ttyFIQ0 mtdparts=sfc_nor:64K(env),256K@64K(idblock),256K(uboot),3M@960K(boot),5M(rootfs),3M(userdata) "
+                         "rootwait\n");
+        scriptAdbFlash(runner);
+        auto job = makeJob(&runner);
+        job->setMtdParts(kNodeMtdParts);
+        const QString image = m_dir->filePath(QStringLiteral("plain/update.img"));   // its env.img carries no layout
+        QVERIFY(writeFile(image, rkfwBytes()));
+        QVERIFY(job->setImagePath(image));
+        QVERIFY(waitForRows(*job, kNodePartitionCount));
+        InventoryRecorder recorder(job.get());
+        recorder.setFilePath(file);
+        recorder.setUsbEnumerator(&oneBusAddressGadget);
+        QSignalSpy finished(job.get(), &FirmwareJob::operationFinished);
+        QSignalSpy logs(job.get(), &FirmwareJob::logLine);
+        job->flashSoc();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+        QVERIFY2(finished.first().at(1).toBool(), qPrintable(finished.first().at(2).toString()));
+        bool skipped = false;
+        for (const QList<QVariant>& args : std::as_const(logs)) {
+            skipped = skipped || args.at(0).toString().startsWith(QLatin1String("skipping meta: "));
+        }
+        QVERIFY(skipped);
+        QStringList written = nodeNames();
+        written.removeAll(QStringLiteral("meta"));
+        QCOMPARE(job->socFlasher()->writtenPartitions(), written);
+        const std::optional<InventoryRecord> record = recordAt(file, kSerial);
+        QVERIFY(record);
+        QCOMPARE(record->lastImage.partitions, written);
+    }
 }
 
 void Tst_inventory::recorderFlashFailedKeepsImage()
@@ -1417,5 +1611,20 @@ void Tst_inventory::recorderNoSecretInFile()
     }
 }
 
-QTEST_GUILESS_MAIN(Tst_inventory)
+// QTEST_GUILESS_MAIN's body, plus (fix4, m5) the second process of writersInTwoProcesses(): started
+// with --inventory-writer it writes and exits, no test runs in it (tst_firmwaretools' --tool-helper
+// does the same).
+int main(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    const QStringList args = QCoreApplication::arguments();
+    if (args.size() >= 2 && args.at(1) == kWriterOption) {
+        return runInventoryWriter(args);
+    }
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    Tst_inventory tc;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&tc, argc, argv);
+}
+
 #include "tst_inventory.moc"

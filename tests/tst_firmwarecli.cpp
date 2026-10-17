@@ -472,6 +472,11 @@ private slots:
     void fleetVerifyCli();
     void verifyHelp();
 
+    // ---- fix4: the pre-hand-over review's findings (review4.md) ---------------------------------------
+    void flashSocStarLayoutNeverNamesTheG2();       // B1 (test gap 1, the inventory half)
+    void expectImageAllNamesWritableRowsOnly();     // m4
+    void readmeRowsMatchTheHelp();                  // m6
+
     // ---- The executable ------------------------------------------------------------------------------
     void realExecutable();
 
@@ -3978,6 +3983,153 @@ void Tst_firmwarecli::verifyHelp()
     const CliResult result = rig.run({QStringLiteral("status"), QStringLiteral("--verify")});
     QCOMPARE(result.code, 2);
     QVERIFY(rig.runner.invocations().isEmpty());
+}
+
+// =======================================================================================
+// fix4: the pre-hand-over review's findings (review4.md)
+// =======================================================================================
+
+void Tst_firmwarecli::flashSocStarLayoutNeverNamesTheG2()
+{
+    // (B1; the review's test gap 1, its inventory half) This PC's "*" memory holds the Node's layout
+    // (a Node's status wrote it). A G2 runs on ADB, its /proc/cmdline carries no mtdparts (open
+    // question 6), and the bring-up ladder's first write is `--partitions userdata` with the G2
+    // image - with and without --serial. The Node layout never names the G2's profile: its product
+    // read runs, nothing is refused, the inventory record says "stacked" (never "node"), and
+    // userdata lands at the G2 image's sectors.
+    const QString image = caseDir(QStringLiteral("stacked-withenv/update.img"));
+    QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+    const QString dir = extractDirOf(image);
+    for (const bool withSerial : {true, false}) {
+        clearInventory();
+        AppSettings::instance().setFirmwareMtdParts(QString(), kNodeMtdParts);   // the "*" memory: another board's
+        QVERIFY(AppSettings::instance().firmwareMtdParts(kBoardSerial).isEmpty());
+        CliRig rig;
+        auto inLoader = std::make_shared<bool>(false);
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+            i->emitOutput(*inLoader ? kLdLoaderStacked : QByteArray("List of rockusb connected(0)\r\n"));
+            i->finish(0);
+        });
+        rig.runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs rootwait\n");
+        rig.runner.addScript(productPattern(), kProductStacked);
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("^adb( -s \\S+)? reboot loader$")), [inLoader](FakeToolInvocation* i) {
+            *inLoader = true;
+            i->finish(0);
+        });
+        rig.runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), [inLoader](FakeToolInvocation* i) {
+            *inLoader = false;
+            i->emitOutput("Reset Device OK.\r\n");
+            i->finish(0);
+        });
+        scriptSocFlash(rig.runner, kLdLoaderStacked);
+        QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                              QStringLiteral("userdata"), QStringLiteral("--yes")};
+        if (withSerial) {
+            arguments << QStringLiteral("--serial") << kBoardSerial;
+        }
+        const CliResult result = rig.run(arguments);
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QVERIFY2(!result.hasTextStarting(QStringLiteral("profile: Node")), qPrintable(result.dump()));
+        QVERIFY(result.hasText(QStringLiteral("profile: Stacked (RV1106G2) - from the ADB gadget's product string rv1106g-stacked-gc2083")));
+        QVERIFY(result.hasText(QStringLiteral("the board's /proc/cmdline has no mtdparts; the layout remembered for a board met in Loader "
+                                              "mode (%1) is not this board's and is not used")
+                                   .arg(kNodeMtdParts)));
+        // No rule-2 refusal and no forced note: the "*" Node layout was never this board's. (The job's
+        // own plan before the flash places the image in the image's layout and may say that the layout
+        // "known so far" differs - the Loader-mode memory - which the flow then does not use.)
+        QVERIFY(!result.out.contains(QStringLiteral("differs from the board's (")));
+        QVERIFY(!result.out.contains(QStringLiteral("differs from the board's;")));
+        QCOMPARE(wlCommands(rig.runner), QStringList{expectedStackedWl(5, dir)});
+        const std::optional<InventoryRecord> record = inventoryRecord(kBoardSerial);
+        QVERIFY(record);
+        QCOMPARE(record->profile, QStringLiteral("stacked"));
+        QCOMPARE(record->lastImage.partitions, QStringList{QStringLiteral("userdata")});
+        QCOMPARE(record->lastImage.chipTag, QStringLiteral("1106"));
+        // Nothing was read from the board: the "*" memory and the board's own stay as they were.
+        QCOMPARE(AppSettings::instance().firmwareMtdParts(QString()), kNodeMtdParts);
+        QVERIFY(AppSettings::instance().firmwareMtdParts(kBoardSerial).isEmpty());
+    }
+}
+
+void Tst_firmwarecli::expectImageAllNamesWritableRowsOnly()
+{
+    // (m4) --expect-image with --all names the rows of the image that can be written - a row outside
+    // the board's layout is never written, so never recorded - and refuses a board that runs them all.
+    // (0.8.0 named every row and could never refuse: "meta is not recorded as written: writing".)
+    const QString withoutMeta = QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),3M@960K(boot),5M(rootfs),3M(userdata)");
+    const QString image = makeImage(QStringLiteral("plain/update.img"));   // its env.img carries no layout
+    QVERIFY(!image.isEmpty());
+    const QString md5 = Inventory::md5Hex(image);
+    const QDateTime written = QDateTime::currentDateTime().addSecs(-3600);
+    const QStringList six{QStringLiteral("env"),  QStringLiteral("idblock"), QStringLiteral("uboot"),
+                          QStringLiteral("boot"), QStringLiteral("rootfs"),  QStringLiteral("userdata")};
+    QVERIFY(seedImage(kBoardSerial, md5, six, written));
+    CliRig rig;
+    scriptBoardOnAdb(rig.runner);
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--serial"), kBoardSerial, QStringLiteral("--image"), image,
+                                      QStringLiteral("--layout"), withoutMeta, QStringLiteral("--all"), QStringLiteral("--yes"),
+                                      QStringLiteral("--expect-image"), md5});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): board %1 already runs the expected image (md5 %2, %3 written %4); "
+                                               "pass --force to write it again")
+                                    .arg(kBoardSerial, md5, six.join(QStringLiteral(", ")), minuteText(written)));
+    QVERIFY(!result.out.contains(QStringLiteral("not recorded as written")));
+    QCOMPARE(rig.runner.invocations().size(), qsizetype(1));   // the plan's EXF only: no board was touched
+    QVERIFY(exfPattern().match(rig.runner.invocations().first()).hasMatch());
+}
+
+void Tst_firmwarecli::readmeRowsMatchTheHelp()
+{
+    // (m6) The README's su-fw table names the options each command's --help synopsis names: the two
+    // flash-soc rows (one board, a fleet) option for option, and every row only options the command
+    // takes.
+    QFile file(QStringLiteral(SU_TEST_DATA_DIR "/../../README.md"));
+    QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), qPrintable(file.fileName()));
+    const QStringList readme = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'));
+    static const QRegularExpression optionName(QStringLiteral("--([a-z][a-z-]*)"));
+    const auto optionsIn = [](const QString& text) {
+        QSet<QString> names;
+        QRegularExpressionMatchIterator it = optionName.globalMatch(text);
+        while (it.hasNext()) {
+            names.insert(it.next().captured(1));
+        }
+        return names;
+    };
+    QStringList flashRows;
+    int rows = 0;
+    static const QRegularExpression row(QStringLiteral("^\\| `su-fw ([a-z-]+)( [^`]*)?` \\|"));
+    for (const QString& line : readme) {
+        const QRegularExpressionMatch match = row.match(line);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        ++rows;
+        const QString command = match.captured(1);
+        const QStringList known = FirmwareCli::commandOptions(command);
+        QVERIFY2(!known.isEmpty(), qPrintable(line));
+        for (const QString& name : optionsIn(match.captured(2))) {
+            QVERIFY2(known.contains(name), qPrintable(command + QStringLiteral(": --") + name));
+        }
+        if (command == QLatin1String("flash-soc")) {
+            flashRows << match.captured(2);
+        }
+    }
+    QVERIFY(rows >= 9);
+    QCOMPARE(flashRows.size(), qsizetype(2));
+
+    // The synopsis: "Usage: su-fw flash-soc ..." (one board) and the second "su-fw flash-soc (--serials" form.
+    const QString help = FirmwareCli::helpText(QStringLiteral("flash-soc"));
+    const qsizetype usage = help.indexOf(QStringLiteral("Usage: "));
+    const qsizetype fleet = help.indexOf(QStringLiteral("su-fw flash-soc (--serials"), usage);
+    const qsizetype end = help.indexOf(QStringLiteral("\n\n"), fleet);
+    QVERIFY(usage >= 0 && fleet > usage && end > fleet);
+    QSet<QString> single = optionsIn(help.mid(usage, fleet - usage));
+    QSet<QString> many = optionsIn(help.mid(fleet, end - fleet));
+    QCOMPARE(optionsIn(flashRows.at(0)), single);
+    QCOMPARE(optionsIn(flashRows.at(1)), many);
+    QVERIFY(many.contains(QStringLiteral("profile")) && many.contains(QStringLiteral("force-loader-partitions"))
+            && many.contains(QStringLiteral("expect-image")) && many.contains(QStringLiteral("force")));
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarecli)

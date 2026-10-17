@@ -340,6 +340,10 @@ FirmwareJob::FirmwareJob(ToolRunner* runner, QObject* parent)
     d->ssh->setAutoReconnect(false);
     d->puller->setConnection(d->ssh);
     d->updater->setThroughSoc(true);   // the CLI "power" reply is logged before "bootloader"
+    // (fix4, B1) An ADB board's own remembered layout, by its serial (this job's memory, then the
+    // owner's): what the flasher's step 2 uses when the board's /proc/cmdline carries no mtdparts.
+    // The "*" memory (boardLayout()'s fallback) is only ever the layout of a board met in Loader mode.
+    d->flasher->setLayoutProvider([this](const QString& serial) { return d->layoutFor(serial); });
 
     d->linkCloseTimer.setSingleShot(true);
     connect(&d->linkCloseTimer, &QTimer::timeout, this, [this]() {
@@ -356,6 +360,7 @@ FirmwareJob::~FirmwareJob()
     // The collaborators may still report while they are stopped: every connection into this
     // object is cut before anything is stopped.
     d->linkCloseTimer.stop();
+    d->flasher->setLayoutProvider(nullptr);   // it asks this job's memory, which goes before the flasher
     const QList<QObject*> children = findChildren<QObject*>();
     for (QObject* child : children) {
         disconnect(child, nullptr, this, nullptr);
@@ -907,8 +912,11 @@ ProfileDetection FirmwareJob::Private::computeBoardProfile() const
     }
     switch (deviceStatus.mode) {
     case SocFlasher::DeviceStatus::Mode::Loader:
-        evidence.loaderPid = deviceStatus.pid;   // U-Boot rockusb's constant (row 32)
-        evidence.layout = q->boardLayout();
+        // U-Boot rockusb's constant (row 32). (fix4, m2) No layout: a board in Loader mode tells
+        // none, and boardLayout() is then the layout read last from ANY board (the "*" memory) - a
+        // PID the table does not know must leave the board unknown, not name that board's profile.
+        // A Loader board's layout is read by the flow (SocFlasher), not by the status.
+        evidence.loaderPid = deviceStatus.pid;
         break;
     case SocFlasher::DeviceStatus::Mode::Adb: {
         const QString fromBus = adbGadgetProductFromBus();
@@ -1859,7 +1867,10 @@ void FirmwareJob::Private::startFlash()
     }
     pushToolPaths();
     flasher->setImagePath(image);
-    flasher->setMtdParts(q->boardLayout());   // a board already in Loader mode cannot tell its layout
+    // A board already in Loader mode cannot tell its layout: the one remembered for it (the last ADB
+    // board's own, else the "*" memory). (fix4, B1) An ADB board never gets this one: its step 2
+    // reads its /proc/cmdline and, without mtdparts there, asks the layout provider for its serial.
+    flasher->setMtdParts(q->boardLayout());
     // (v0.8.0) The board profiles: the owner's override, the rules' overrides and the questions.
     flasher->setProfileOverride(profileOverride);
     flasher->setForceLayout(forceLayout);
@@ -2216,6 +2227,17 @@ void FirmwareJob::Private::startMcuUpdate(const QString& stepName)
     }
     if (confirmedRole == 0) {
         stepFinished(stepName, false, FirmwareJob::tr("choose the MCU role (rx or tx) first: it is never guessed"));
+        return;
+    }
+    // (fix4, M1) The status's own reads (the board's /proc/cmdline, then its gadget's product
+    // string) are what make a G2 whose cmdline carries no layout known; rule 4 judged before they
+    // end would be inert on exactly the board it exists for, and McuLink::open() would reboot its
+    // CC1310 - the SoC's power - into the bootloader. su-fw waits for them (queryBoard()); the tab's
+    // buttons do not, so the operation is refused until they ended.
+    if (cmdlineInvocation || productInvocation) {
+        stepFinished(stepName, false,
+                     FirmwareJob::tr("the board's profile is still being read (its flash layout and gadget product "
+                                     "string); try again in a moment"));
         return;
     }
     // (v0.8.0) Rule 4, before the link opens: the stacked board's CC1310 holds the SoC's power,

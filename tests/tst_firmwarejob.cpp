@@ -310,6 +310,11 @@ private slots:
     // ---- The layout of a board met in Loader mode (v0.8.0, layout-pl) ---------------------------
     void soc_loaderReadRememberedUnderStar();
 
+    // ---- fix4: the pre-hand-over review's findings (review4.md) ---------------------------------
+    void flashAdbBoardGetsItsOwnLayoutOnly();   // B1
+    void loaderStatusLayoutIsNoEvidence();      // m2
+    void mcuRefusedWhileTheStatusReads();       // M1
+
 private:
     void mcuProfileFromProductString();   ///< (v0.8.0) mcuRefusedOnPowerCutProfile()'s variant (decision 3)
     QString tempPath(const QString& name) const { return m_tempDir.filePath(name); }
@@ -2835,6 +2840,123 @@ void Tst_firmwarejob::soc_loaderReadRememberedUnderStar()
         QVERIFY(job->mtdParts(serial).isEmpty());
         QCOMPARE(job->mtdParts(QString()), kNodeMtdParts);
     }
+}
+
+// =======================================================================================
+// fix4: the pre-hand-over review's findings (review4.md)
+// =======================================================================================
+
+void Tst_firmwarejob::flashAdbBoardGetsItsOwnLayoutOnly()
+{
+    // (B1, the job's half) The flasher gets boardLayout() - the layout for a board met in Loader mode,
+    // here the app's "*" memory: a Node's - and the per-serial memory for an ADB board. A G2 on ADB
+    // whose /proc/cmdline carries no mtdparts, an image without a layout of its own: the G2's own
+    // remembered layout places userdata (sector 26496), never the Node's (sector 18304).
+    FakeToolRunner runner;
+    auto inLoader = std::make_shared<bool>(false);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+        i->emitOutput(*inLoader ? kLdLoaderStacked : QByteArray("List of rockusb connected(0)\r\n"));
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs rootwait\n");
+    runner.addScript(productPattern(), kProductStacked);
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    runner.addHandler(QRegularExpression(QStringLiteral("^adb( -s \\S+)? reboot loader$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = true;
+        i->finish(0);
+    });
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = false;
+        i->emitOutput("Reset Device OK.\r\n");
+        i->finish(0);
+    });
+    scriptSocFlash(runner, kLdLoaderStacked);
+    auto job = makeJob(&runner);
+    const QString serial = QStringLiteral("0225ce3c8d8d6e44");
+    job->setLayoutProvider([](const QString& key) { return key.isEmpty() ? kNodeMtdParts : QString(); });   // "*": a Node's
+    job->setMtdParts(kStackedMtdParts, serial);                                                          // the G2's own
+    const QString image = caseDir(QStringLiteral("stacked/update.img"));   // stackedExtractor, env.img without a layout
+    QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+    QVERIFY(job->setImagePath(image));
+    QVERIFY(waitForRows(*job, kStackedPartitionCount));
+    QCOMPARE(job->boardLayout(), kNodeMtdParts);   // no board seen yet: the Loader-mode guess
+    job->setSelectedPartitions({QStringLiteral("userdata")});
+    Recorder rec(job.get());
+    job->flashSoc();
+    QVERIFY(rec.waitForOperation());
+    QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+    QVERIFY(rec.log.contains(QStringLiteral("the board's /proc/cmdline has no mtdparts; using the layout remembered for it: ") + kStackedMtdParts));
+    QCOMPARE(wlCommands(runner), QStringList{expectedStackedWl(5, extractDirOf(image))});
+    QCOMPARE(job->socFlasher()->detectedProfile().profile.id, QStringLiteral("stacked"));
+    QVERIFY(!rec.logText().contains(QStringLiteral("profile: Node")));
+}
+
+void Tst_firmwarejob::loaderStatusLayoutIsNoEvidence()
+{
+    // (m2) A board in Loader mode tells no layout; boardLayout() is then the "*" memory, the layout
+    // read last from ANY board. A Loader PID the table does not know leaves the board unknown - it is
+    // never "from the board's flash layout" of that other board. A known PID still names it.
+    FakeToolRunner runner;
+    QByteArray oddLoader = kLdLoader;
+    oddLoader.replace("Pid=0x110e", "Pid=0x110a");
+    auto pidOdd = std::make_shared<bool>(true);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [pidOdd, oddLoader](FakeToolInvocation* i) {
+        i->emitOutput(*pidOdd ? oddLoader : kLdLoaderStacked);
+        i->finish(0);
+    });
+    auto job = makeJob(&runner);
+    job->setMtdParts(kNodeMtdParts);   // the "*" memory: a Node was read last
+    QCOMPARE(job->boardLayout(), kNodeMtdParts);
+    QSignalSpy statuses(job.get(), &FirmwareJob::statusChanged);
+    job->refreshStatus();
+    QTRY_COMPARE(statuses.count(), qsizetype(1));
+    QCOMPARE(job->lastStatus().mode, SocFlasher::DeviceStatus::Mode::Loader);
+    QCOMPARE(job->lastStatus().pid, quint16(0x110a));
+    QVERIFY2(!job->boardProfile().known(), qPrintable(job->boardProfile().text()));
+    *pidOdd = false;
+    job->refreshStatus();
+    QTRY_COMPARE(statuses.count(), qsizetype(2));
+    QCOMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));   // the PID, not the Node layout
+    QCOMPARE(job->boardProfile().source, ProfileDetection::Source::LoaderPid);
+}
+
+void Tst_firmwarejob::mcuRefusedWhileTheStatusReads()
+{
+    // (M1) The status's own reads of a board on ADB (its /proc/cmdline, then its gadget's product
+    // string) are what make a G2 known: Update MCU / Set role while one is in flight fail at once,
+    // before McuLink::open() - rule 4 cannot be judged yet. su-fw waits for them; the tab may not.
+    FakeToolRunner runner;
+    QPointer<FakeToolInvocation> cmdline;
+    runner.addHandler(QRegularExpression(QStringLiteral("cat /proc/cmdline")), [&cmdline](FakeToolInvocation* i) {
+        cmdline = i;
+        i->hang();
+    });
+    runner.addScript(productPattern(), kProductStacked);
+    auto job = makeJob(&runner);
+    QVERIFY(job->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    job->setRole(CcProtocol::RoleRx);
+    emit job->socFlasher()->statusChanged(adbStatus());
+    QVERIFY(cmdline);
+    Recorder rec(job.get());
+    const QString refusal =
+        QStringLiteral("the board's profile is still being read (its flash layout and gadget product string); try again in a moment");
+    job->updateMcu();
+    QVERIFY(rec.waitForOperation());
+    QCOMPARE(rec.lastOperation().name, QStringLiteral("mcu"));
+    QVERIFY(!rec.lastOperation().ok);
+    QCOMPARE(rec.lastOperation().message, refusal);
+    job->setMcuRole();
+    QVERIFY(rec.waitForOperation(2));
+    QCOMPARE(rec.lastOperation().message, refusal);
+    QCOMPARE(runner.invocations().size(), qsizetype(1));   // the cmdline read only: no adb of the MCU link
+    // The read ends; the product read follows and makes it Stacked; the next Update MCU meets rule 4
+    // (headless: refused with its own text).
+    cmdline->emitOutput("console=ttyFIQ0 root=/dev/rd0 rootwait\n");
+    cmdline->finish(0);
+    QTRY_COMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));
+    job->updateMcu();
+    QVERIFY(rec.waitForOperation(3));
+    QCOMPARE(rec.lastOperation().message, kPowerRefusal);
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarejob)

@@ -215,16 +215,10 @@ QStringList InventoryRecorder::Private::flashedRows() const
         }
         return rows;
     }
-    rows = job->selectedPartitions();   // every writable row when "all" was selected
-    if (rows.isEmpty()) {
-        // No plan of the job's own (the flasher decided: every row that is in the layout and fits).
-        for (const PartitionImage& row : flasher->partitions()) {
-            if (row.selected && row.inLayout && row.fits) {
-                rows << row.name;
-            }
-        }
-    }
-    return rows;
+    // (fix4, m4) The rows the flasher wrote completely, not the selection: a row the flow skipped
+    // (no image file for it in the package, not in the layout) was not written, and a record that
+    // claimed it would make --expect-image skip a board that does not run that row.
+    return flasher->writtenPartitions();
 }
 
 void InventoryRecorder::Private::loaderLine()

@@ -416,7 +416,9 @@ Options:
   --layout MTDPARTS    The board's flash layout: only needed for a board already in Loader mode
                        whose layout is not remembered, flashed with an image without one of its
                        own (an image layout that differs from the board's is refused unless
-                       --force-layout).
+                       --force-layout). A running board's own /proc/cmdline layout wins; when it
+                       carries none, --layout counts for it only together with --serial (the
+                       layout remembered for that board) - never the one read last from another.
   --no-wait            Do not wait for the board to come back on ADB after the flash.
   --verify             After every partition written, read it back (upgrade_tool RL) and compare
                        it with the image byte for byte; a difference fails the flash (the board is
@@ -447,9 +449,10 @@ Options:
   --expect-image MD5   The MD5 of the image the named board should already run: every flash
                        logs "image md5: <hex>", su-fw inventory shows what each board runs. A
                        board whose inventory record carries this MD5 for every partition named
-                       (--all: every partition of the image) is refused before anything runs;
-                       a partition not recorded as written with it is written. Only with
-                       --serial or --serials (never --all-boards); a fleet refuses as a whole.
+                       (--all: every partition of the image that can be written) is refused
+                       before anything runs; a partition not recorded as written with it is
+                       written. Only with --serial or --serials (never --all-boards); a fleet
+                       refuses as a whole.
   --force              With --expect-image: write a board that already runs the expected image.
 )HELP";
 
@@ -2476,11 +2479,16 @@ int FirmwareCli::Private::cmdFlashSoc()
     const bool ready = job->planState() == FirmwareJob::PlanState::Ready;
     const bool known = job->layoutKnown();
     if (!opts.expectImage.isEmpty() && opts.all) {
-        // --all names every row of the image, known only now: still before any board is touched.
+        // --all names every row of the image that can be written, known only now: still before any
+        // board is touched. (fix4, m4) Only those: a row not in the layout (or without an image
+        // file) is never written, so never recorded, and naming it would make the check end in
+        // "not recorded as written: writing" for ever.
         QStringList names;
         if (ready) {
             for (const PartitionImage& row : job->partitions()) {
-                names << row.name;
+                if (FirmwareJob::partitionProblem(row, known).isEmpty()) {
+                    names << row.name;
+                }
             }
         }
         const int refused = checkExpectedImage({opts.serial}, names);

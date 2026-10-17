@@ -41,8 +41,8 @@ struct InventoryRecord
     /// build in the others, and `--expect-image` must not call that "runs the image" (FirmwareCli.h).
     /// A later ok write of the SAME md5 merges its rows into `partitions` (order of first
     /// appearance, no duplicates) and refreshes `written`; a write of a DIFFERENT md5 replaces the
-    /// whole Image (its rows only). The rows are the write's own: the single-board flow's selected
-    /// rows (FirmwareJob::selectedPartitions(); every writable row when "all" was selected), every
+    /// whole Image (its rows only). The rows are the write's own: the rows the single-board flow
+    /// wrote completely ((fix4, m4) SocFlasher::writtenPartitions(), not the selection), every
     /// row of the image for a UF (MASKROM) write, FleetBoard::written for a fleet board.
     struct Image
     {

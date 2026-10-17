@@ -153,7 +153,12 @@ class ToolRunner;
  * partition, or PL: SocFlasher::mtdPartsRead() while the flow's status is not Adb) belongs to no
  * serial: it is stored under "" (the Loader-mode key) only and reported as mtdPartsRead("",
  * mtdparts) - never under the last ADB serial this job saw, which may be another board's (the
- * flasher's mtdPartsRead wiring passes QString() whenever the device status is not Adb). The
+ * flasher's mtdPartsRead wiring passes QString() whenever the device status is not Adb). (fix4, B1)
+ * The flasher gets boardLayout() as the layout of a board met in Loader mode, and the job's
+ * per-serial memory (its own, then the provider's; never the "" entry) as
+ * SocFlasher::setLayoutProvider(): an ADB board whose /proc/cmdline carries no mtdparts gets its
+ * own remembered layout or none - the "" entry, the layout read last from ANY board, is never an
+ * ADB board's layout nor anyone's profile evidence. The
  * status's own read ends with layoutReadFinished(serial,
  * ok) whatever it found (after mtdPartsRead() when it found a layout; ok = false when adb could not
  * run or the board reports none), so an owner that waits for it needs no log text. Settings: the
@@ -183,9 +188,10 @@ class ToolRunner;
  * profileOverride() (the owner's --profile / the tab's Board profile box), the last status's
  * Loader PID (DeviceStatus::pid with Mode::Loader ONLY - a Maskrom status hands 0: the BootROM's
  * PID is unknown on both boards, RV1106G2_FACTS.md row 33, and must never read as the other
- * board's Loader PID), the gadget's product string and the layout known for the status's board
- * (boardLayout()). The product string is the USB enumeration's (UsbProbe::presentDevices(), when
- * the OS reports it: Linux) or, when the status's /proc/cmdline read (readBoardLayout) yielded a
+ * board's Loader PID), the gadget's product string and the layout remembered for the status's ADB
+ * board (its serial's own; (fix4, m2) a Loader status gives no layout: boardLayout() would be the ""
+ * entry, the layout read last from ANY board). The product string is the USB enumeration's
+ * (UsbProbe::presentDevices(), when the OS reports it: Linux) or, when the status's /proc/cmdline read (readBoardLayout) yielded a
  * layout matching no profile - or none, open question 6 - and the profile is still unknown, the
  * one the job reads from the board itself once per board and job: `adb -s <serial> shell cat
  * /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product` (the configfs path usb_adb.sh
@@ -211,7 +217,10 @@ class ToolRunner;
  * LoaderPartitionsHandler is asked otherwise) before the fleet starts and before any reboot;
  * updateMcu() / setMcuRole(), and the MCU step of pullAndFlash(), apply rule 4 (socPowerRefusal()
  * on boardProfile(); confirmSocPower() turns it into the note, else the SocPowerHandler is asked
- * once - the tab's question, headless default: refuse) before McuLink::open(). maskromInstructions()
+ * once - the tab's question, headless default: refuse) before McuLink::open() - (fix4, M1) and
+ * before that, while the status's own layout or product read is still running (the profile it
+ * may make known is not in yet), they fail as a step with "the board's profile is still being read
+ * (its flash layout and gadget product string); try again in a moment". maskromInstructions()
  * is the override's profile's text when one is set (BoardProfile::maskromInstructions(): the
  * stacked board has no MASKROM button to hold). None of this changes the command lines a Node
  * flash runs: the pinned single-board lists of 0.7.0 hold.

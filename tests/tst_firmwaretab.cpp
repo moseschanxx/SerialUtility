@@ -355,6 +355,10 @@ private slots:
     // ---- Verify after write (v0.8.0, verify-rl) -----------------------------------------------------
     void verifyCheckboxRemembered();
 
+    // ---- fix4: the pre-hand-over review's findings (review4.md) ----------------------------------
+    void mcuRefusedWhileTheProfileIsRead();   // M1
+    void dailyPartitionsFollowTheProfile();   // m3
+
     // ---- MainWindow integration -----------------------------------------------------
     void showFirmwareTabOnce();
     void sessionActionsDisabledWhileCurrent();
@@ -950,9 +954,11 @@ void Tst_firmwaretab::busyAroundFlash()
     QVERIFY(tab->isBusy());
     QCOMPARE(tab->currentOperation(), QStringLiteral("flash"));
     QVERIFY(!tab->persistentStatusMessage().isEmpty());
+    // (fix4, M2) The Board profile box too: a change would reach the running flasher at once.
     for (QWidget* off : {static_cast<QWidget*>(tab->pullButton()), static_cast<QWidget*>(tab->flashSocButton()),
                          static_cast<QWidget*>(tab->pullAndFlashButton()), static_cast<QWidget*>(tab->readMcuButton()),
-                         static_cast<QWidget*>(tab->sourceCombo()), static_cast<QWidget*>(tab->localImageButton())}) {
+                         static_cast<QWidget*>(tab->sourceCombo()), static_cast<QWidget*>(tab->localImageButton()),
+                         static_cast<QWidget*>(tab->profileCombo())}) {
         QVERIFY2(!off->isEnabled(), qPrintable(off->objectName()));
     }
 
@@ -976,6 +982,7 @@ void Tst_firmwaretab::busyAroundFlash()
     QVERIFY(tab->persistentStatusMessage().isEmpty());
     QVERIFY(tab->flashSocButton()->isEnabled());
     QVERIFY(tab->pullButton()->isEnabled());
+    QVERIFY(tab->profileCombo()->isEnabled());
     QVERIFY(!tab->cancelButton()->isEnabled());
     QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Flash SoC failed")));
     QVERIFY(tab->progressLabel()->text().contains(QStringLiteral("Flash SoC failed")));
@@ -1904,7 +1911,10 @@ void Tst_firmwaretab::partitionLayoutReadOnceFromBoard()
     QCOMPARE(AppSettings::instance().firmwareMtdParts(QString()), kNodeMtdParts);   // "*": for a board met in Loader mode
     QCOMPARE(QSettings().value(QStringLiteral("firmware/mtdparts")).toMap().value(board.serial).toString(), kNodeMtdParts);
     QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Flash layout of board 0225ce3c8d8d6e44: ") + kNodeMtdParts));
-    QVERIFY(waitForTable(*tab, QStringLiteral("7 partitions, 7 selected")));   // planned again with it
+    // Planned again with it; (fix4, m3) the layout read also made the board a Node, so the daily
+    // default follows now that both are known: rootfs only (0.8.0 left all 7 checked here).
+    QVERIFY(waitForTable(*tab, QStringLiteral("7 partitions, 1 selected")));
+    QCOMPARE(tab->selectedPartitions(), QStringList{QStringLiteral("rootfs")});
     QCOMPARE(runner.count(exfPattern()), 1);                                  // the layout alone changed
 
     // Seen again by the 2 s refresh: no second read.
@@ -1972,7 +1982,7 @@ void Tst_firmwaretab::partitionLayoutFromImage()
              QStringLiteral("7 partitions, 7 selected (10.8 MB) - layout from the image (the board's differs)"));
     QVERIFY(tab->partitionsLabel()->toolTip().contains(QStringLiteral("The board's layout: ") + older));
     QCOMPARE(tab->flashLayout(), kNodeMtdParts);
-    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("warning: the image's flash layout differs from the board's")));
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("warning: the image's flash layout differs from the board layout known so far")));
     QCOMPARE(tab->partitionTable()->item(5, 3)->text(), QStringLiteral("0x3f0000"));   // the plan: the image's rootfs offset
 
     // Flash SoC in Loader mode: (v0.8.0) the board's layout differs from the image's, so the flash
@@ -2435,6 +2445,119 @@ void Tst_firmwaretab::verifyCheckboxRemembered()
     tab->verifyCheckBox()->click();
     QVERIFY(!AppSettings::instance().firmwareVerifyAfterWrite());
     QVERIFY(!tab->firmwareJob()->verifyAfterWrite());
+}
+
+// =======================================================================================
+// fix4: the pre-hand-over review's findings (review4.md)
+// =======================================================================================
+
+void Tst_firmwaretab::mcuRefusedWhileTheProfileIsRead()
+{
+    // (M1; the review's test gap 2) A G2 whose /proc/cmdline carries no mtdparts appears on ADB: the
+    // status reads its cmdline, then its gadget's product string - what makes it "Stacked". Update
+    // MCU / Set role clicked while either read is in flight are refused (rule 4 cannot be judged
+    // yet), never the bridge; once both ended, rule 4's question comes.
+    FakeMcu mcu;
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    FakeToolRunner runner;
+    QPointer<FakeToolInvocation> cmdline;
+    QPointer<FakeToolInvocation> product;
+    runner.addHandler(QRegularExpression(QStringLiteral("^adb -s 0225ce3c8d8d6e44 shell \"cat /proc/cmdline\"$")),
+                      [&cmdline](FakeToolInvocation* i) {
+                          cmdline = i;
+                          i->hang();
+                      });
+    runner.addHandler(productPattern(), [&product](FakeToolInvocation* i) {
+        product = i;
+        i->hang();
+    });
+    scriptMcuBridge(runner, bridge.port());
+    auto tab = makeTab(&runner);
+    QVERIFY(tab->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+    tab->setSelectedRole(CcProtocol::RoleRx);
+    QVERIFY(tab->updateMcuButton()->isEnabled());
+    emit tab->socFlasher()->statusChanged(runningBoard());   // nothing remembered for it: the reads start
+    QVERIFY(cmdline);
+    QVERIFY(!tab->firmwareJob()->boardProfile().known());
+    QSignalSpy finished(tab.get(), &FirmwareTab::operationFinished);
+    const QString refusal =
+        QStringLiteral("the board's profile is still being read (its flash layout and gadget product string); try again in a moment");
+    const QRegularExpression forward(QStringLiteral("forward tcp:0"));
+    ProfileQuestionAnswerer user(QStringLiteral("Cancel"));
+
+    tab->updateMcu();   // the cmdline read in flight
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(1), kOpTimeoutMs);
+    QCOMPARE(finished.at(0).at(0).toString(), QStringLiteral("mcu"));
+    QCOMPARE(finished.at(0).at(1).toBool(), false);
+    QCOMPARE(finished.at(0).at(2).toString(), refusal);
+    tab->setMcuRole();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(2), kOpTimeoutMs);
+    QCOMPARE(finished.at(1).at(0).toString(), QStringLiteral("set-role"));
+    QCOMPARE(finished.at(1).at(2).toString(), refusal);
+
+    cmdline->emitOutput("console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs rootwait\n");   // no mtdparts (open question 6)
+    cmdline->finish(0);
+    QTRY_VERIFY(product);   // the product read follows at once
+    QVERIFY(!tab->firmwareJob()->boardProfile().known());
+    tab->updateMcu();   // the product read in flight
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(3), kOpTimeoutMs);
+    QCOMPARE(finished.at(2).at(2).toString(), refusal);
+    QCOMPARE(user.asked, 0);
+    QCOMPARE(runner.count(forward), 0);   // the bridge never ran: the CC1310 was never told "bootloader"
+    QCOMPARE(runner.invocations().size(), qsizetype(2));   // the two reads, nothing else
+    QVERIFY(tab->logView()->toPlainText().contains(QStringLiteral("Update MCU failed: ") + refusal));
+
+    product->emitOutput(kProductStacked);
+    product->finish(0);
+    QTRY_COMPARE(tab->firmwareJob()->boardProfile().profile.id, QStringLiteral("stacked"));
+    QCOMPARE(tab->firmwareJob()->boardProfile().source, ProfileDetection::Source::AdbProduct);
+    tab->updateMcu();   // both reads ended: rule 4 asks (Cancel), still no bridge
+    QTRY_COMPARE_WITH_TIMEOUT(finished.count(), qsizetype(4), kOpTimeoutMs);
+    QCOMPARE(user.asked, 1);
+    QVERIFY(finished.at(3).at(2).toString().startsWith(QStringLiteral("the CC1310 of a Stacked (RV1106G2) board holds the SoC's power")));
+    QCOMPARE(runner.count(forward), 0);
+}
+
+void Tst_firmwaretab::dailyPartitionsFollowTheProfile()
+{
+    // (m3; the review's test gap 4) The usual order: the image is planned at start-up, before any
+    // status (unknown: every row), and the board's status - with its profile - comes seconds later.
+    // The daily checks follow then; afterwards the user's choice stays.
+    FakeToolRunner runner;
+    scriptSocFlash(runner, kLdLoader);
+    {
+        auto tab = makeTab(&runner);
+        const QString image = tempPath(QStringLiteral("withenv-daily-later/update.img"));
+        QVERIFY(writeFile(image, rkfwBytes()));
+        tab->setImagePath(image);
+        QVERIFY(waitForTable(*tab, QStringLiteral("7 partitions, 7 selected")));
+        QVERIFY(!tab->firmwareJob()->boardProfile().known());
+        AppSettings::instance().setFirmwareMtdParts(QStringLiteral("0225ce3c8d8d6e44"), kNodeMtdParts);
+        emit tab->socFlasher()->statusChanged(runningBoard());
+        QCOMPARE(tab->firmwareJob()->boardProfile().profile.id, QStringLiteral("node"));
+        QVERIFY(waitForTable(*tab, QStringLiteral("7 partitions, 1 selected")));
+        QCOMPARE(tab->selectedPartitions(), QStringList{QStringLiteral("rootfs")});
+        // All, then the same image planned again with the same profile: the user's All stays.
+        tab->partitionsAllButton()->click();
+        QSignalSpy planned(tab->firmwareJob(), &FirmwareJob::partitionsPlanned);
+        tab->planPartitions();
+        QTRY_COMPARE_WITH_TIMEOUT(planned.count(), qsizetype(1), kOpTimeoutMs);
+        QCOMPARE(tab->selectedPartitions(), nodeNames());
+    }
+    {
+        // The stacked board the same way: its image first, its status later -> boot only.
+        AppSettings::instance().setFirmwareMtdParts(QStringLiteral("62ecfc6ddeb3f579"), kStackedMtdParts);
+        auto tab = makeTab(&runner);
+        const QString image = tempPath(QStringLiteral("daily-later-stacked-withenv/update.img"));
+        QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+        tab->setImagePath(image);
+        QVERIFY(waitForRowCount(*tab, kStackedPartitionCount, QStringLiteral("6 partitions, 6 selected")));
+        emit tab->socFlasher()->statusChanged(runningBoard(QStringLiteral("62ecfc6ddeb3f579")));
+        QCOMPARE(tab->firmwareJob()->boardProfile().profile.id, QStringLiteral("stacked"));
+        QVERIFY(waitForRowCount(*tab, kStackedPartitionCount, QStringLiteral("6 partitions, 1 selected")));
+        QCOMPARE(tab->selectedPartitions(), QStringList{QStringLiteral("boot")});
+    }
 }
 
 void Tst_firmwaretab::tabRecordsStatusAndFlash()

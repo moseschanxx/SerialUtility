@@ -565,7 +565,7 @@ pauses.
 | `su-fw partitions [--image F] [--layout M \| --serial S] [--profile ID]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; (0.8.0) the image's RKFW header and profile; the board is not touched |
 | `su-fw pull [--target T] [--remote-folder F] [--cache D] [--identity K] [--password-env VAR \| --password-stdin] [--accept-host-key]` | Pull `update.img` from the build machine (skipped when unchanged, the previous one kept) |
 | `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait] [--verify] [--profile ID] [--force-layout] [--force-loader-partitions] [--expect-image MD5 [--force]]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question; (0.8.0) logs `image md5: <hex>` first, and `--expect-image` skips a board that already runs that image (see *The bench inventory*); `--verify` reads every partition written back and compares it (see *Verify after writing*) |
-| `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait] [--verify]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*) |
+| `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait] [--verify] [--profile ID] [--force-loader-partitions] [--expect-image MD5 [--force]]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*); (0.8.0) `--profile` makes every board that profile, `--expect-image` (with `--serials` only) refuses the run when a named board already runs that image |
 | `su-fw mcu-info [--serial S] [--profile ID]` | The running CC1310's version and role |
 | `su-fw mcu-update --package P --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Update the CC1310 (the role is never guessed) |
 | `su-fw mcu-set-role --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Set the CC1310's role |
@@ -641,8 +641,14 @@ board's `/proc/cmdline` layout tells nothing) or its flash layout; the image's f
 (no tool runs for it) or its `env.img` layout. Both are logged with their evidence -
 `profile: Node (RV1106BG2) - from the board's flash layout (7 partitions: ...)`,
 `image profile: Stacked (RV1106G2) - from the image's chip tag 1106` - and an unknown profile makes
-the rules that need it inert (logged as `profile: unknown (...)`). Four refusals, each exit 1 with
-its text as the result:
+the rules that need it inert (logged as `profile: unknown (...)`). A flash layout is evidence only
+when it was read from the board itself: the layout remembered for a board met in Loader mode - the
+one read last from ANY board on this PC - never names a profile and is never a running board's
+layout, so a Stacked core whose `/proc/cmdline` carries no `mtdparts` is told by its product string
+and flashed in the image's layout (or the one remembered for its own serial: `--layout` together
+with `--serial`), even right after a Node's status. `mcu-update` / `mcu-set-role` (and the tab's
+buttons) refuse while the board's profile is still being read: "the board's profile is still being
+read (...); try again in a moment". Four refusals, each exit 1 with its text as the result:
 
 1. an image for the other board (no override: a wrong image is never written);
 2. an image whose flash layout differs from the board's - `--force-layout` writes it anyway (the
@@ -752,7 +758,8 @@ already runs the expected image (md5 ..., rootfs written ...); pass --force to w
 two things hold:
 
 - its record carries that MD5;
-- the record lists every partition the command names (with `--all`: every partition of the image).
+- the record lists every partition the command names (with `--all`: every partition of the image that
+  can be written - a row outside the board's layout is never written, so never recorded).
 
 A record with the MD5 but not every named partition is written: "board S runs the expected image's
 userdata (...); boot is not recorded as written: writing" (the stacked board's ladder: userdata

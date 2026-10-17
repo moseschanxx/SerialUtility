@@ -2,6 +2,8 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
+#include <functional>
 #include <memory>
 
 #include "firmware/AdbTool.h"
@@ -25,7 +27,10 @@
  *  2. RebootingToLoader: logLine("board running <kernel> ..., rebooting it into loader mode")
  *     (`adb shell cat /proc/version` first; busybox on the Node board has no uname), then
  *     `adb shell cat /proc/cmdline` whose mtdparts word becomes mtdParts() (mtdPartsRead(); a
- *     board without one keeps the owner's value), then
+ *     board without one gets the layout the owner remembers for its serial - setLayoutProvider() -
+ *     or none: (fix4, B1) setMtdParts() is the layout for a board MET IN LOADER MODE, the "*"
+ *     memory, and never an ADB board's; "the board's /proc/cmdline has no mtdparts; the layout
+ *     remembered for a board met in Loader mode (<x>) is not this board's and is not used"), then
  *     `adb reboot loader` (its exit status ignored, like the script) -> 4. Without a serial()
  *     the board found here is the flow's from now on: every later adb command of the flow
  *     carries `-s <its serial>` (a second ADB device appearing meanwhile changes nothing); the
@@ -97,8 +102,14 @@
  * writes, row 29; logged like every adb command; a failure or an empty answer leaves the profile
  * unknown) - and hands it to detectBoard() as adbProduct (Source::AdbProduct, evidence the string).
  * Conditional, so a board whose cmdline carries the Node layout runs no extra command and every
- * pinned 0.7.0 list is unchanged. THE LOADER DEVICE ADOPTED AT STEP 4 CARRIES ITS PID TOO: the
- * device the poll lists after step 2's reboot, or after step 3's wait, is detected again with its
+ * pinned 0.7.0 list is unchanged. (fix4, B1) A layout is profile evidence ONLY when this flow read
+ * it from the board (step 2's /proc/cmdline, or the read in Loader mode below): the owner's
+ * setMtdParts() - the layout read last from ANY board on the PC - and the per-serial memory of
+ * setLayoutProvider() never name a profile, so a G2 whose cmdline carries no mtdparts is never
+ * "Node (from the board's flash layout)" after a Node's status, and its product read runs; a plain
+ * queryStatus() (no flow) gives a layout no evidence at all. THE LOADER DEVICE ADOPTED AT STEP 4
+ * CARRIES ITS PID TOO: the device the poll lists after step 2's reboot, or after step 3's wait, is
+ * detected again with its
  * PID added (detectBoard()'s order: the PID outranks the product string and the layout, so it
  * confirms a known profile, replaces "unknown", or - the board's U-Boot contradicting its own
  * /proc/cmdline - wins over the layout), the result logged and reported like step 1's whenever it
@@ -110,7 +121,9 @@
  * (a board met in Loader mode) or at step 4 (the adopted device) with finished(false, "the --profile
  * stacked override contradicts the board's Loader PID 0x110e (the Node (RV1106BG2)'s); drop
  * --profile") before EXF, PL / RL or any WL - an override is the attached board "when the tool
- * cannot tell it", never a way to overrule what it read. The image's profile is read from its RKFW
+ * cannot tell it", never a way to overrule what it read; (fix4, M2) the same check runs once more
+ * right after a layout read in Loader mode (the override may change while the board is read: the
+ * tab's box), before that read's detection. The image's profile is read from its RKFW
  * header (RockchipTool::readRkfwHeader(): the chip tag; no SFI runs, so the command lines of a
  * 0.7.0 flash stay byte for byte) and, failing that, from its env.img layout once the plan exists.
  * Both are logged with their evidence (ProfileDetection::text(): "profile: Stacked (RV1106G2) -
@@ -262,6 +275,23 @@ public:
     /// running board reports; the owner sets a remembered one for a board already in Loader mode.
     void setMtdParts(const QString& mtdparts);
     QString mtdParts() const;
+    /// (fix4, B1) The layout remembered for an ADB board, asked with the serial of the board the flow
+    /// found (the owner's per-serial memory: what an earlier read of that very board found, or a
+    /// layout given for that serial): step 2 uses it when the board's /proc/cmdline carries no
+    /// mtdparts - and only then. setMtdParts() stays the layout for a board MET IN LOADER MODE (the
+    /// owner's "*" memory, or --layout without --serial) and is never an ADB board's: such a board
+    /// whose cmdline tells nothing and whose serial has nothing remembered has no layout (the image's
+    /// env.img layout, else "partition layout unknown") and mtdParts() is cleared. A remembered
+    /// layout is never profile evidence (the class comment). Null (the default) = nothing remembered.
+    using LayoutProvider = std::function<QString(const QString& serial)>;
+    void setLayoutProvider(LayoutProvider provider);
+    /// (fix4) The USB enumeration behind a status's ADB gadget product string (the description of
+    /// the one ADB gadget, profile evidence) and the NoDriver probe. Null (the default) =
+    /// UsbProbe::presentDevices() - asked for the product string on Linux only (Windows reports the
+    /// driver's name there). The tests inject one (FakeUsbBus::enumerate, or a lambda) on every
+    /// platform. The product string belongs to the ADB board the status picked: a status that is
+    /// not Adb clears it, so a board met later in Loader / MASKROM mode never inherits it.
+    void setUsbEnumerator(UsbProbe::Enumerator enumerator);
     /// Where `EXF` unpacks the image; empty (default) = "<image folder>/<image base name>.extracted",
     /// created on demand and reused (the files are overwritten by every flash).
     void setExtractDirectory(const QString& dir);
@@ -322,6 +352,11 @@ public:
     void setVerifyAfterWrite(bool on);          ///< default false; the tab's "Verify after writing", su-fw --verify
     bool verifyAfterWrite() const;
     QList<ReadBackResult> verifyResults() const;   ///< one per row verified in the current / last flow, row order (a failed one last)
+    /// (fix4, m4) The rows the current / last flow wrote completely, in write order: a WL that exited
+    /// clean and, with verifyAfterWrite(), an equal read-back. A row writePartitions() skipped (no
+    /// image file for it, not in the layout) is not among them; empty before the first WL and in
+    /// MASKROM mode (UF writes the whole image: partitions()). The inventory records these.
+    QStringList writtenPartitions() const;
 
     bool isRunning() const;
     Phase phase() const;

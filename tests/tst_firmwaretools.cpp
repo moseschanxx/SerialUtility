@@ -655,6 +655,12 @@ private slots:
     void soc_verifyCancelRefused();
     void soc_verifyNeverUnaddressed();
 
+    // ---- fix4: the pre-hand-over review's findings (review4.md) ----
+    void soc_starLayoutIsNoEvidenceOnAdb();          // B1
+    void soc_overrideChangedDuringLoaderRead();      // M2
+    void soc_statusProductNotInherited();            // m1
+    void soc_writtenPartitions();                    // m4
+
     // ---- Real board (env-gated; nothing is flashed) ----
     void realBoard_statusAndMcuInfo();
 };
@@ -4229,7 +4235,8 @@ void tst_firmwaretools::soc_layoutUnknown()
     using P = SocFlasher::Phase;
     QCOMPARE(noMtd.phaseList(), (QList<P>{P::Detecting, P::RebootingToLoader, P::Failed}));
 
-    // The same board with a layout the owner remembered: that one is used.
+    // The same board with a layout the owner remembered FOR ITS SERIAL (fix4: setLayoutProvider(),
+    // asked with the serial the flow found): that one is used.
     FlashRig remembered;
     remembered.runner.addHandler(FlashRig::ld(), [calls = std::make_shared<int>(0)](FakeToolInvocation* i) {
         i->emitOutput(++*calls >= 2 ? kLdLoader : kLdEmpty);
@@ -4238,13 +4245,39 @@ void tst_firmwaretools::soc_layoutUnknown()
     remembered.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
     remembered.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/mmcblk0p5 rootwait\n");
     remembered.installFlashScripts();
-    remembered.flasher.setMtdParts(kNodeMtdParts);
+    QStringList askedFor;
+    remembered.flasher.setLayoutProvider([&askedFor](const QString& serial) {
+        askedFor << serial;
+        return serial == QLatin1String("0225ce3c8d8d6e44") ? kNodeMtdParts : QString();
+    });
     QVERIFY(remembered.flasher.start());
     QTRY_COMPARE(remembered.finished.count(), 1);
     QVERIFY2(remembered.finished.first().at(0).toBool(), qPrintable(remembered.finished.first().at(1).toString()));
     QVERIFY(remembered.logged(QStringLiteral("using the layout remembered for it: ") + kNodeMtdParts));
     QCOMPARE(remembered.flasher.mtdParts(), kNodeMtdParts);
     QCOMPARE(remembered.wlCommands().size(), qsizetype(7));
+    QCOMPARE(askedFor, QStringList{QStringLiteral("0225ce3c8d8d6e44")});
+
+    // (fix4, B1) The owner's setMtdParts() alone - the "*" memory, the layout read last from ANY board
+    // on the PC - is the layout of a board met in Loader mode, never this running board's: not used,
+    // and the flow stops before the reboot as without any layout.
+    FlashRig star;
+    star.runner.addScript(FlashRig::ld(), kLdEmpty);
+    star.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    star.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/mmcblk0p5 rootwait\n");
+    star.installFlashScripts();
+    star.flasher.setMtdParts(kNodeMtdParts);
+    star.flasher.setLayoutProvider([](const QString&) { return QString(); });
+    QVERIFY(star.flasher.start());
+    QTRY_COMPARE(star.finished.count(), 1);
+    QCOMPARE(star.finished.first().at(1).toString(), unknown);
+    QVERIFY(star.logged(QStringLiteral("the board's /proc/cmdline has no mtdparts; the layout remembered for a board met in Loader mode "
+                                       "(%1) is not this board's and is not used")
+                            .arg(kNodeMtdParts)));
+    QVERIFY(!star.logged(QStringLiteral("using the layout remembered for it")));
+    QVERIFY(star.flasher.mtdParts().isEmpty());
+    QCOMPARE(star.runner.count(FlashRig::reboot()), 0);
+    QCOMPARE(star.runner.count(FlashRig::wl()), 0);
 }
 
 void tst_firmwaretools::soc_maskromKeepsUf()
@@ -4740,7 +4773,9 @@ void tst_firmwaretools::soc_profileFromLayoutBeforeReboot()
 
 void tst_firmwaretools::soc_profileLinesOncePerResult()
 {
-    // The same detection at step 1 (the owner's layout) and step 2 (the board's): one line.
+    // (fix4, B1) The owner's layout (setMtdParts(): the "*" memory) is no evidence: step 1 is
+    // unknown, step 2's read of the board's own layout says Node - the same two lines as without it,
+    // and the PID after the reboot (another source) a third; the same detection twice is one line.
     {
         FlashRig rig;
         rig.runner.addHandler(FlashRig::ld(), ldSequence(kLdLoader));
@@ -4751,12 +4786,18 @@ void tst_firmwaretools::soc_profileLinesOncePerResult()
         QTRY_COMPARE(rig.finished.count(), 1);
         QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
         const int reboot = logIndex(rig.logs, QStringLiteral("$ adb -s 0225ce3c8d8d6e44 reboot loader"));
-        int before = 0;
+        QStringList lines;
         for (int i = 0; i < reboot; ++i) {
-            before += rig.logs.at(i).at(0).toString().startsWith(QStringLiteral("profile: ")) ? 1 : 0;
+            const QString text = rig.logs.at(i).at(0).toString();
+            if (text.startsWith(QStringLiteral("profile: "))) {
+                lines << text;
+            }
         }
-        QCOMPARE(before, 1);
-        QCOMPARE(logIndex(rig.logs, QStringLiteral("profile: Node (RV1106BG2) - from the board's flash layout")) < reboot, true);
+        QCOMPARE(lines.size(), qsizetype(2));
+        QCOMPARE(lines.at(0), kUnknownLine);
+        QVERIFY(lines.at(1).startsWith(QStringLiteral("profile: Node (RV1106BG2) - from the board's flash layout")));
+        QCOMPARE(logCount(rig.logs, QStringLiteral("profile: Node (RV1106BG2) - from the board's Loader PID 0x110e")), 1);
+        QCOMPARE(logCount(rig.logs, QStringLiteral("profile: ")), 3);
     }
     // Step 2's layout upgrades "unknown": two lines, unknown first.
     {
@@ -4840,8 +4881,9 @@ void tst_firmwaretools::soc_layoutMismatchIsRefused()
         QVERIFY(rig.flasher.planPartitions());
         QTRY_COMPARE(rig.planned.count(), 1);
         QVERIFY(rig.logged(QStringLiteral("layout from the image's env.img: ") + kNodeMtdParts));
-        QVERIFY(rig.logged(QStringLiteral("warning: the image's flash layout differs from the board's: the flash will refuse unless "
-                                          "--force-layout (the tab: the question). image: %1; board: %2")
+        QVERIFY(rig.logged(QStringLiteral("warning: the image's flash layout differs from the board layout known so far: a board laid "
+                                          "out that way is refused unless --force-layout (the tab: the question); a running board is "
+                                          "judged by its own /proc/cmdline. image: %1; board: %2")
                                .arg(kNodeMtdParts, boardLayout)));
         QCOMPARE(rig.flasher.partitions().at(5).offset, quint64(4032 * kKiB));   // the plan: the image's
         QVERIFY(rig.flasher.start());
@@ -6810,6 +6852,214 @@ void tst_firmwaretools::soc_verifyNeverUnaddressed()
         QVERIFY2(QRegularExpression(QStringLiteral("^upgrade_tool -s \\d+ RL ")).match(read).hasMatch(), qPrintable(read));
     }
     QVERIFY(unaddressedVerifyRead(rigFlash, rig.runner).isEmpty());
+}
+
+// =============================================================================================
+// fix4: the pre-hand-over review's findings (review4.md B1, M2, m1, m4)
+// =============================================================================================
+
+void tst_firmwaretools::soc_starLayoutIsNoEvidenceOnAdb()
+{
+    // (B1; the review's test gap 1) The "*" memory holds the Node's layout (every Node status writes
+    // it) and is handed to the flasher; a G2 on ADB whose /proc/cmdline carries no mtdparts (open
+    // question 6) is flashed with the G2 image. The remembered layout names no profile and is not the
+    // board's: the product read runs, rule 1 and rule 2 pass, userdata lands at the G2 image's sectors.
+    FlashRig rig;
+    QSignalSpy profiles(&rig.flasher, &SocFlasher::profileDetected);
+    const QString image = useTaggedImage(rig, QStringLiteral("stacked-withenv/update.img"), QStringLiteral("1106"));
+    QVERIFY(!image.isEmpty());
+    rig.runner.addHandler(FlashRig::ld(), ldSequence(kLdLoaderStacked));
+    rig.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    rig.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs rootwait\n");
+    rig.runner.addScript(FirmwareFixtures::productPattern(), FirmwareFixtures::kProductStacked);
+    rig.runner.addHandler(FlashRig::exf(), &FirmwareFixtures::stackedExtractor);
+    rig.installFlashScripts();
+    rig.flasher.setMtdParts(kNodeMtdParts);   // the "*" guess: another board's layout
+    rig.flasher.setSelectedPartitions({QStringLiteral("userdata")});
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QVERIFY(!profiles.isEmpty());
+    for (const QList<QVariant>& args : std::as_const(profiles)) {
+        const ProfileDetection detection = args.at(0).value<ProfileDetection>();
+        QVERIFY2(detection.profile.id != QLatin1String("node"), qPrintable(detection.text()));
+        QVERIFY(detection.source != ProfileDetection::Source::BoardLayout);
+    }
+    QVERIFY(!rig.logged(QStringLiteral("profile: Node")));
+    QVERIFY(rig.logged(QStringLiteral("the board's /proc/cmdline has no mtdparts; the layout remembered for a board met in Loader mode "
+                                      "(%1) is not this board's and is not used")
+                           .arg(kNodeMtdParts)));
+    QCOMPARE(rig.runner.count(exact(kProductRead)), 1);
+    QVERIFY(rig.logged(QStringLiteral("profile: Stacked (RV1106G2) - from the ADB gadget's product string rv1106g-stacked-gc2083")));
+    QVERIFY(!rig.logged(QStringLiteral("the image is for another board")));
+    QVERIFY(!rig.logged(QStringLiteral("differs from the board's")));
+    QCOMPARE(rig.flasher.layoutSource(), SocFlasher::LayoutSource::Image);
+    QVERIFY(rig.logged(QStringLiteral("flash layout in use (from the image's env.img): ") + kStackedMtdParts));
+    QCOMPARE(rig.wlCommands(), QStringList{expectedStackedWl(5, extractDirOf(image))});
+    QCOMPARE(rig.mtdPartsRead.count(), 0);    // nothing was read from the board, nothing is reported
+    QVERIFY(rig.flasher.mtdParts().isEmpty());
+    QCOMPARE(rig.flasher.detectedProfile().source, ProfileDetection::Source::LoaderPid);   // after the reboot
+
+    // The same G2 with its own layout remembered for its serial (an earlier read, or --layout with
+    // --serial): the plan's layout is the board's, still no evidence - the product read runs too.
+    FlashRig own;
+    QVERIFY(!useTaggedImage(own, QStringLiteral("stacked-withenv/update.img"), QStringLiteral("1106")).isEmpty());
+    own.runner.addHandler(FlashRig::ld(), ldSequence(kLdLoaderStacked));
+    own.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    own.runner.addScript(FlashRig::catCmdline(), "console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs rootwait\n");
+    own.runner.addScript(FirmwareFixtures::productPattern(), FirmwareFixtures::kProductStacked);
+    own.runner.addHandler(FlashRig::exf(), &FirmwareFixtures::stackedExtractor);
+    own.installFlashScripts();
+    own.flasher.setMtdParts(kNodeMtdParts);
+    own.flasher.setLayoutProvider([](const QString& serial) { return serial == QLatin1String("0225ce3c8d8d6e44") ? kStackedMtdParts : QString(); });
+    own.flasher.setSelectedPartitions({QStringLiteral("userdata")});
+    QVERIFY(own.flasher.start());
+    QTRY_COMPARE(own.finished.count(), 1);
+    QVERIFY2(own.finished.first().at(0).toBool(), qPrintable(own.finished.first().at(1).toString()));
+    QVERIFY(own.logged(QStringLiteral("the board's /proc/cmdline has no mtdparts; using the layout remembered for it: ") + kStackedMtdParts));
+    QCOMPARE(own.runner.count(exact(kProductRead)), 1);
+    QVERIFY(!own.logged(QStringLiteral("from the board's flash layout")));
+    QCOMPARE(own.wlCommands().size(), qsizetype(1));
+}
+
+void tst_firmwaretools::soc_overrideChangedDuringLoaderRead()
+{
+    // (M2; the review's test gap 3) A G2 met in Loader mode, the Node image, nothing remembered: the
+    // env partition is read. While the read runs the override is set to "node" (the tab's box was live
+    // during a flash): the override outranks the PID in the detection, so the read's end checks it
+    // against the PID again - the flow ends with the override refusal, no question is asked, nothing
+    // is unpacked or written (without the check: Node, rule 1 passes, the Node layout on the G2).
+    FlashRig rig;
+    QVERIFY(!useTaggedImage(rig, QStringLiteral("withenv-node/update.img"), QStringLiteral("110E")).isEmpty());
+    rig.runner.addScript(FlashRig::ld(), kLdLoaderStacked);
+    QPointer<FakeToolInvocation> held;
+    QString envFile;
+    rig.runner.addHandler(FirmwareFixtures::loaderEnvReadPattern(), [&held, &envFile](FakeToolInvocation* i) {
+        held = i;
+        envFile = QDir::fromNativeSeparators(i->arguments().constLast());
+        i->hang();
+    });
+    rig.installFlashScripts();
+    int asked = 0;
+    rig.flasher.setLayoutConflictHandler([&asked](const QString&, const QString&) {
+        ++asked;
+        return true;
+    });
+    rig.flasher.setLoaderPartitionsHandler([&asked](const BoardProfile&, const QStringList&) {
+        ++asked;
+        return true;
+    });
+    QVERIFY(rig.flasher.start());
+    QTRY_VERIFY(held);
+    QCOMPARE(rig.flasher.detectedProfile().profile.id, QStringLiteral("stacked"));   // from the PID at step 4
+    rig.flasher.setProfileOverride(QStringLiteral("node"));
+    QVERIFY(FirmwareFixtures::writeFile(envFile, FirmwareFixtures::stackedEnvImage(kStackedMtdParts)));
+    held->emitOutput("Read LBA from file (100%)\r\n");
+    held->finish(0);
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QCOMPARE(rig.finished.first().at(0).toBool(), false);
+    QCOMPARE(rig.finished.first().at(1).toString(), ProfileRules::overrideRefusal(QStringLiteral("node"), 0x110c));
+    QVERIFY(rig.finished.first().at(1).toString().startsWith(
+        QStringLiteral("the --profile node override contradicts the board's Loader PID 0x110c")));
+    QCOMPARE(asked, 0);
+    QCOMPARE(rig.runner.count(FlashRig::exf()) + rig.runner.count(FlashRig::wl()) + rig.runner.count(FlashRig::rd()), 0);
+    QCOMPARE(rig.flasher.detectedProfile().profile.id, QStringLiteral("stacked"));   // never re-detected as Node
+    QCOMPARE(rig.flasher.phase(), SocFlasher::Phase::Failed);
+}
+
+void tst_firmwaretools::soc_statusProductNotInherited()
+{
+    // (m1) The enumeration's product string belongs to the ADB board the status picked. A Node seen on
+    // ADB, then a G2 met in MASKROM mode (whose PID is no evidence): the G2 is not "Node (from the ADB
+    // gadget's product string)", so rule 1 does not refuse the G2 image before UF - the only recovery
+    // route of a bricked board. The enumeration is injected (setUsbEnumerator()): on Windows the real
+    // one is never asked for the product string, on Linux it is sysfs.
+    FlashRig rig;
+    QVERIFY(!useTaggedImage(rig, QStringLiteral("g2/update.img"), QStringLiteral("1106")).isEmpty());
+    auto maskrom = std::make_shared<bool>(false);
+    rig.runner.addHandler(FlashRig::ld(), [maskrom](FakeToolInvocation* i) {
+        i->emitOutput(*maskrom ? kLdMaskrom : kLdEmpty);
+        i->finish(0);
+    });
+    rig.runner.addScript(FlashRig::adbDevices(), kAdbBoard);
+    rig.installFlashScripts();
+    rig.flasher.setUsbEnumerator([maskrom](quint16) {
+        QList<UsbDeviceInfo> devices;
+        if (!*maskrom) {
+            UsbDeviceInfo node;
+            node.vid = 0x2207;
+            node.pid = 0x0006;
+            node.instanceId = QStringLiteral("USB\\VID_2207&PID_0006\\6&38635FDB&0&2");
+            node.description = QStringLiteral("rv1106bg2-gc2083");   // the Linux sysfs product
+            devices << node;
+        }
+        return devices;
+    });
+    rig.flasher.queryStatus();
+    QTRY_COMPARE(rig.statuses.count(), 1);
+    QCOMPARE(rig.flasher.detectedProfile().profile.id, QStringLiteral("node"));
+    QCOMPARE(rig.flasher.detectedProfile().source, ProfileDetection::Source::AdbProduct);
+
+    *maskrom = true;   // the Node goes, a G2 is plugged in in MASKROM mode
+    QVERIFY(rig.flasher.start());
+    QTRY_COMPARE(rig.finished.count(), 1);
+    QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+    QCOMPARE(rig.runner.count(FlashRig::uf()), 1);
+    QVERIFY(rig.logged(kUnknownLine));
+    QVERIFY(!rig.logged(QStringLiteral("profile: Node")));
+    QVERIFY(!rig.flasher.detectedProfile().known());
+}
+
+void tst_firmwaretools::soc_writtenPartitions()
+{
+    // (m4) What the inventory records: the rows the flow wrote completely - never a row it skipped.
+    {
+        FlashRig rig;   // every row, but the package holds no meta.img: skipped ("goes on"), not written
+        rig.runner.addScript(FlashRig::ld(), kLdLoader);
+        rig.runner.addHandler(FlashRig::exf(), nodeExtractor({{QStringLiteral("meta"), -1}}));
+        rig.installFlashScripts();
+        rig.flasher.setMtdParts(kNodeMtdParts);
+        QVERIFY(rig.flasher.writtenPartitions().isEmpty());
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        QVERIFY(rig.logged(QStringLiteral("skipping meta: the package has no image file for it")));
+        QStringList expected;
+        for (const NodePartition& partition : kNodePartitions) {
+            if (qstrcmp(partition.name, "meta") != 0) {
+                expected << QString::fromLatin1(partition.name);
+            }
+        }
+        QCOMPARE(rig.flasher.writtenPartitions(), expected);
+        QCOMPARE(rig.wlCommands().size(), expected.size());
+    }
+    {
+        FlashRig rig;   // with --verify: a row whose read-back differs is not written; the rows before it are
+        FakeFlash flash;
+        installVerifyRig(rig, flash);
+        rig.flasher.setVerifyAfterWrite(true);
+        flash.corruptByte(kNodePartitions[5].sector, 4660);
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QCOMPARE(rig.finished.first().at(0).toBool(), false);
+        QCOMPARE(rig.flasher.writtenPartitions(), (QStringList{QStringLiteral("env"), QStringLiteral("idblock"), QStringLiteral("uboot"),
+                                                               QStringLiteral("meta"), QStringLiteral("boot")}));
+        // A new flow starts empty (the corruption was for one read only: this one writes every row).
+        QVERIFY(rig.flasher.start());
+        QVERIFY(rig.flasher.writtenPartitions().isEmpty());
+        QTRY_COMPARE(rig.finished.count(), 2);
+        QVERIFY2(rig.finished.at(1).at(0).toBool(), qPrintable(rig.finished.at(1).at(1).toString()));
+        QCOMPARE(rig.flasher.writtenPartitions().size(), qsizetype(kNodeRows));
+    }
+    {
+        FlashRig rig;   // MASKROM: UF writes the whole image; no row is written on its own
+        rig.runner.addScript(FlashRig::ld(), kLdMaskrom);
+        rig.installFlashScripts();
+        QVERIFY(rig.flasher.start());
+        QTRY_COMPARE(rig.finished.count(), 1);
+        QVERIFY2(rig.finished.first().at(0).toBool(), qPrintable(rig.finished.first().at(1).toString()));
+        QVERIFY(rig.flasher.writtenPartitions().isEmpty());
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -246,7 +246,7 @@ struct FirmwareTab::Private
     bool settingRole = false;       ///< setSelectedRole() is handing the role to the job
     QPointer<QMessageBox> downloadBox;   ///< the open "send reboot loader through <tab>" question
     QPointer<QMessageBox> profileBox;    ///< (v0.8.0) the open question of a board-profile rule
-    QString dailyImageKey;               ///< (v0.8.0) the image whose first plan set the daily checks
+    QString dailyImageKey;               ///< (v0.8.0) image, mtime and (fix4) profile id the daily checks were last decided for
     bool lastLogWasProgress = false;
     QString lastProgressStage;
 
@@ -748,7 +748,10 @@ void FirmwareTab::Private::wireJob()
         applyDailyPartitions();
         renderImageDetails();
     });
-    connect(job, &FirmwareJob::boardProfileChanged, q, [this](const ProfileDetection&) { renderProfile(); });
+    connect(job, &FirmwareJob::boardProfileChanged, q, [this](const ProfileDetection&) {
+        renderProfile();
+        applyDailyPartitions();   // (fix4, m3) the profile usually arrives after the image's plan
+    });
     connect(job->socFlasher(), &SocFlasher::phaseChanged, q, [this](SocFlasher::Phase phase) {
         if (downloadBox && phase != SocFlasher::Phase::WaitingForLoader) {
             downloadBox->reject();   // the question is moot: the job sends nothing
@@ -1534,21 +1537,25 @@ void FirmwareTab::Private::renderImageDetails()
     imageInfoLabel->setToolTip(nativePath(image) + QLatin1Char('\n') + lines.join(QLatin1Char('\n')));
 }
 
-/// A new image planned while the board's profile is known: its daily partitions are the default
-/// checks (the Node: rootfs; the stacked board: boot). Later plans of the same image and the
-/// user's own checks are left alone; an unknown profile keeps every row.
+/// A new image planned, or a board profile that became known, while every row is checked: the
+/// profile's daily partitions are the default checks (the Node: rootfs; the stacked board: boot).
+/// Once per image and profile - (fix4, m3) the key holds both, and boardProfileChanged() applies
+/// it too: the image is usually planned at start-up and the profile arrives with a status seconds
+/// later -; the user's own checks (anything but "all") are left alone; an unknown profile keeps
+/// every row. Never while an operation runs: the selection is the running flash's input.
 void FirmwareTab::Private::applyDailyPartitions()
 {
-    if (job->planState() != FirmwareJob::PlanState::Ready) {
+    if (job->isBusy() || job->planState() != FirmwareJob::PlanState::Ready) {
         return;
     }
     const QString image = job->plannedImage();
-    const QString key = image + QLatin1Char('\n') + QString::number(QFileInfo(image).lastModified().toMSecsSinceEpoch());
+    const ProfileDetection profile = job->boardProfile();
+    const QString key = image + QLatin1Char('\n') + QString::number(QFileInfo(image).lastModified().toMSecsSinceEpoch())
+                        + QLatin1Char('\n') + profile.profile.id;
     if (key == dailyImageKey) {
         return;
     }
     dailyImageKey = key;
-    const ProfileDetection profile = job->boardProfile();
     if (!profile.known() || !job->allPartitionsSelected()) {
         return;
     }
@@ -1689,7 +1696,8 @@ void FirmwareTab::Private::updateControls()
                             static_cast<QWidget*>(packageButton), static_cast<QWidget*>(readMcuButton),
                             static_cast<QWidget*>(roleRxRadio), static_cast<QWidget*>(roleTxRadio),
                             static_cast<QWidget*>(pullAndFlashButton), static_cast<QWidget*>(installDriversButton),
-                            static_cast<QWidget*>(verifyCheckBox)}) {
+                            static_cast<QWidget*>(verifyCheckBox), static_cast<QWidget*>(profileCombo)}) {
+        // (fix4, M2) profileCombo too: a change reaches the running flasher at once (the override).
         widget->setEnabled(idle);
     }
     rollbackButton->setEnabled(idle && hasPreviousImage);
