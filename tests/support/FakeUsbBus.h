@@ -57,13 +57,22 @@ class FakeUsbBus : public QObject
 public:
     enum class State { Absent, Adb, Unauthorized, Loader, Maskrom };
     enum class Reboot { ToLoader, StaysOnAdb, ToMaskrom, DragsNext, GhostLoader, NoLdLine, OtherPort, AdbKeepsListing, LdLineOnly, Vanishes };
-    struct Board { QString serial; QString port; State state = State::Adb; QString locationId; Reboot reboot = Reboot::ToLoader; QString otherPort; QString mtdParts; bool ldListed = true; };
+    struct Board { QString serial; QString port; State state = State::Adb; QString locationId; Reboot reboot = Reboot::ToLoader; QString otherPort; QString mtdParts; bool ldListed = true;
+                   quint16 loaderPid = 0x110e; QString product; };
 
     explicit FakeUsbBus(QObject* parent = nullptr);
     ~FakeUsbBus() override;
     void addBoard(const QString& serial, const QString& port, State state = State::Adb);
     void setReboot(const QString& serial, Reboot behaviour, const QString& otherPort = QString());
     void setMtdParts(const QString& serial, const QString& mtdparts);
+    /// (v0.8.0) The PID of the board's Loader mode (its instance in enumerate() and the `Pid=` of its
+    /// LD line); default 0x110e (the Node). The MASKROM stand-in stays 0x110c - 0x110e for a board
+    /// whose Loader PID is 0x110c, so the two modes of one board never share a PID.
+    void setLoaderPid(const QString& serial, quint16 pid);
+    /// (v0.8.0) The ADB gadget's product string: the description of its ADB instance in enumerate()
+    /// (default "Android ADB Interface") and the answer to `adb -s S shell "cat
+    /// /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product"` (unset: "sh: not found", 127).
+    void setProduct(const QString& serial, const QString& product);
     void setRebootDelayMs(int ms);        ///< default 30
     void setPnpLagMs(int ms);             ///< default 10; 0 = the enumeration changes together with LD
     void setResetDelayMs(int ms);         ///< default 30

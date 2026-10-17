@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 
+#include "firmware/BoardProfile.h"
 #include "firmware/RockchipTool.h"
 #include "firmware/UsbProbe.h"
 
@@ -40,10 +41,19 @@ struct FleetBoard
     QString locationId;     ///< upgrade_tool's LocationID learned in this run ("112"; kept after the reset for the table and the JSON); "" until mapped
     QString kernel;         ///< "5.10.209+" from /proc/version before the reboot; "" = unknown
     QString layout;         ///< the mtdparts of the board's /proc/cmdline; "" = none reported
+    QString profile;        ///< (v0.8.0) BoardProfile::id detected from `layout` (or the override) in step 2 b, confirmed - or learned, when the layout told nothing - from its Loader PID once mapped (step 2 d); "" = unknown / not read yet; the JSON "profile"
     Stage stage = Stage::Selected;
     Result result = Result::Pending;
     QString detail;         ///< why it failed / was skipped / is not back; for a done board the warning, if any ("" = none)
     QStringList written;    ///< the partitions written completely, in order
+    /// (v0.8.0, verify-rl) With verifyAfterWrite(): the rows whose read-back equalled the image, in
+    /// order (the JSON "verified"); the row whose verify failed - a mismatch, a short read, an RL
+    /// that failed - ("" = none; the JSON "verifyFailed"; that row is NOT in `written` and heads
+    /// the retry lines), and the mismatch as an offset into the image (-1 = none / not a mismatch;
+    /// the JSON "verifyMismatch").
+    QStringList verified;
+    QString verifyFailed;
+    qint64 verifyMismatch = -1;
     /// A board left in Loader mode by a failed WL (or a pre-RD `LD` that could not run): the
     /// addressed command lines that finish it by hand, in order - one "upgrade_tool -s n WL <sector>
     /// <count> <file>" per row not written (the failed row first), then "upgrade_tool -s n RD"; a
@@ -354,6 +364,62 @@ struct FleetBoard
  * toolOutput() per board. Messages are QCoreApplication::translate("FleetFlasher", ...) and are
  * mirrored to lcFirmware with the board's label. Headless by construction: no question, nothing
  * waits for an owner.
+ *
+ * Board profiles (v0.8.0, profiles; BoardProfile.h, docs/DESIGN.md 4.14). The plan has a profile
+ * (setPlanProfile(): the image's, from its RKFW chip tag or its env.img layout, or the owner's
+ * --profile), logged at the baseline as "plan profile: Node (RV1106BG2) - from the image's chip
+ * tag 110E" (unknown: "plan profile: unknown; the profile gate is off"). Step 2 b detects every
+ * board's profile from its /proc/cmdline layout (BoardProfiles::detectBoard() with
+ * profileOverride(); FleetBoard::profile; the line "profile: Stacked (RV1106G2) - from the board's
+ * flash layout (6 partitions: ...)") and applies the PROFILE GATE before the layout gate: a known
+ * board profile that differs from a known plan profile STOPS the run exactly as Ambiguous does,
+ * with ProfileRules::mixedBenchStop() as the reason ("mapping stopped: mixed bench: board X is
+ * Stacked (RV1106G2) (from the board's flash layout (...)) but the plan is for Node (RV1106BG2)
+ * (from the image's chip tag 110E); one profile per run: name boards of one profile with
+ * --serials; nothing was written[; k boards reset back to ADB]") - a stop and not a skip, because
+ * the bench is one profile and a second one among the selected boards is a mistake to be told,
+ * not worked around (one plan per profile is not a 0.8.0 feature; the env exemption of the
+ * layout gate never bypasses it). A board whose profile is unknown at step 2 b passes to the
+ * layout gate as before - and is caught by the SECOND run of the gate: at Mapped (step 2 d, right
+ * after "in Loader mode on port P, LocationID n" and before the next board is rebooted) the board
+ * is detected again with its Loader PID added - detectBoard({override, Board::mappedPid (the PID
+ * its port showed when it was mapped, which is the `Pid=` of its LD line; a Loader PID, since the
+ * verdict is Mapped - a Maskrom verdict's PID is the BootROM's and is no evidence, row 33), "",
+ * layout}) -, FleetBoard::profile takes the result, a changed result is logged ("profile: Stacked
+ * (RV1106G2) - from the board's Loader PID 0x110c"), and ProfileRules::mixedBenchStop() runs
+ * against the plan profile once more: a non-empty text is the same mapping stop (this board is
+ * Failed with the reason AND, being mapped, gets its `-s <id> RD` like the other mapped boards and
+ * counts in "k boards reset back to ADB"; later boards Skipped; nothing was written). So a G2
+ * named with --serials whose /proc/cmdline carries no mtdparts (--serials deliberately skips the
+ * no-layout skip of --all-boards) never reaches the writing phase under a Node plan with its PID
+ * evidence in hand. At the same point ProfileRules::overrideRefusal() runs with the override and
+ * the mapped PID: an override that contradicts the board's Loader PID stops the run the same way,
+ * with its text as the reason ("the --profile stacked override contradicts the board's Loader PID
+ * 0x110e (the Node (RV1106BG2)'s); drop --profile") - the override makes every board the plan's
+ * profile only while no board's PID says otherwise. Rules 1 and 3 (the image against the plan's
+ * profile, the loader partitions on a profile without a MASKROM entry) are
+ * FirmwareJob::flashFleet()'s input checks, before this class starts. A dry run reads no
+ * /proc/cmdline, maps nothing and cannot tell a mixed bench; it says so once: "Dry run: the
+ * boards' profiles are read before their reboot in a real run".
+ *
+ * Verify after write (v0.8.0, verify-rl; docs/DESIGN.md 4.16). With verifyAfterWrite() every WL
+ * that exited clean is followed, before the board's next row, by `upgrade_tool -s <id> RL
+ * <sector> <ceil(bytes / 512)> <the board's working folder>/<name>.img` (RockchipTool::readLbaOn()
+ * in the board's folder; the board's one process at a time, so an RL never runs while a WL of
+ * the same board is in flight; it counts as an in-flight upgrade_tool for the LD gate, in both
+ * directions) and RockchipTool::compareReadBack() over the image's length. The lines "verifying
+ * rootfs: reading 7481 sectors back from sector 8064 (upgrade_tool -s 113 RL)" and "rootfs
+ * verified: 3830272 bytes read back equal the image (4.1 s)" (the temporary deleted;
+ * FleetBoard::verified gains the name), or the board Failed "verifying rootfs failed: byte 4660
+ * of the image differs (flash offset 0x3F1234): read 0x3c, image 0xff" / "verifying rootfs
+ * failed: upgrade_tool RL read 1024 of 3830272 bytes (short read)" / "verifying rootfs failed:
+ * <the RL's tail, or 'cannot run upgrade_tool: ...'>" - handled exactly as a failed WL: no RD,
+ * leftInLoader, verifyFailed / verifyMismatch set, the "left in Loader mode on port P, LocationID
+ * n: nothing else is written to it. Retry by hand, addressed: ..." line and the addressed retry
+ * lines (that row first - it is not in `written` -, the rows after it, then the RD); the fleet
+ * never writes it again. boardProgress("Verifying rootfs (1 of 1)", the RL's percentage over the
+ * row's bytes); partitionVerified() per row. The table's "verify" column and the JSON's
+ * "verified" / "verifyFailed" / "verifyMismatch" are FleetReport's rendering of these fields.
  */
 class FleetFlasher : public QObject
 {
@@ -461,6 +527,18 @@ public:
     bool waitForAdb() const;
     void setLdPolicy(LdPolicy policy);              ///< default LdPolicy::Gate
     LdPolicy ldPolicy() const;
+    // ---- Board profiles (v0.8.0, profiles) ----
+    /// The plan's profile (the class comment): FirmwareJob hands in imageProfile(), or the
+    /// override's profile when --profile is set. known() false = the profile gate is off.
+    void setPlanProfile(const ProfileDetection& profile);
+    ProfileDetection planProfile() const;
+    /// --profile ID: every board's profile without detection (BoardProfiles::detectBoard()'s
+    /// Option source); then every board equals the plan and the gate cannot trip. "" = detect.
+    void setProfileOverride(const QString& id);
+    QString profileOverride() const;
+    // ---- Verify after write (v0.8.0, verify-rl) ----
+    void setVerifyAfterWrite(bool on);              ///< default false: su-fw --verify, the tab's checkbox
+    bool verifyAfterWrite() const;
     /// The USB enumeration behind the mapping: UsbProbe::presentDevices by default (and only when
     /// UsbProbe::hasPlatformProbe()); the tests inject FakeUsbBus::enumerate. A null enumerator =
     /// platformRefusal() for this instance.
@@ -513,6 +591,7 @@ signals:
     void boardEvent(const FleetBoard& board, const QString& text);    ///< one line per board per event (the owner prefixes label())
     void boardProgress(const FleetBoard& board, const QString& stage, int percent);   ///< "Writing rootfs (1 of 1)", 0..100 over the board's bytes
     void partitionWritten(const FleetBoard& board, const QString& name, qint64 bytes, qint64 milliseconds);
+    void partitionVerified(const FleetBoard& board, const ReadBackResult& result);   ///< (v0.8.0) after every verify read-back, ok or not; result.name = the row
     void boardFinished(const FleetBoard& board);                      ///< result Done / NotBack / Failed / Skipped (Ready in a dry run)
     void logLine(const QString& line);                                ///< the run's own lines (no board)
     void toolOutput(const FleetBoard& board, const QString& line);    ///< upgrade_tool's raw lines, per board

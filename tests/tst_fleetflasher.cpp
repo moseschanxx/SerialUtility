@@ -315,6 +315,16 @@ private slots:
     // ---- FleetReport --------------------------------------------------------------------------
     void reportTableAndJson();
 
+    // ---- Board profiles (v0.8.0) --------------------------------------------------------------
+    void profileGateStopsAMixedBench();
+    void profileGateOffWhenPlanUnknown();
+    void profileGateIgnoresEnvExemption();
+    void overrideMakesEveryBoardThePlan();
+    void profileInBoardJson();
+    void dryRunSaysProfilesNotRead();
+    void profileGateUsesTheMappedPid();
+    void overrideContradictsMappedPidStops();
+
 private:
     QString caseDir() const { return m_tempDir.filePath(QStringLiteral("case%1/update.extracted").arg(m_caseNumber)); }
 
@@ -2184,6 +2194,7 @@ void Tst_fleetflasher::reportTableAndJson()
     a.seconds = 48.1;
     a.mappingSeconds = 1.8;
     a.writingSeconds = 27.9;
+    a.profile = QStringLiteral("node");   // (v0.8.0)
     FleetBoard b = a;
     b.tag = QStringLiteral("B");
     b.serial = serialOf(1);
@@ -2270,9 +2281,12 @@ void Tst_fleetflasher::reportTableAndJson()
     QCOMPARE(json.value(QStringLiteral("boards")).toArray().size(), qsizetype(5));
     const QJsonObject aJson = FleetReport::boardJson(a);
     for (const char* key : {"tag", "serial", "adb", "expectedPort", "port", "loader", "stage", "result", "ok", "seconds", "mappingSeconds",
-                            "writingSeconds", "detail", "written", "retry", "adbBack", "leftInLoader", "kernel", "uptime", "boardInfo", "rfmcu"}) {
+                            "writingSeconds", "detail", "written", "retry", "adbBack", "leftInLoader", "kernel", "uptime", "boardInfo", "rfmcu",
+                            "profile"}) {
         QVERIFY2(aJson.contains(QLatin1String(key)), key);
     }
+    QCOMPARE(aJson.value(QStringLiteral("profile")).toString(), QStringLiteral("node"));   // (v0.8.0)
+    QCOMPARE(FleetReport::boardJson(c).value(QStringLiteral("profile")).toString(), QString());
     QCOMPARE(aJson.value(QStringLiteral("result")).toString(), QStringLiteral("done"));
     QCOMPARE(aJson.value(QStringLiteral("stage")).toString(), QStringLiteral("finished"));
     QCOMPARE(aJson.value(QStringLiteral("loader")).toString(), QStringLiteral("113"));
@@ -2335,6 +2349,218 @@ void Tst_fleetflasher::reportTableAndJson()
     QCOMPARE(FleetReport::alignColumns({{QStringLiteral("a"), QStringLiteral("bb")}, {QStringLiteral("ccc"), QStringLiteral("d")}}),
              (QStringList{QStringLiteral("a    bb"), QStringLiteral("ccc  d")}));
     QCOMPARE(FleetReport::alignColumns({{QStringLiteral("x"), QString()}}), QStringList{QStringLiteral("x")});   // no trailing blanks
+}
+
+// =============================================================================================
+// Board profiles (v0.8.0): the profile gate at step 2 b and at Mapped
+// =============================================================================================
+
+namespace {
+
+ProfileDetection nodePlan()
+{
+    ProfileEvidence evidence;
+    evidence.chipTag = QStringLiteral("110E");
+    return BoardProfiles::detectImage(evidence);
+}
+
+ProfileDetection overridePlan(const QString& id)
+{
+    ProfileEvidence evidence;
+    evidence.overrideId = id;
+    return BoardProfiles::detectBoard(evidence);
+}
+
+QString stackedLayoutLine()
+{
+    return QStringLiteral("profile: Stacked (RV1106G2) - from the board's flash layout (6 partitions: env, idblock, uboot, meta, boot, "
+                          "userdata)");
+}
+
+} // namespace
+
+void Tst_fleetflasher::profileGateStopsAMixedBench()
+{
+    FleetRig rig(caseDir());
+    rig.flasher.setPlanProfile(nodePlan());
+    QCOMPARE(rig.flasher.planProfile().profile.id, QStringLiteral("node"));
+    rig.bus.setMtdParts(serialOf(2), kStackedMtdParts);
+    QVERIFY(rig.run());
+    QVERIFY(!rig.ok());
+    ProfileEvidence stacked;
+    stacked.layout = kStackedMtdParts;
+    const QString reason = ProfileRules::mixedBenchStop(serialOf(2), BoardProfiles::detectBoard(stacked), nodePlan());
+    QCOMPARE(reason, QStringLiteral("mixed bench: board fe89cc526a354343 is Stacked (RV1106G2) (from the board's flash layout (6 "
+                                    "partitions: env, idblock, uboot, meta, boot, userdata)) but the plan is for Node (RV1106BG2) (from "
+                                    "the image's chip tag 110E); one profile per run: name boards of one profile with --serials"));
+    QVERIFY2(rig.message().startsWith(QStringLiteral("mapping stopped: ") + reason + QStringLiteral("; nothing was written")),
+             qPrintable(rig.dump()));
+    QVERIFY(rig.message().contains(QStringLiteral("2 boards reset back to ADB")));
+    QVERIFY(rig.lineIndex(QStringLiteral("plan profile: Node (RV1106BG2) - from the image's chip tag 110E")) >= 0);
+    const int line = rig.lineIndex(rig.boardOf(serialOf(2)).label() + QLatin1Char(' ') + stackedLayoutLine());
+    QVERIFY2(line >= 0, qPrintable(rig.dump()));
+    QVERIFY(rig.lineIndex(QStringLiteral("mapping stopped: ") + reason) > line);
+    QCOMPARE(rig.count(addressedWl()), 0);
+    QCOMPARE(rig.bus.resetsTo(serialOf(0)).size(), qsizetype(1));
+    QCOMPARE(rig.bus.resetsTo(serialOf(1)).size(), qsizetype(1));
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(serialOf(2)))), 0);   // stopped before its reboot
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    QCOMPARE(c.result, FleetBoard::Result::Failed);
+    QCOMPARE(c.detail, reason);
+    QCOMPARE(c.profile, QStringLiteral("stacked"));
+    QCOMPARE(rig.boardOf(serialOf(0)).profile, QStringLiteral("node"));
+    for (int k = 3; k < kBench; ++k) {
+        const FleetBoard later = rig.boardOf(serialOf(k));
+        QCOMPARE(later.result, FleetBoard::Result::Skipped);
+        QCOMPARE(later.detail, QStringLiteral("mapping stopped: ") + reason);
+    }
+    QCOMPARE(rig.flasher.report().exitCode(), 1);
+}
+
+void Tst_fleetflasher::profileGateOffWhenPlanUnknown()
+{
+    FleetRig rig(caseDir());   // no plan profile: the gate is off, the layout gate decides
+    rig.bus.setMtdParts(serialOf(2), kStackedMtdParts);
+    QVERIFY(rig.run());
+    QVERIFY(rig.lineIndex(QStringLiteral("plan profile: unknown; the profile gate is off")) >= 0);
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    QCOMPARE(c.result, FleetBoard::Result::Skipped);
+    QCOMPARE(c.detail, QStringLiteral("flash layout differs from the plan's (board: %1; plan: %2): not rebooted").arg(kStackedMtdParts, kNodeMtdParts));
+    QCOMPARE(c.profile, QStringLiteral("stacked"));   // detected all the same, and logged
+    QVERIFY(rig.lineIndex(c.label() + QLatin1Char(' ') + stackedLayoutLine()) >= 0);
+    QCOMPARE(rig.flasher.report().totals().done, 6);
+}
+
+void Tst_fleetflasher::profileGateIgnoresEnvExemption()
+{
+    // env among the rows lifts the layout gate (the env written defines the next layout) - never the profile gate.
+    FleetRig rig(caseDir(), {QStringLiteral("env"), QStringLiteral("rootfs")});
+    rig.flasher.setPlanProfile(nodePlan());
+    rig.bus.setMtdParts(serialOf(2), kStackedMtdParts);
+    QVERIFY(rig.run());
+    QVERIFY(!rig.ok());
+    QVERIFY2(rig.message().startsWith(QStringLiteral("mapping stopped: mixed bench: board fe89cc526a354343 is Stacked (RV1106G2)")),
+             qPrintable(rig.dump()));
+    QCOMPARE(rig.count(addressedWl()), 0);
+    QCOMPARE(rig.boardOf(serialOf(2)).result, FleetBoard::Result::Failed);
+}
+
+void Tst_fleetflasher::overrideMakesEveryBoardThePlan()
+{
+    // --profile stacked with a stacked plan: every board is the plan's profile, so the profile gate
+    // cannot trip; the Node layouts differ from the plan's, so the layout gate skips them all.
+    FleetRig rig(caseDir());
+    rig.flasher.setProfileOverride(QStringLiteral("stacked"));
+    QCOMPARE(rig.flasher.profileOverride(), QStringLiteral("stacked"));
+    rig.flasher.setPlanProfile(overridePlan(QStringLiteral("stacked")));
+    rig.flasher.setLayout(kStackedMtdParts, true);
+    QVERIFY(rig.run());
+    QVERIFY(!rig.message().startsWith(QStringLiteral("mapping stopped")));
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("reboot loader$"))), 0);
+    for (const FleetBoard& board : rig.flasher.boards()) {
+        QCOMPARE(board.profile, QStringLiteral("stacked"));
+        QCOMPARE(board.result, FleetBoard::Result::Skipped);
+        QVERIFY2(board.detail.startsWith(QStringLiteral("flash layout differs from the plan's")), qPrintable(board.detail));
+    }
+    QVERIFY(rig.anyLineContains(QStringLiteral("profile: Stacked (RV1106G2) - set by --profile stacked (or the Board profile box)")));
+    FleetFlasher plain(nullptr);
+    plain.setProfileOverride(QStringLiteral("nope"));
+    QVERIFY(plain.profileOverride().isEmpty());   // an id nobody knows counts as ""
+    QVERIFY(!plain.planProfile().known());
+}
+
+void Tst_fleetflasher::profileInBoardJson()
+{
+    FleetBoard a;
+    a.tag = QStringLiteral("A");
+    a.serial = serialOf(0);
+    a.profile = QStringLiteral("node");
+    FleetBoard u = a;
+    u.profile.clear();
+    QCOMPARE(FleetReport::boardJson(a).value(QStringLiteral("profile")).toString(), QStringLiteral("node"));
+    QVERIFY(FleetReport::boardJson(u).contains(QStringLiteral("profile")));
+    QCOMPARE(FleetReport::boardJson(u).value(QStringLiteral("profile")).toString(), QString());
+    QVERIFY(!(a == u));   // FleetBoard::operator== compares the profile too
+}
+
+void Tst_fleetflasher::dryRunSaysProfilesNotRead()
+{
+    const QString sentence = QStringLiteral("Dry run: the boards' profiles are read before their reboot in a real run");
+    FleetRig dry(caseDir());
+    dry.flasher.setDryRun(true);
+    dry.flasher.setPlanProfile(nodePlan());
+    QVERIFY(dry.run());
+    QVERIFY2(dry.ok(), qPrintable(dry.dump()));
+    QCOMPARE(dry.lines.count(sentence), qsizetype(1));
+    const int first = dry.lineStarting(QStringLiteral("Dry run: the selection"));
+    QCOMPARE(dry.lineIndex(sentence), first + 1);
+    QCOMPARE(dry.count(QRegularExpression(QStringLiteral("cat /proc/cmdline"))), 0);
+    FleetRig real(caseDir() + QStringLiteral("-real"));
+    QVERIFY(real.run());
+    QCOMPARE(real.lines.count(sentence), qsizetype(0));
+}
+
+void Tst_fleetflasher::profileGateUsesTheMappedPid()
+{
+    // --serials names a G2 whose /proc/cmdline carries no mtdparts: step 2 b cannot tell it and the
+    // layout gate has nothing to compare - its Loader PID tells it once it is mapped, before the
+    // next board is rebooted and before anything is written.
+    FleetRig rig(caseDir());
+    rig.flasher.setBoards(benchBoards({0, 1, 2, 3}));
+    rig.flasher.setPlanProfile(nodePlan());
+    rig.bus.setMtdParts(serialOf(2), QString());
+    rig.bus.setLoaderPid(serialOf(2), 0x110c);
+    QCOMPARE(rig.bus.board(serialOf(2)).loaderPid, quint16(0x110c));
+    QVERIFY(rig.run());
+    QVERIFY(!rig.ok());
+    const FleetBoard c = rig.boardOf(serialOf(2));
+    ProfileEvidence pid;
+    pid.loaderPid = 0x110c;
+    const QString reason = ProfileRules::mixedBenchStop(serialOf(2), BoardProfiles::detectBoard(pid), nodePlan());
+    QVERIFY(reason.contains(QStringLiteral("(from the board's Loader PID 0x110c)")));
+    const int unknown = rig.lineIndex(c.label() + QStringLiteral(" profile: unknown (no --profile, no Loader PID, product string or flash "
+                                                                 "layout matched a profile)"));
+    const int mapped = rig.lineStarting(c.label() + QStringLiteral(" in Loader mode on port ") + portOf(2) + QStringLiteral(", LocationID "));
+    const int known = rig.lineIndex(c.label() + QStringLiteral(" profile: Stacked (RV1106G2) - from the board's Loader PID 0x110c"));
+    const int stop = rig.lineIndex(QStringLiteral("mapping stopped: ") + reason);
+    QVERIFY2(unknown >= 0 && mapped > unknown && known > mapped && stop > known, qPrintable(rig.dump()));
+    QCOMPARE(c.result, FleetBoard::Result::Failed);
+    QCOMPARE(c.detail, reason);
+    QCOMPARE(c.profile, QStringLiteral("stacked"));
+    QCOMPARE(rig.boardOf(serialOf(0)).profile, QStringLiteral("node"));
+    // A, B and C - it was mapped - reset with their own address; D never rebooted; nothing written.
+    for (int k = 0; k < 3; ++k) {
+        QCOMPARE(rig.bus.resetsTo(serialOf(k)).size(), qsizetype(1));
+    }
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(serialOf(3)))), 0);
+    QCOMPARE(rig.boardOf(serialOf(3)).result, FleetBoard::Result::Skipped);
+    QCOMPARE(rig.boardOf(serialOf(3)).detail, QStringLiteral("mapping stopped: ") + reason);
+    QCOMPARE(rig.count(addressedWl()), 0);
+    QCOMPARE(rig.flasher.report().exitCode(), 1);
+    QVERIFY2(rig.message().endsWith(QStringLiteral("; nothing was written; 3 boards reset back to ADB")), qPrintable(rig.message()));
+    QCOMPARE(rig.bus.unaddressedCommands(), 0);
+}
+
+void Tst_fleetflasher::overrideContradictsMappedPidStops()
+{
+    // --profile stacked: every board is the plan's at step 2 b; B's Loader PID says Node.
+    FleetRig rig(caseDir());
+    rig.flasher.setProfileOverride(QStringLiteral("stacked"));
+    rig.flasher.setPlanProfile(overridePlan(QStringLiteral("stacked")));
+    for (int k = 0; k < kBench; ++k) {
+        rig.bus.setLoaderPid(serialOf(k), k == 1 ? 0x110e : 0x110c);
+    }
+    QVERIFY(rig.run());
+    QVERIFY(!rig.ok());
+    const QString reason =
+        QStringLiteral("the --profile stacked override contradicts the board's Loader PID 0x110e (the Node (RV1106BG2)'s); drop --profile");
+    QVERIFY2(rig.message().startsWith(QStringLiteral("mapping stopped: ") + reason), qPrintable(rig.dump()));
+    QCOMPARE(rig.boardOf(serialOf(1)).result, FleetBoard::Result::Failed);
+    QCOMPARE(rig.boardOf(serialOf(1)).detail, reason);
+    QCOMPARE(rig.bus.resetsTo(serialOf(0)).size(), qsizetype(1));
+    QCOMPARE(rig.bus.resetsTo(serialOf(1)).size(), qsizetype(1));
+    QCOMPARE(rig.count(QRegularExpression(QStringLiteral("^adb -s %1 reboot loader$").arg(serialOf(2)))), 0);
+    QCOMPARE(rig.count(addressedWl()), 0);
 }
 
 QTEST_GUILESS_MAIN(Tst_fleetflasher)

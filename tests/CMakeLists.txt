@@ -97,6 +97,9 @@ set_tests_properties(tst_mcuupdater tst_imagepuller tst_firmwarejob tst_firmware
 su_add_test(tst_fleetflasher      tst_fleetflasher.cpp)
 target_link_libraries(tst_fleetflasher PRIVATE su_testsupport)
 set_tests_properties(tst_fleetflasher PROPERTIES TIMEOUT 600)
+# (v0.8.0) Board profiles: the Node / Stacked table, the detection order and the rules' texts.
+su_add_test(tst_boardprofile      tst_boardprofile.cpp)
+target_link_libraries(tst_boardprofile PRIVATE su_testsupport)
 
 # ---- GUI (offscreen) -----------------------------------------------------------------
 su_add_gui_test(tst_terminalwidget tst_terminalwidget.cpp)

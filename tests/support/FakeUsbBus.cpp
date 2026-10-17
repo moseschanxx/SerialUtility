@@ -30,7 +30,7 @@ QRegularExpression upgradeToolCommand(const QString& rest)
                               + rest);
 }
 
-UsbDeviceInfo instance(quint16 pid, const QString& port)
+UsbDeviceInfo instance(quint16 pid, const QString& port, const QString& product = QString())
 {
     UsbDeviceInfo info;
     info.vid = kVid;
@@ -38,7 +38,7 @@ UsbDeviceInfo instance(quint16 pid, const QString& port)
     // The port key is the instance id's last segment exactly as printed: the port keeps its case.
     info.instanceId = QStringLiteral("USB\\VID_2207&PID_") + QString::number(pid, 16).rightJustified(4, QLatin1Char('0')).toUpper()
                       + QLatin1Char('\\') + port;
-    info.description = pid == kAdbPid ? QStringLiteral("Android ADB Interface") : QStringLiteral("Rockusb Device");
+    info.description = pid == kAdbPid ? (product.isEmpty() ? QStringLiteral("Android ADB Interface") : product) : QStringLiteral("Rockusb Device");
     info.driverClass = pid == kAdbPid ? QStringLiteral("AndroidUsbDeviceClass") : QStringLiteral("USB");
     return info;
 }
@@ -53,6 +53,8 @@ struct FakeUsbBus::Private
         QString port;
         QString otherPort;
         QString mtdParts;
+        quint16 loaderPid = kLoaderPid;   ///< (v0.8.0) its Loader mode's PID (setLoaderPid())
+        QString product;                  ///< (v0.8.0) its ADB gadget's product string ("" = the driver's name)
         Reboot reboot = Reboot::ToLoader;
         State state = State::Adb;
         bool adbInstance = true;      ///< the enumeration shows the ADB gadget on `port`
@@ -139,6 +141,9 @@ struct FakeUsbBus::Private
         return portIds.value(port);
     }
 
+    /// The MASKROM stand-in: 0x110c, or 0x110e for a board whose Loader PID is 0x110c.
+    static quint16 maskromPidOf(const Entry& entry) { return entry.loaderPid == kMaskromPid ? kLoaderPid : kMaskromPid; }
+
     void touched(Entry& entry)
     {
         ++entry.epoch;
@@ -175,7 +180,7 @@ struct FakeUsbBus::Private
         entry.ldId = listed ? idFor(port) : QString();
         entry.ldMaskrom = maskrom;
         entry.dlPort = port;
-        entry.dlPid = maskrom ? kMaskromPid : kLoaderPid;
+        entry.dlPid = maskrom ? maskromPidOf(entry) : entry.loaderPid;
         entry.dlInstance = false;
         touched(entry);
         enumerateLater(entry.serial, lagMs);
@@ -227,7 +232,7 @@ struct FakeUsbBus::Private
         }
         case Reboot::GhostLoader:
             entry->dlPort = entry->port;
-            entry->dlPid = kLoaderPid;
+            entry->dlPid = entry->loaderPid;
             touched(*entry);
             enumerateLater(serial, pnpLagMs);   // the ADB instance stays, LD lists nothing
             return;
@@ -256,21 +261,27 @@ struct FakeUsbBus::Private
 
     QByteArray ldText() const
     {
-        QList<QPair<QString, bool>> listed;   // id, maskrom
+        struct Line
+        {
+            QString id;
+            bool maskrom = false;
+            quint16 pid = kLoaderPid;
+        };
+        QList<Line> listed;
         for (const Entry& entry : boards) {
             if (!entry.ldId.isEmpty()) {
-                listed.append({entry.ldId, entry.ldMaskrom});
+                listed.append({entry.ldId, entry.ldMaskrom, entry.ldMaskrom ? maskromPidOf(entry) : entry.loaderPid});
             }
         }
         for (const Foreign& device : foreignLoaders) {
-            listed.append({device.id, false});
+            listed.append({device.id, false, kLoaderPid});
         }
         QByteArray text = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n";
         text += "List of rockusb connected(" + QByteArray::number(listed.size()) + ")\r\n";
         int devNo = 1;
-        for (const auto& [id, maskrom] : listed) {
-            text += "DevNo=" + QByteArray::number(devNo++) + "\tVid=0x2207,Pid=" + (maskrom ? "0x110c" : "0x110e")
-                    + ",LocationID=" + id.toLatin1() + "\tMode=" + (maskrom ? "Maskrom" : "Loader") + "\tSerialNo=\r\n";
+        for (const Line& line : listed) {
+            text += "DevNo=" + QByteArray::number(devNo++) + "\tVid=0x2207,Pid=0x" + QByteArray::number(line.pid, 16).rightJustified(4, '0')
+                    + ",LocationID=" + line.id.toLatin1() + "\tMode=" + (line.maskrom ? "Maskrom" : "Loader") + "\tSerialNo=\r\n";
         }
         return text;
     }
@@ -508,6 +519,9 @@ struct FakeUsbBus::Private
                 i->emitOutput(FirmwareFixtures::kProcVersion);
             } else if (what == QLatin1String("rfmcu status")) {
                 i->emitOutput("pid=412 uart=owned mcu=alive\n");
+            } else if (what == QLatin1String("cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product") && entry
+                       && !entry->product.isEmpty()) {
+                i->emitOutput(entry->product.toLatin1() + "\n");
             } else {
                 i->emitOutput("sh: not found\n");
                 i->finish(127);
@@ -574,6 +588,23 @@ void FakeUsbBus::setMtdParts(const QString& serial, const QString& mtdparts)
 {
     if (Private::Entry* entry = d->find(serial)) {
         entry->mtdParts = mtdparts;
+    }
+}
+
+void FakeUsbBus::setLoaderPid(const QString& serial, quint16 pid)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        entry->loaderPid = pid;
+        if (entry->state == State::Loader) {
+            entry->dlPid = pid;
+        }
+    }
+}
+
+void FakeUsbBus::setProduct(const QString& serial, const QString& product)
+{
+    if (Private::Entry* entry = d->find(serial)) {
+        entry->product = product;
     }
 }
 
@@ -706,7 +737,7 @@ QList<UsbDeviceInfo> FakeUsbBus::enumerate(quint16 vid) const
     }
     for (const Private::Entry& entry : d->boards) {
         if (entry.adbInstance) {
-            devices << instance(kAdbPid, entry.port);
+            devices << instance(kAdbPid, entry.port, entry.product);
         }
         if (entry.dlInstance) {
             devices << instance(entry.dlPid, entry.dlPort);
@@ -744,6 +775,8 @@ FakeUsbBus::Board FakeUsbBus::board(const QString& serial) const
         view.otherPort = entry->otherPort;
         view.mtdParts = entry->mtdParts;
         view.ldListed = !entry->ldId.isEmpty();
+        view.loaderPid = entry->loaderPid;
+        view.product = entry->product;
     }
     return view;
 }

@@ -81,6 +81,40 @@ QString lockHolder(const QLockFile& lock)
     return program.isEmpty() ? QStringLiteral("pid %1").arg(pid) : QStringLiteral("%1, pid %2").arg(program).arg(pid);
 }
 
+/// (v0.8.0) The configfs file usb_adb.sh writes the gadget's product string to (row 29).
+QString productCommand()
+{
+    return QStringLiteral("cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product");
+}
+
+/// The ADB gadget's product string from the USB enumeration where the OS reports one (Linux sysfs;
+/// Windows names the driver, so it is not asked - SocFlasher does the same).
+QString adbGadgetProductFromBus()
+{
+#ifdef Q_OS_LINUX
+    QString product;
+    int gadgets = 0;
+    for (const UsbDeviceInfo& device : UsbProbe::presentDevices()) {
+        if (device.isAdbGadget()) {
+            ++gadgets;
+            product = device.description.trimmed();
+        }
+    }
+    return gadgets == 1 ? product : QString();
+#else
+    return QString();
+#endif
+}
+
+/// "image profile: Stacked (RV1106G2) - from the image's chip tag 1106" (SocFlasher's wording).
+QString imageProfileLine(const ProfileDetection& image)
+{
+    if (!image.known()) {
+        return FirmwareJob::tr("image profile: unknown (no chip tag or env.img layout matched a profile)");
+    }
+    return FirmwareJob::tr("image profile: %1 - %2").arg(image.profile.name, image.sourceText());
+}
+
 } // namespace
 
 // =======================================================================================
@@ -185,6 +219,25 @@ struct FirmwareJob::Private
     bool fleetActive = false;       ///< the fleet flasher runs for the current operation
     bool fleetRan = false;          ///< the last flashFleet() started the flasher (fleetReport() is its)
 
+    // ---- Board profiles (v0.8.0) ----------------------------------------------------------------
+    QString profileOverride;        ///< a BoardProfiles::ids() entry or ""
+    bool forceLayout = false;
+    bool forceLoaderPartitions = false;
+    bool confirmSocPower = false;
+    LayoutConflictHandler layoutHandler;
+    LoaderPartitionsHandler loaderPartitionsHandler;
+    SocPowerHandler socPowerHandler;
+    QString describedImageKey;      ///< imageKey() of the image describeImage() logged last
+    RkfwHeader header;              ///< that image's RKFW header
+    ProfileDetection loggedImageProfile;
+    ProfileDetection flowProfile;   ///< the flasher's own detection (profileDetected()) ...
+    bool flowProfileValid = false;  ///< ... valid from a flash until the next status
+    ProfileDetection lastBoardProfile;   ///< what boardProfileChanged() said last
+    bool boardProfileReported = false;
+    QSet<QString> productReadTried; ///< boards whose gadget product string was read by this job
+    QMap<QString, QString> rememberedProducts;   ///< serial -> the trimmed answer ("" = none)
+    QPointer<ToolInvocation> productInvocation;
+
     // ---- Construction ------------------------------------------------------------------------
     void wire();
     void log(const QString& line);
@@ -204,6 +257,15 @@ struct FirmwareJob::Private
     void onStatus(const SocFlasher::DeviceStatus& status);
     void readBoardLayout(const QString& serial);
     void storeLayout(const QString& serial, const QString& mtdparts);
+
+    // ---- Board profiles (v0.8.0) ---------------------------------------------------------------
+    void describeImage(bool force);
+    ProfileDetection computeImageProfile() const;
+    ProfileDetection computeBoardProfile() const;
+    void updateBoardProfile();
+    bool needsProductRead(const QString& serial, const QString& mtdparts) const;
+    void readBoardProduct(const QString& serial, std::function<void()> done);
+    ProfileDetection planProfile() const;
 
     // ---- Operations ----------------------------------------------------------------------------
     bool cancellable() const;
@@ -298,7 +360,7 @@ FirmwareJob::~FirmwareJob()
     if (d->profiles) {
         disconnect(d->profiles, nullptr, this, nullptr);
     }
-    for (ToolInvocation* invocation : {d->cliInvocation.data(), d->cmdlineInvocation.data()}) {
+    for (ToolInvocation* invocation : {d->cliInvocation.data(), d->cmdlineInvocation.data(), d->productInvocation.data()}) {
         if (invocation) {
             disconnect(invocation, nullptr, this, nullptr);
             invocation->cancel();
@@ -376,6 +438,16 @@ void FirmwareJob::Private::wire()
         // Step 2 of a flash read it from the board the flow found on ADB.
         const QString serial = deviceStatus.mode == SocFlasher::DeviceStatus::Mode::Adb ? deviceStatus.serial : layoutSerial;
         storeLayout(serial, mtdparts);
+    });
+    // (v0.8.0) The flow's own detection (its PID, its layout, its product read) wins while it runs
+    // and stays the board's until the next status says otherwise.
+    connect(flasher, &SocFlasher::profileDetected, q, [this](const ProfileDetection& detection) {
+        if (!flasherActive) {
+            return;   // a plain query: boardProfile() works from the status itself
+        }
+        flowProfile = detection;
+        flowProfileValid = true;
+        updateBoardProfile();
     });
     connect(flasher, &SocFlasher::partitionsPlanned, q,
             [this](bool ok, const QList<PartitionImage>& rows, const QString& message) { onPartitionsPlanned(ok, rows, message); });
@@ -745,9 +817,191 @@ QString FirmwareJob::boardInfo() const { return d->boardInfoText; }
 
 QString FirmwareJob::maskromInstructions() const
 {
+    // (v0.8.0) The stacked board has no MASKROM button to hold: its profile says what to do.
+    if (const std::optional<BoardProfile> profile = BoardProfiles::byId(d->profileOverride)) {
+        return profile->maskromInstructions(d->flasher->waitTimeoutSeconds());
+    }
     return tr("No board found: hold the MASKROM button while plugging in the USB-C cable "
               "(or while power-cycling the board); waiting up to %1 s")
         .arg(d->flasher->waitTimeoutSeconds());
+}
+
+// ---- Board profiles (v0.8.0) ---------------------------------------------------------------------
+
+void FirmwareJob::setProfileOverride(const QString& id)
+{
+    const std::optional<BoardProfile> profile = BoardProfiles::byId(id);
+    d->profileOverride = profile ? profile->id : QString();
+    d->flasher->setProfileOverride(d->profileOverride);
+    d->updateBoardProfile();
+}
+
+QString FirmwareJob::profileOverride() const { return d->profileOverride; }
+
+RkfwHeader FirmwareJob::imageHeader() const
+{
+    const QString image = imagePath();
+    if (image.isEmpty()) {
+        return RkfwHeader();
+    }
+    if (d->describedImageKey == Private::imageKey(image)) {
+        return d->header;
+    }
+    return RockchipTool::readRkfwHeader(image);   // not described yet: read, without a log line
+}
+
+ProfileDetection FirmwareJob::imageProfile() const { return d->computeImageProfile(); }
+ProfileDetection FirmwareJob::boardProfile() const { return d->computeBoardProfile(); }
+void FirmwareJob::setForceLayout(bool on) { d->forceLayout = on; }
+bool FirmwareJob::forceLayout() const { return d->forceLayout; }
+void FirmwareJob::setForceLoaderPartitions(bool on) { d->forceLoaderPartitions = on; }
+bool FirmwareJob::forceLoaderPartitions() const { return d->forceLoaderPartitions; }
+void FirmwareJob::setConfirmSocPower(bool on) { d->confirmSocPower = on; }
+bool FirmwareJob::confirmSocPower() const { return d->confirmSocPower; }
+void FirmwareJob::setLayoutConflictHandler(LayoutConflictHandler handler) { d->layoutHandler = std::move(handler); }
+void FirmwareJob::setLoaderPartitionsHandler(LoaderPartitionsHandler handler) { d->loaderPartitionsHandler = std::move(handler); }
+void FirmwareJob::setSocPowerHandler(SocPowerHandler handler) { d->socPowerHandler = std::move(handler); }
+
+ProfileDetection FirmwareJob::Private::computeImageProfile() const
+{
+    const QString image = q->imagePath();
+    if (image.isEmpty()) {
+        return ProfileDetection();
+    }
+    ProfileEvidence evidence;
+    const RkfwHeader read = q->imageHeader();
+    evidence.chipTag = read.valid ? read.chipTag : QString();
+    // The env.img layout counts once the plan of this very image is Ready (an RKFW without a tag
+    // that names a profile is still told by the layout it was built for).
+    if (planState == PlanState::Ready && plannedImage == image) {
+        evidence.layout = imageLayout;
+    }
+    return BoardProfiles::detectImage(evidence);
+}
+
+ProfileDetection FirmwareJob::Private::computeBoardProfile() const
+{
+    ProfileEvidence evidence;
+    evidence.overrideId = profileOverride;
+    if (!hasDeviceStatus) {
+        return BoardProfiles::detectBoard(evidence);   // the override alone, before any status
+    }
+    if (flowProfileValid) {
+        return flowProfile;
+    }
+    switch (deviceStatus.mode) {
+    case SocFlasher::DeviceStatus::Mode::Loader:
+        evidence.loaderPid = deviceStatus.pid;   // U-Boot rockusb's constant (row 32)
+        evidence.layout = q->boardLayout();
+        break;
+    case SocFlasher::DeviceStatus::Mode::Adb: {
+        const QString fromBus = adbGadgetProductFromBus();
+        evidence.adbProduct = fromBus.isEmpty() ? rememberedProducts.value(deviceStatus.serial) : fromBus;
+        evidence.layout = layoutFor(deviceStatus.serial);
+        break;
+    }
+    case SocFlasher::DeviceStatus::Mode::Maskrom:   // the BootROM's PID is no evidence (row 33)
+    case SocFlasher::DeviceStatus::Mode::NoDriver:
+    case SocFlasher::DeviceStatus::Mode::None:
+        break;
+    }
+    return BoardProfiles::detectBoard(evidence);
+}
+
+void FirmwareJob::Private::updateBoardProfile()
+{
+    const ProfileDetection now = computeBoardProfile();
+    if (boardProfileReported && now == lastBoardProfile) {
+        return;
+    }
+    boardProfileReported = true;
+    lastBoardProfile = now;
+    emit q->boardProfileChanged(now);
+}
+
+/// The plan's profile for a fleet: the override's when set (every board is that profile), else
+/// the image's.
+ProfileDetection FirmwareJob::Private::planProfile() const
+{
+    if (BoardProfiles::byId(profileOverride)) {
+        ProfileEvidence evidence;
+        evidence.overrideId = profileOverride;
+        return BoardProfiles::detectBoard(evidence);
+    }
+    return computeImageProfile();
+}
+
+/// The image lines, once per image (path + mtime) or when `force` (the file changed in place):
+/// "image: update.img, chip tag 110E, built 2026-10-13 21:45:50" and "image profile: ...".
+void FirmwareJob::Private::describeImage(bool force)
+{
+    const QString image = q->imagePath();
+    if (image.isEmpty()) {
+        describedImageKey.clear();
+        header = RkfwHeader();
+        return;
+    }
+    const QString key = imageKey(image);
+    if (!force && key == describedImageKey) {
+        return;
+    }
+    describedImageKey = key;
+    QString error;
+    header = RockchipTool::readRkfwHeader(image, &error);
+    const QString name = QFileInfo(image).fileName();
+    if (header.valid) {
+        log(header.buildTime.isValid()
+                ? FirmwareJob::tr("image: %1, chip tag %2, built %3")
+                      .arg(name, header.chipTag, header.buildTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
+                : FirmwareJob::tr("image: %1, chip tag %2").arg(name, header.chipTag));
+    } else {
+        log(FirmwareJob::tr("image: %1: RKFW header unreadable (%2)").arg(name, error));
+    }
+    loggedImageProfile = computeImageProfile();
+    log(imageProfileLine(loggedImageProfile));
+}
+
+bool FirmwareJob::Private::needsProductRead(const QString& serial, const QString& mtdparts) const
+{
+    // Only when the layout tells nothing: a board whose cmdline carries a known layout (every
+    // Node) runs no extra command.
+    return !productReadTried.contains(serial) && !BoardProfiles::byLayout(mtdparts) && !computeBoardProfile().known();
+}
+
+void FirmwareJob::Private::readBoardProduct(const QString& serial, std::function<void()> done)
+{
+    productReadTried.insert(serial);
+    AdbTool* tool = flasher->adb();
+    ToolInvocation* invocation =
+        tool->serial().isEmpty()
+            ? tool->run({QStringLiteral("-s"), serial, QStringLiteral("shell"), productCommand()}, tool->timeoutMs())
+            : tool->shell(productCommand());
+    productInvocation = invocation;
+    log(invocation->commandLine());
+    connect(invocation, &ToolInvocation::finished, q, [this, invocation, serial, done](const ToolResult& result) {
+        if (productInvocation != invocation) {
+            return;
+        }
+        productInvocation = nullptr;
+        if (!result.cancelled) {
+            QString product;
+            if (result.started && !result.timedOut && result.exitCode == 0) {
+                for (const QString& line : result.outputText().split(QLatin1Char('\n'))) {
+                    if (!line.trimmed().isEmpty()) {
+                        product = line.trimmed();
+                        break;
+                    }
+                }
+            }
+            rememberedProducts.insert(serial, product);
+            log(product.isEmpty() ? FirmwareJob::tr("Board %1 reports no ADB gadget product string").arg(serial)
+                                  : FirmwareJob::tr("ADB gadget product string of board %1: %2").arg(serial, product));
+            updateBoardProfile();
+        }
+        if (done) {
+            done();
+        }
+    });
 }
 
 // ---- State ----------------------------------------------------------------------------------
@@ -932,6 +1186,7 @@ void FirmwareJob::Private::requestPlan(bool force)
         emit q->partitionsChanged();
         return;
     }
+    describeImage(false);   // (v0.8.0) the image lines, once per image
     // The board's layout is what the flasher gets; the image's own (env.img) is its business.
     const QString layout = q->boardLayout();
     const QString key = imageKey(image) + QLatin1Char('\n') + layout;
@@ -978,6 +1233,14 @@ void FirmwareJob::Private::onPartitionsPlanned(bool ok, const QList<PartitionIma
     plannedImage = flasher->imagePath();
     // The layout the image carries itself, read the way the flasher read it for these rows.
     imageLayout = ok ? RockchipTool::mtdPartsFromEnvImage(flasher->extractDirectory() + QStringLiteral("/env.img")) : QString();
+    // (v0.8.0) An image whose chip tag tells no profile is told by its env.img layout now.
+    if (!describedImageKey.isEmpty()) {
+        const ProfileDetection image = computeImageProfile();
+        if (!(image == loggedImageProfile)) {
+            loggedImageProfile = image;
+            log(imageProfileLine(image));
+        }
+    }
     emit q->partitionsChanged();
     const QString imageName = QFileInfo(plannedImage).fileName();
     if (ok) {
@@ -1014,13 +1277,16 @@ void FirmwareJob::Private::onStatus(const SocFlasher::DeviceStatus& status)
 {
     deviceStatus = status;
     hasDeviceStatus = true;
+    if (!flasherActive) {
+        flowProfileValid = false;   // a status of its own: the board as it is now
+    }
     emit q->statusChanged(status);
     if (status.mode == SocFlasher::DeviceStatus::Mode::Adb && !status.serial.isEmpty()) {
         // A running board can tell its flash layout; Loader mode later cannot. Read it once per
         // board and job, only while nothing else uses adb.
         const bool otherBoard = status.serial != layoutSerial;
         layoutSerial = status.serial;
-        if (operation.isEmpty() && !cmdlineInvocation && !layoutReadTried.contains(status.serial)
+        if (operation.isEmpty() && !cmdlineInvocation && !productInvocation && !layoutReadTried.contains(status.serial)
             && layoutFor(status.serial).isEmpty()) {
             readBoardLayout(status.serial);
         }
@@ -1028,6 +1294,7 @@ void FirmwareJob::Private::onStatus(const SocFlasher::DeviceStatus& status)
             requestPlan(false);   // flashLayout() follows the board
         }
     }
+    updateBoardProfile();
 }
 
 void FirmwareJob::Private::readBoardLayout(const QString& serial)
@@ -1062,12 +1329,23 @@ void FirmwareJob::Private::readBoardLayout(const QString& serial)
         const QString mtdparts = RockchipTool::mtdPartsFromCommandLine(result.outputText());
         if (mtdparts.isEmpty()) {
             log(FirmwareJob::tr("Board %1 reports no flash layout (no mtdparts in /proc/cmdline)").arg(serial));
-            emit q->layoutReadFinished(serial, false);
+        } else {
+            log(FirmwareJob::tr("Flash layout of board %1: %2").arg(serial, mtdparts));
+            storeLayout(serial, mtdparts);
+        }
+        const bool found = !mtdparts.isEmpty();
+        // (v0.8.0) A layout that tells no profile (or none at all, open question 6): the board is
+        // asked for its gadget's product string once, and the read ends after that answer.
+        if (needsProductRead(serial, mtdparts)) {
+            const QPointer<FirmwareJob> self(q);
+            readBoardProduct(serial, [this, self, serial, found]() {
+                if (self) {
+                    emit q->layoutReadFinished(serial, found);
+                }
+            });
             return;
         }
-        log(FirmwareJob::tr("Flash layout of board %1: %2").arg(serial, mtdparts));
-        storeLayout(serial, mtdparts);
-        emit q->layoutReadFinished(serial, true);
+        emit q->layoutReadFinished(serial, found);
     });
 }
 
@@ -1082,6 +1360,7 @@ void FirmwareJob::Private::storeLayout(const QString& serial, const QString& mtd
     if (!fleetActive) {
         requestPlan(false);   // never under a running fleet: it writes from the plan it was given
     }
+    updateBoardProfile();
 }
 
 QString FirmwareJob::partitionProblem(const PartitionImage& row, bool layoutIsKnown)
@@ -1565,6 +1844,13 @@ void FirmwareJob::Private::startFlash()
     pushToolPaths();
     flasher->setImagePath(image);
     flasher->setMtdParts(q->boardLayout());   // a board already in Loader mode cannot tell its layout
+    // (v0.8.0) The board profiles: the owner's override, the rules' overrides and the questions.
+    flasher->setProfileOverride(profileOverride);
+    flasher->setForceLayout(forceLayout);
+    flasher->setForceLoaderPartitions(forceLoaderPartitions);
+    flasher->setLayoutConflictHandler(layoutHandler);
+    flasher->setLoaderPartitionsHandler(loaderPartitionsHandler);
+    flowProfileValid = false;   // this flash detects the board afresh
     if (operation == kOpPullFlash) {
         // Pull & Flash writes every partition: the SocFlasher default, which also stops before
         // writing anything when one image does not fit.
@@ -1787,10 +2073,55 @@ void FirmwareJob::Private::startFleet()
     }
 
     QList<PartitionImage> rows;
+    QStringList rowNames;
     for (const PartitionImage& row : std::as_const(partitionRows)) {
         if (selected.contains(row.name)) {
             rows << row;   // table order
+            rowNames << row.name;
         }
+    }
+
+    // (v0.8.0) Rules 1 and 3 for the fleet, before any adb: the boards' own profiles are read only
+    // inside the run (step 2 b, Mapped), so rule 1 needs the override as the board; rule 3 is
+    // judged on the plan's profile (the override's, else the image's).
+    const ProfileDetection plan = planProfile();
+    if (BoardProfiles::byId(profileOverride)) {
+        const QString wrongImage = ProfileRules::imageRefusal(plan, computeImageProfile());
+        if (!wrongImage.isEmpty()) {
+            stepFinished(kOpFleetFlash, false, wrongImage);
+            return;
+        }
+    }
+    const QString loaderText = ProfileRules::loaderPartitionRefusal(plan.profile, rowNames, false);
+    if (!loaderText.isEmpty()) {
+        bool allowed = forceLoaderPartitions;
+        if (!allowed) {
+            const LoaderPartitionsHandler handler = loaderPartitionsHandler;   // a copy: the question may run an event loop
+            if (handler) {
+                QStringList names;
+                for (const QString& name : std::as_const(rowNames)) {
+                    if (FleetFlasher::bootloaderPartitions().contains(name)) {
+                        names << name;
+                    }
+                }
+                const QPointer<FirmwareJob> self(q);
+                allowed = handler(plan.profile, names);
+                if (!self || operation != kOpFleetFlash) {
+                    return;   // the owner went away, or the operation ended meanwhile
+                }
+                if (cancelRequested) {
+                    stepFinished(kOpFleetFlash, false, FirmwareJob::tr("cancelled"));
+                    return;
+                }
+            }
+        }
+        if (!allowed) {
+            stepFinished(kOpFleetFlash, false, loaderText);
+            return;
+        }
+        QString note;
+        ProfileRules::loaderPartitionRefusal(plan.profile, rowNames, true, &note);
+        log(note);
     }
     pushToolPaths();
     fleet->setImagePath(image);
@@ -1804,6 +2135,8 @@ void FirmwareJob::Private::startFleet()
     fleet->setAdbReturnTimeoutSeconds(q->adbReturnSeconds());
     fleet->setWaitForAdb(flasher->waitForAdb());
     fleet->setPortProvider(portProvider);
+    fleet->setPlanProfile(plan);
+    fleet->setProfileOverride(profileOverride);
     const QString text = FirmwareJob::tr("Flashing fleet: starting...");
     setProgressBusy(text);
     setPersistent(text);
@@ -1866,6 +2199,35 @@ void FirmwareJob::Private::startMcuUpdate(const QString& stepName)
     if (confirmedRole == 0) {
         stepFinished(stepName, false, FirmwareJob::tr("choose the MCU role (rx or tx) first: it is never guessed"));
         return;
+    }
+    // (v0.8.0) Rule 4, before the link opens: the stacked board's CC1310 holds the SoC's power,
+    // and the update reboots the CC1310 into its bootloader.
+    const ProfileDetection board = q->boardProfile();
+    log(board.text());
+    const QString powerText = ProfileRules::socPowerRefusal(board.profile, false);
+    if (!powerText.isEmpty()) {
+        bool allowed = confirmSocPower;
+        if (!allowed) {
+            const SocPowerHandler handler = socPowerHandler;   // a copy: the question may run an event loop
+            if (handler) {
+                const QPointer<FirmwareJob> self(q);
+                allowed = handler(board.profile);
+                if (!self || step != stepName) {
+                    return;   // the owner went away, or the step ended meanwhile
+                }
+                if (cancelRequested) {
+                    stepFinished(stepName, false, FirmwareJob::tr("cancelled"));
+                    return;
+                }
+            }
+        }
+        if (!allowed) {
+            stepFinished(stepName, false, powerText);
+            return;
+        }
+        QString note;
+        ProfileRules::socPowerRefusal(board.profile, true, &note);
+        log(note);
     }
     mcuRole = confirmedRole;
     mcuResultPending = false;
@@ -2313,6 +2675,9 @@ void FirmwareJob::planPartitions()
 
 void FirmwareJob::refreshImage(bool reread)
 {
+    if (reread) {
+        d->describeImage(true);   // the same path, new content: its header again
+    }
     emit imageChanged(reread);
     d->requestPlan(reread);   // a no-op while image, mtime and layout are what the plan shows
 }

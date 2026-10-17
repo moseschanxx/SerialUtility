@@ -110,7 +110,10 @@ class ToolRunner;
  * name the retry: one addressed `upgrade_tool -s <LocationID> WL ...` per missing row, then
  * `upgrade_tool -s <LocationID> RD`; `su-fw flash-soc --serial X` only once `upgrade_tool LD` lists
  * X as the ONLY device in download mode, since the single-board flow writes without -s and takes
- * any Loader device - or RD, MASKROM instead of Loader: such a board is flashed alone with
+ * any Loader device (v0.8.0: enforced - the single-board flow refuses, exit 1, with "several
+ * rockusb devices are in download mode (LocationIDs ...): the single-board flow writes unaddressed
+ * and cannot tell them apart; ..." before anything runs on the board) - or RD, MASKROM instead of
+ * Loader: such a board is flashed alone with
  * `su-fw flash-soc --serial X` only once `upgrade_tool LD` lists it as the ONLY device in download
  * mode, and MASKROM mode writes the whole image with UF, idblock, uboot, env and meta included),
  * skipped (not on ADB, a differing layout, with --all-boards no layout in /proc/cmdline, the
@@ -125,6 +128,63 @@ class ToolRunner;
  * mapped board is stored per serial (AppSettings::firmwareBoardPort()) so the next dry run prints
  * it as the expected port and the next real run reports a board that moved; the memory never
  * addresses a board.
+ *
+ * Board profiles (v0.8.0, profiles; BoardProfile.h, docs/DESIGN.md 4.14): every command that meets
+ * a board or an image takes `--profile ID` (status, partitions, flash-soc, pull-flash, mcu-info,
+ * mcu-update, mcu-set-role; ID from BoardProfiles::ids() - node, stacked - anything else is the
+ * usage error "--profile: unknown profile \"x\"; known: node, stacked"), which becomes
+ * FirmwareJob::setProfileOverride(); su-fw never reads the tab's Board profile setting, an agent's
+ * run is steered by its command line alone. status prints, after "Board: ...", the job's
+ * boardProfile() line ("profile: Node (RV1106BG2) - from the board's flash layout (7 partitions:
+ * ...)" / "profile: Stacked (RV1106G2) - from the ADB gadget's product string
+ * rv1106g-stacked-gc2083" - the job's product read, logged as a command line before it, runs
+ * only for a board whose cmdline layout matched no profile - / "profile: unknown (...)"; a
+ * Maskrom board is unknown unless --profile says otherwise; the JSON `board` object gains
+ * "profile": {"id", "name", "source", "evidence"}); partitions and flash-soc print the job's image
+ * lines ("image: update.img,
+ * chip tag 110E, built 2026-10-13 21:45:50", "image profile: ...") and the done object gains
+ * "imageHeader" {"chipTag", "version", "buildTime"} and "imageProfile" {as above}. The refusals are
+ * the operation's step failure, exit 1, with the ProfileRules text: flash-soc and pull-flash take
+ * `--force-layout` (rule 2) and `--force-loader-partitions` (rule 3), mcu-update, mcu-set-role and
+ * pull-flash `--confirm-soc-power` (rule 4) - without them the job's headless defaults refuse (no
+ * handler is installed: su-fw asks no profile question even on a terminal; the flags are the
+ * answer). `flash-soc --help` carries a "Board profiles:" paragraph with one command line per
+ * profile, four-blank indented and NOT under "Examples:" (the help test's "exactly two examples"
+ * rule holds): the Node's daily `--partitions rootfs`, the stacked board's `--partitions boot`;
+ * every help page that takes --profile explains it in one option line. A fleet passes --profile
+ * to the job (every board and the plan).
+ *
+ * Verify after write (v0.8.0, verify-rl): `--verify` on flash-soc (single board and fleet) and
+ * pull-flash -> FirmwareJob::setVerifyAfterWrite(); the per-row lines come through the log; the
+ * done object gains "verify" (true when asked) and, for the single board, "verified": [{"name",
+ * "ok", "bytes", "mismatch", "seconds"}] (the fleet's are in boards[]); a mismatch is exit 1 with
+ * the flasher's text; in MASKROM mode the flasher's "not available" line and no field but "verify".
+ *
+ * Inventory (v0.8.0, inventory; Inventory.h, InventoryRecorder.h, docs/DESIGN.md 4.17):
+ * `su-fw inventory [--json] [--serial S]` prints the inventory file - no job operation, no tool,
+ * no board: the text table is Inventory::tableLines(), the done object carries Inventory::json();
+ * `--serial S` prints that record alone (exit 3 "no record for S" when there is none); an
+ * unreadable file is exit 1 with Inventory::load()'s error. Every command's job carries an
+ * InventoryRecorder (one line in createJob(); its logLine() goes to the log), so status, flash-soc,
+ * the MCU commands, pull-flash and a fleet record their boards. flash-soc takes `--expect-image
+ * MD5` (32 hex digits; only with --serial or --serials: "--expect-image needs --serial or
+ * --serials: the inventory is checked per named board before anything runs" with --all-boards or
+ * no selector) and refuses, before the plan and before any tool, a named board whose record says
+ * the image IS on it: lastImage.md5 equals it (case-insensitive) AND every partition the command
+ * names (`--partitions NAMES`; with `--all`, every row of the image: the extracted package-file's
+ * names, which the plan knows - so with `--all` the check runs right after the plan, still before
+ * any board is touched) is in the record's lastImage.partitions (the rows written with that md5,
+ * Inventory.h): "board S already runs the expected image (md5 <hex>, boot, rootfs written
+ * 2026-10-14 12:54); pass --force to write it again" (the record's partitions joined ", "; exit 1,
+ * the result line; a fleet names every such board and refuses as a whole). A record with the md5
+ * but without every named row - the G2 bring-up ladder (userdata first, then boot with the same
+ * build, FACTS D3), a daily `--partitions rootfs` followed by `--partitions boot,rootfs` - is NOT
+ * refused: the log says "board S runs the expected image's userdata (md5 <hex>, written <time>);
+ * boot is not recorded as written: writing" and the run goes on. `--force` lifts the refusal
+ * (`--force` without --expect-image is the usage error "--force: only with --expect-image").
+ * flash-soc also logs "image md5: <hex>" after the image lines (the done object: "imageMd5"), so
+ * an agent can pass it next time. commands() gains "inventory" (helpText("inventory") documents it
+ * with two examples).
  */
 class FirmwareCli : public QObject
 {
@@ -166,7 +226,7 @@ public:
     void setJobSetup(std::function<void(FirmwareJob& job)> setup);
 
     // ---- The command line ---------------------------------------------------------------------------
-    static QStringList commands();                            ///< "status", "partitions", ... "pull-flash"
+    static QStringList commands();                            ///< "status", "partitions", ... "pull-flash"; (v0.8.0) "inventory" last
     /// Every option `command` accepts, without the dashes (the common ones included).
     static QStringList commandOptions(const QString& command);
     /// `su-fw --help` (empty `command`) or `su-fw <command> --help`.

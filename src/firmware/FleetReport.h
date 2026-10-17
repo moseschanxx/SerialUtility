@@ -49,6 +49,14 @@
  * every board not left in Loader mode), "adbBack", "leftInLoader", "kernel", "uptime", "boardInfo",
  * "rfmcu".
  *
+ * v0.8.0 additions. json() gains "verify" (verifyAfterWrite(): the run read every written row
+ * back); boardJson() gains "profile" (FleetBoard::profile, "" when unknown), "verified" (names),
+ * "verifyFailed" ("" or the row) and "verifyMismatch" (-1 or the offset into the image). The real
+ * run's table gains the column "verify" between "writing" and "seconds": "-" when the run did not
+ * verify or the board wrote nothing, "ok" when every row in `written` is in `verified` and
+ * verifyFailed is empty, "FAIL <row>" when verifyFailed is set (the detail text has the reason).
+ * Nothing else of the table changes; the dry-run table is unchanged.
+ *
  * exitCode() (the values of FirmwareCli::ExitCode), decided from the boards and the stop text alone
  * so the CLI needs no detection of its own: 5 when aborted (Ctrl+C / --timeout), whatever the
  * boards came to; 3 when noneOnAdb(); 0 when allOk(); else 1 (a board NotBack / Failed / Skipped,
@@ -81,6 +89,7 @@ public:
     void setResetCount(int boards);                                           ///< mapped boards reset back to ADB by a stop or a cancel
     void setUnattributed(const QList<FleetFlasher::UnattributedDevice>& devices);   ///< a dry run: foreignDevices(); a real run: unattributedDevices() (a stop's, the reconciliation's and the end-of-run snapshot's)
     void setAborted(bool aborted);                                            ///< Ctrl+C / --timeout ended the run
+    void setVerifyAfterWrite(bool on);                                        ///< (v0.8.0) the run verified every written row (FleetFlasher::verifyAfterWrite()); the "verify" column and the JSON "verify"
 
     QList<FleetBoard> boards() const;
     bool dryRun() const;
@@ -94,6 +103,7 @@ public:
     int resetCount() const;
     QList<FleetFlasher::UnattributedDevice> unattributed() const;
     bool aborted() const;
+    bool verifyAfterWrite() const;                                            ///< (v0.8.0) default false
 
     Totals totals() const;
     bool allOk() const;                 ///< at least one board, every one Done (Ready in a dry run) and no stop; FALSE for an empty board list
@@ -120,4 +130,5 @@ private:
     int m_resetCount = 0;
     QList<FleetFlasher::UnattributedDevice> m_unattributed;
     bool m_aborted = false;
+    bool m_verifyAfterWrite = false;   ///< (v0.8.0)
 };

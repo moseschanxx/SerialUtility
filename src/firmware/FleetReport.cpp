@@ -262,6 +262,7 @@ QJsonObject FleetReport::boardJson(const FleetBoard& board)
                        {QStringLiteral("adbBack"), board.adbBack},
                        {QStringLiteral("leftInLoader"), board.leftInLoader},
                        {QStringLiteral("kernel"), board.kernel},
+                       {QStringLiteral("profile"), board.profile},   // (v0.8.0) "" = unknown
                        {QStringLiteral("uptime"), board.uptime},
                        {QStringLiteral("boardInfo"), board.boardInfo},
                        {QStringLiteral("rfmcu"), board.rfmcu}};

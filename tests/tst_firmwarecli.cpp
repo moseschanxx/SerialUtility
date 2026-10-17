@@ -25,6 +25,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 
@@ -371,6 +372,17 @@ private slots:
     void pullFlashSilentMcuNeedsTheRole();
     void passwordVariableLeavesTheEnvironment();
 
+    // ---- Board profiles (v0.8.0) -----------------------------------------------------------------------
+    void profileOptionUsage();
+    void statusProfileLines();
+    void partitionsPrintsImageHeaderAndProfile();
+    void flashSocRefusesWrongImage();
+    void flashSocLayoutMismatchNeedsForce();
+    void flashSocLoaderPartitionsNeedForce();
+    void mcuUpdateNeedsConfirmOnStacked();
+    void fleetMixedBenchStopsThroughTheCli();
+    void helpMentionsProfiles();
+
     // ---- The executable ------------------------------------------------------------------------------
     void realExecutable();
 
@@ -489,7 +501,7 @@ void Tst_firmwarecli::versionText()
     QCOMPARE(version.code, 0);
     QCOMPARE(version.out, FirmwareCli::versionText() + QLatin1Char('\n'));
     QVERIFY(version.out.startsWith(QStringLiteral("su-fw " APP_VERSION " (BuildAI Serial Utility, ")));
-    QCOMPARE(QStringLiteral(APP_VERSION), QStringLiteral("0.7.0"));
+    QCOMPARE(QStringLiteral(APP_VERSION), QStringLiteral("0.8.0"));
 }
 
 void Tst_firmwarecli::usageErrorsGoToStderr()
@@ -2804,6 +2816,380 @@ void Tst_firmwarecli::realExecutable()
     QCOMPARE(runIt({QStringLiteral("status"), QStringLiteral("--bogus")}, &out, &err), 2);
     QVERIFY2(out.isEmpty(), out.constData());
     QVERIFY2(err.startsWith("su-fw: Unknown option 'bogus'."), err.constData());
+}
+
+// =======================================================================================
+// Board profiles (v0.8.0)
+// =======================================================================================
+
+namespace {
+
+const QString kCliPowerRefusal =
+    QStringLiteral("the CC1310 of a Stacked (RV1106G2) board holds the SoC's power (SOC_PWR_EN): rebooting it into its bootloader can "
+                   "switch the SoC off and cut the update; refused until confirmed - --confirm-soc-power (the tab: confirm the question) "
+                   "once the carrier's CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later)");
+
+/// The `board.profile` object of a --json status run.
+QJsonObject boardProfileOf(const CliResult& result)
+{
+    bool allParse = false;
+    const QList<QJsonObject> objects = jsonLines(result, &allParse);
+    if (!allParse || objects.isEmpty()) {
+        return QJsonObject();
+    }
+    return objects.last().value(QStringLiteral("board")).toObject().value(QStringLiteral("profile")).toObject();
+}
+
+QJsonObject profileObject(const char* id, const char* name, const char* source, const QString& evidence)
+{
+    return QJsonObject{{QStringLiteral("id"), QLatin1String(id)},
+                       {QStringLiteral("name"), QLatin1String(name)},
+                       {QStringLiteral("source"), QLatin1String(source)},
+                       {QStringLiteral("evidence"), evidence}};
+}
+
+const QString kNodeEvidence = QStringLiteral("7 partitions: env, idblock, uboot, meta, boot, rootfs, userdata");
+
+} // namespace
+
+void Tst_firmwarecli::profileOptionUsage()
+{
+    CliRig rig;
+    const QStringList commands{QStringLiteral("status"),   QStringLiteral("partitions"),   QStringLiteral("flash-soc"),
+                               QStringLiteral("pull-flash"), QStringLiteral("mcu-info"),   QStringLiteral("mcu-update"),
+                               QStringLiteral("mcu-set-role")};
+    for (const QString& command : commands) {
+        QVERIFY2(FirmwareCli::commandOptions(command).contains(QStringLiteral("profile")), qPrintable(command));
+        const CliResult result = rig.run({command, QStringLiteral("--profile"), QStringLiteral("x")});
+        QVERIFY2(result.code == 2, qPrintable(command + QLatin1Char('\n') + result.dump()));
+        QVERIFY2(result.err.startsWith(QStringLiteral("su-fw: --profile: unknown profile \"x\"; known: node, stacked")), qPrintable(result.dump()));
+        QVERIFY(result.out.isEmpty());
+    }
+    QVERIFY(!FirmwareCli::commandOptions(QStringLiteral("pull")).contains(QStringLiteral("profile")));
+    for (const char* option : {"force-layout", "force-loader-partitions"}) {
+        QVERIFY(FirmwareCli::commandOptions(QStringLiteral("flash-soc")).contains(QLatin1String(option)));
+        QVERIFY(FirmwareCli::commandOptions(QStringLiteral("pull-flash")).contains(QLatin1String(option)));
+        QVERIFY(!FirmwareCli::commandOptions(QStringLiteral("mcu-update")).contains(QLatin1String(option)));
+    }
+    for (const char* command : {"mcu-update", "mcu-set-role", "pull-flash"}) {
+        QVERIFY(FirmwareCli::commandOptions(QLatin1String(command)).contains(QStringLiteral("confirm-soc-power")));
+    }
+    QVERIFY(!FirmwareCli::commandOptions(QStringLiteral("flash-soc")).contains(QStringLiteral("confirm-soc-power")));
+    // A fleet skips a board whose layout differs: --force-layout is the single board's.
+    const QString image = makeImage(QStringLiteral("usage/update.img"));
+    const CliResult fleet = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--serials"), kBoardSerial, QStringLiteral("--partitions"),
+                                     QStringLiteral("rootfs"), QStringLiteral("--image"), image, QStringLiteral("--force-layout")});
+    QVERIFY2(fleet.code == 2, qPrintable(fleet.dump()));
+    QVERIFY(fleet.err.startsWith(QStringLiteral("su-fw: --force-layout: the single-board option; a fleet skips a board whose layout differs "
+                                                "(name env among --partitions to write a new layout)")));
+    QVERIFY(rig.runner.invocations().isEmpty());   // nothing ran
+
+    // Accepted: no board answers here, so the 0.7.0 exit codes stand.
+    scriptNoBoard(rig.runner);
+    QCOMPARE(rig.run({QStringLiteral("status"), QStringLiteral("--profile"), QStringLiteral("node")}).code, 3);
+    QCOMPARE(rig.run({QStringLiteral("mcu-info"), QStringLiteral("--profile"), QStringLiteral(" Stacked ")}).code, 3);
+}
+
+void Tst_firmwarecli::statusProfileLines()
+{
+    {
+        CliRig rig;   // the Node's layout from its /proc/cmdline
+        scriptAdbBoard(rig.runner);
+        const CliResult result = rig.run({QStringLiteral("status")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        const QStringList texts = result.texts();
+        const qsizetype layout = texts.indexOf(QStringLiteral("Flash layout of board %1: %2").arg(kBoardSerial, kNodeMtdParts));
+        QVERIFY2(layout >= 0, qPrintable(result.dump()));
+        // The layout read may end before or after the Board line: the profile line follows both.
+        const qsizetype board = texts.indexOf(QStringLiteral("Board: ADB device ") + kBoardSerial);
+        QVERIFY2(board >= 0, qPrintable(result.dump()));
+        const qsizetype profile = texts.indexOf(QStringLiteral("profile: Node (RV1106BG2) - from the board's flash layout (") + kNodeEvidence
+                                                + QLatin1Char(')'));
+        QVERIFY2(profile == std::max(layout, board) + 1, qPrintable(result.dump()));
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 0 (done): ADB device ") + kBoardSerial);   // unchanged
+        const CliResult json = rig.run({QStringLiteral("status"), QStringLiteral("--json")});
+        QCOMPARE(boardProfileOf(json), profileObject("node", "Node (RV1106BG2)", "boardLayout", kNodeEvidence));
+    }
+    QSettings().clear();
+    {
+        CliRig rig;   // a board in Loader mode: its PID, right after the Board line
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), kLdLoaderStacked);
+        const CliResult result = rig.run({QStringLiteral("status")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        const QStringList texts = result.texts();
+        const qsizetype board = texts.indexOf(QRegularExpression(QStringLiteral("^Board: Loader mode .*")));
+        QVERIFY(board >= 0);
+        QCOMPARE(texts.at(board + 1), QStringLiteral("profile: Stacked (RV1106G2) - from the board's Loader PID 0x110c"));
+        QCOMPARE(boardProfileOf(rig.run({QStringLiteral("status"), QStringLiteral("--json")})),
+                 profileObject("stacked", "Stacked (RV1106G2)", "loaderPid", QStringLiteral("0x110c")));
+    }
+    {
+        CliRig rig;   // MASKROM: its PID is the BootROM's - no profile from it
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), kLdMaskrom);
+        const CliResult result = rig.run({QStringLiteral("status")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QVERIFY(result.hasText(QStringLiteral("profile: unknown (no --profile, no Loader PID, product string or flash layout matched a profile)")));
+        QCOMPARE(boardProfileOf(rig.run({QStringLiteral("status"), QStringLiteral("--json")})), profileObject("", "", "", QString()));
+    }
+    for (const bool answers : {false, true}) {
+        QSettings().clear();
+        CliRig rig;   // no mtdparts: the product read, logged, then the line it makes
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), "List of rockusb connected(0)\r\n");
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+        rig.runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 root=/dev/rd0 rootwait\n");
+        if (answers) {
+            rig.runner.addScript(productPattern(), kProductStacked);
+        }
+        const CliResult result = rig.run({QStringLiteral("status"), QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QVERIFY(result.out.contains(QStringLiteral("cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product")));
+        QCOMPARE(rig.runner.count(productPattern()), 1);
+        const QString line = answers ? QStringLiteral("profile: Stacked (RV1106G2) - from the ADB gadget's product string "
+                                                      "rv1106g-stacked-gc2083")
+                                     : QStringLiteral("profile: unknown (no --profile, no Loader PID, product string or flash layout "
+                                                      "matched a profile)");
+        QVERIFY2(result.out.contains(QStringLiteral("\"text\":\"") + line + QLatin1Char('"')), qPrintable(result.dump()));
+        QCOMPARE(boardProfileOf(result), answers ? profileObject("stacked", "Stacked (RV1106G2)", "adbProduct", QStringLiteral("rv1106g-stacked-gc2083"))
+                                                 : profileObject("", "", "", QString()));
+    }
+}
+
+void Tst_firmwarecli::partitionsPrintsImageHeaderAndProfile()
+{
+    {
+        CliRig rig;
+        rig.runner.addHandler(exfPattern(), &nodeExtractor);
+        const QString image = withEnvImage();
+        const CliResult result = rig.run({QStringLiteral("partitions"), QStringLiteral("--image"), image});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        const QStringList texts = result.texts();
+        const qsizetype using_ = texts.indexOf(QStringLiteral("Using the local image ") + QDir::toNativeSeparators(image));
+        QVERIFY(using_ >= 0);
+        QCOMPARE(texts.at(using_ + 1), QStringLiteral("image: update.img, chip tag 110E, built 2026-10-13 21:45:50"));
+        QCOMPARE(texts.at(using_ + 2), QStringLiteral("image profile: Node (RV1106BG2) - from the image's chip tag 110E"));
+        const CliResult json = rig.run({QStringLiteral("partitions"), QStringLiteral("--image"), image, QStringLiteral("--json")});
+        bool allParse = false;
+        const QJsonObject done = jsonLines(json, &allParse).last();
+        QVERIFY(allParse);
+        QCOMPARE(done.value(QStringLiteral("imageHeader")).toObject(),
+                 (QJsonObject{{QStringLiteral("chipTag"), QStringLiteral("110E")},
+                              {QStringLiteral("version"), QStringLiteral("0.0.00")},
+                              {QStringLiteral("buildTime"), QStringLiteral("2026-10-13T21:45:50")}}));
+        QCOMPARE(done.value(QStringLiteral("imageProfile")).toObject(),
+                 profileObject("node", "Node (RV1106BG2)", "chipTag", QStringLiteral("110E")));
+    }
+    {
+        // The stacked fixture: six rows at the stacked sectors (boot 0xF0000 / 12 MiB, userdata 0xCF0000).
+        CliRig rig;
+        rig.runner.addHandler(exfPattern(), &stackedExtractor);
+        const QString image = tempPath(QStringLiteral("stacked-withenv-%1/update.img").arg(m_caseNumber));
+        QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+        const CliResult result = rig.run({QStringLiteral("partitions"), QStringLiteral("--image"), image, QStringLiteral("--json")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        bool allParse = false;
+        const QJsonObject done = jsonLines(result, &allParse).last();
+        QVERIFY(allParse);
+        QCOMPARE(done.value(QStringLiteral("layout")).toString(), kStackedMtdParts);
+        QCOMPARE(done.value(QStringLiteral("imageProfile")).toObject().value(QStringLiteral("id")).toString(), QStringLiteral("stacked"));
+        const QJsonArray rows = done.value(QStringLiteral("partitions")).toArray();
+        QCOMPARE(rows.size(), qsizetype(kStackedPartitionCount));
+        for (int k = 0; k < kStackedPartitionCount; ++k) {
+            const QJsonObject row = rows.at(k).toObject();
+            QCOMPARE(row.value(QStringLiteral("name")).toString(), QLatin1String(kStackedNames[k]));
+            QCOMPARE(row.value(QStringLiteral("offset")).toInteger(), qint64(kStackedSectors[k]) * 512);
+            QCOMPARE(row.value(QStringLiteral("size")).toInteger(), qint64(kStackedSizeSectors[k]) * 512);
+            QVERIFY(row.value(QStringLiteral("writable")).toBool());
+        }
+    }
+}
+
+void Tst_firmwarecli::flashSocRefusesWrongImage()
+{
+    CliRig rig;
+    scriptSocFlash(rig.runner, kLdLoaderStacked);
+    const QString image = makeImage(QStringLiteral("node/update.img"));   // chip tag 110E
+    const CliResult result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"),
+                                      QStringLiteral("boot"), QStringLiteral("--layout"), kStackedMtdParts});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    const QString refusal = QStringLiteral("the image is for another board: its chip tag 110E is the Node (RV1106BG2)'s, the board is Stacked "
+                                           "(RV1106G2) (from the board's Loader PID 0x110c); nothing was written");
+    QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + refusal);
+    QVERIFY(result.hasText(QStringLiteral("profile: Stacked (RV1106G2) - from the board's Loader PID 0x110c")));
+    QVERIFY(wlCommands(rig.runner).isEmpty());
+}
+
+void Tst_firmwarecli::flashSocLayoutMismatchNeedsForce()
+{
+    const QString older = QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),4M(boot),5M(rootfs),2M(userdata)");
+    CliRig rig;
+    scriptSocFlash(rig.runner, kLdLoader);
+    const QString image = withEnvImage();
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--all"),
+                                QStringLiteral("--layout"), older};
+    CliResult result = rig.run(arguments);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): the image's flash layout differs from the board's (image: %1; "
+                                                         "board: %2): refused")
+                                              .arg(kNodeMtdParts, older)),
+             qPrintable(result.lastText()));
+    QVERIFY(wlCommands(rig.runner).isEmpty());
+    result = rig.run(arguments + QStringList{QStringLiteral("--force-layout")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("warning: the image's flash layout differs from the board's; the image's is used (--force-layout). "
+                                          "image: %1; board: %2")
+                               .arg(kNodeMtdParts, older)));
+    QStringList expected;
+    for (int k = 0; k < kNodePartitionCount; ++k) {
+        expected << expectedWl(k, extractDirOf(image));   // the image's sectors
+    }
+    QCOMPARE(wlCommands(rig.runner), expected);
+}
+
+void Tst_firmwarecli::flashSocLoaderPartitionsNeedForce()
+{
+    CliRig rig;
+    scriptSocFlash(rig.runner, kLdLoaderStacked);
+    const QString image = tempPath(QStringLiteral("stacked-withenv-%1/update.img").arg(m_caseNumber));
+    QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+    const QString dir = extractDirOf(image);
+    const QStringList two{QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("idblock,boot")};
+    CliResult result = rig.run(two);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): idblock: loader partition(s) on a Stacked (RV1106G2) "
+                                                         "board, whose MASKROM entry is not documented")),
+             qPrintable(result.lastText()));
+    QVERIFY(wlCommands(rig.runner).isEmpty());
+    result = rig.run(two + QStringList{QStringLiteral("--force-loader-partitions")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("warning: writing loader partition(s) idblock on a Stacked (RV1106G2) board without a documented "
+                                          "MASKROM entry (--force-loader-partitions)")));
+    QCOMPARE(wlCommands(rig.runner), (QStringList{expectedStackedWl(1, dir), expectedStackedWl(4, dir)}));
+    rig.runner.reset();
+    scriptSocFlash(rig.runner, kLdLoaderStacked);
+    result = rig.run({QStringLiteral("flash-soc"), QStringLiteral("--image"), image, QStringLiteral("--partitions"), QStringLiteral("boot")});
+    QVERIFY2(result.code == 0, qPrintable(result.dump()));
+    QVERIFY(!result.out.contains(QStringLiteral("loader partition(s)")));
+    QCOMPARE(wlCommands(rig.runner), QStringList{expectedStackedWl(4, dir)});
+}
+
+void Tst_firmwarecli::mcuUpdateNeedsConfirmOnStacked()
+{
+    FakeMcu mcu;
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    const QRegularExpression forward(QStringLiteral("forward tcp:0"));
+    const QStringList update{QStringLiteral("mcu-update"), QStringLiteral("--package"), dataFile("firmware-0.8.1.pkg"), QStringLiteral("--role"),
+                             QStringLiteral("rx")};
+    const QStringList setRole{QStringLiteral("mcu-set-role"), QStringLiteral("--role"), QStringLiteral("rx")};
+    const auto board = [&bridge](CliRig& rig, const QByteArray& cmdline, bool product) {
+        rig.runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), "List of rockusb connected(0)\r\n");
+        rig.runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), cmdline);
+        if (product) {
+            rig.runner.addScript(productPattern(), kProductStacked);
+        }
+        scriptMcuBridge(rig.runner, bridge.port());
+    };
+    for (const QStringList& command : {update, setRole}) {
+        QSettings().clear();
+        CliRig rig;   // the stacked layout in /proc/cmdline
+        board(rig, kStackedCmdline, false);
+        CliResult result = rig.run(command);
+        QVERIFY2(result.code == 1, qPrintable(result.dump()));
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + kCliPowerRefusal);
+        QCOMPARE(rig.runner.count(forward), 0);
+        result = rig.run(command + QStringList{QStringLiteral("--confirm-soc-power")});
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QVERIFY(result.hasText(QStringLiteral("warning: the CC1310 of a Stacked (RV1106G2) board holds the SoC's power; proceeding as confirmed "
+                                              "(--confirm-soc-power)")));
+        QCOMPARE(rig.runner.count(forward), 1);
+    }
+    {
+        QSettings().clear();
+        CliRig rig;   // no mtdparts, but the board answers its product string
+        board(rig, "console=ttyFIQ0 root=/dev/rd0 rootwait\n", true);
+        const CliResult result = rig.run(update);
+        QVERIFY2(result.code == 1, qPrintable(result.dump()));
+        QVERIFY(result.hasText(QStringLiteral("profile: Stacked (RV1106G2) - from the ADB gadget's product string rv1106g-stacked-gc2083")));
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): ") + kCliPowerRefusal);
+    }
+    {
+        QSettings().clear();
+        CliRig rig;   // neither tells: unknown, the 0.7.0 run
+        board(rig, "console=ttyFIQ0 root=/dev/rd0 rootwait\n", false);
+        const CliResult result = rig.run(update);
+        QVERIFY2(result.code == 0, qPrintable(result.dump()));
+        QCOMPARE(rig.runner.count(forward), 1);
+    }
+    {
+        // pull-flash: a stacked image, the board told by --profile; the MCU step stops with the text.
+        QSettings().clear();
+        ChainRig chain;
+        chain.machine.image = rkfwBytes(256 * 1024, QStringLiteral("1106"));
+        *chain.versionReply = "OK version=0.8.0 role=rx\n";
+        QVERIFY(chain.start(caseDir(QStringLiteral("work"))));
+        const CliResult result =
+            chain.rig.run(chain.arguments(caseDir(QStringLiteral("cache"))) + QStringList{QStringLiteral("--profile"), QStringLiteral("stacked")});
+        QVERIFY2(result.code == 1, qPrintable(result.dump()));
+        QCOMPARE(result.lastText(), QStringLiteral("su-fw: exit 1 (failed): stopped at Update MCU: ") + kCliPowerRefusal);
+        QCOMPARE(chain.rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool UF "))), 1);
+        QCOMPARE(chain.rig.runner.count(forward), 0);
+    }
+}
+
+void Tst_firmwarecli::fleetMixedBenchStopsThroughTheCli()
+{
+    FleetCliRig fleet;
+    fleet.bus.setMtdParts(benchSerial(2), kStackedMtdParts);
+    const QString image = withEnvImage();   // chip tag 110E: the plan is the Node's
+    const QStringList arguments{QStringLiteral("flash-soc"), QStringLiteral("--serials"),
+                                benchSerial(0) + QLatin1Char(',') + benchSerial(1) + QLatin1Char(',') + benchSerial(2),
+                                QStringLiteral("--partitions"), QStringLiteral("rootfs"), QStringLiteral("--image"), image};
+    const QRegularExpression addressedWl(QStringLiteral("^upgrade_tool -s \\S+ WL "));
+    CliResult result = fleet.run(arguments);
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(result.hasText(QStringLiteral("[C %1] profile: Stacked (RV1106G2) - from the board's flash layout (6 partitions: env, idblock, "
+                                          "uboot, meta, boot, userdata)")
+                               .arg(benchSerial(2))));
+    QVERIFY(result.hasText(QStringLiteral("plan profile: Node (RV1106BG2) - from the image's chip tag 110E")));
+    QVERIFY2(result.lastText().startsWith(QStringLiteral("su-fw: exit 1 (failed): mapping stopped: mixed bench: board %1 is Stacked "
+                                                         "(RV1106G2)")
+                                              .arg(benchSerial(2))),
+             qPrintable(result.lastText()));
+    QCOMPARE(fleet.rig.runner.count(addressedWl), 0);
+    // The stop reset A and B: back on ADB before the next run.
+    QTRY_VERIFY(fleet.bus.board(benchSerial(0)).state == FakeUsbBus::State::Adb && fleet.bus.board(benchSerial(1)).state == FakeUsbBus::State::Adb);
+    // --profile node: every board is the plan's; the layout gate skips C instead (exit 1 for the skip).
+    result = fleet.run(arguments + QStringList{QStringLiteral("--profile"), QStringLiteral("node")});
+    QVERIFY2(result.code == 1, qPrintable(result.dump()));
+    QVERIFY(!result.lastText().contains(QStringLiteral("mixed bench")));
+    QVERIFY(result.out.contains(QStringLiteral("flash layout differs from the plan's")));
+    QCOMPARE(fleet.rig.runner.count(addressedWl), 2);   // A and B written
+}
+
+void Tst_firmwarecli::helpMentionsProfiles()
+{
+    const QString help = FirmwareCli::helpText(QStringLiteral("flash-soc"));
+    QVERIFY(help.contains(QStringLiteral("\nBoard profiles: the tool tells the Node (RV1106BG2: chip tag 110E, Loader PID 0x110e, 7\n")));
+    QVERIFY(help.contains(QStringLiteral("\n    su-fw flash-soc --image update.img --partitions rootfs            (Node)\n")));
+    QVERIFY(help.contains(QStringLiteral("\n    su-fw flash-soc --image update.img --partitions boot --profile stacked   (Stacked core)\n")));
+    QCOMPARE(help.count(QStringLiteral("\n  su-fw flash-soc")), qsizetype(2));   // the examples alone
+    const qsizetype examples = help.indexOf(QStringLiteral("Examples:"));
+    QVERIFY(help.indexOf(QStringLiteral("Board profiles:")) < examples);
+    QCOMPARE(help.mid(examples).count(QStringLiteral("\n  su-fw flash-soc")), qsizetype(2));
+    for (const char* option : {"\n  --profile ID ", "\n  --force-layout ", "\n  --force-loader-partitions\n"}) {
+        QVERIFY2(help.contains(QLatin1String(option)), option);
+    }
+    QVERIFY(help.contains(QStringLiteral("a refusal of the board profiles (the wrong image,")));
+    for (const char* command : {"mcu-update", "mcu-set-role", "pull-flash"}) {
+        const QString page = FirmwareCli::helpText(QLatin1String(command));
+        QVERIFY2(page.contains(QStringLiteral("\n  --confirm-soc-power  The CC1310 of the Stacked core holds the SoC's power (SOC_PWR_EN)")), command);
+        QVERIFY2(page.contains(QStringLiteral("without --confirm-soc-power")), command);   // its exit code 1 says so
+    }
+    for (const char* command : {"status", "partitions", "mcu-info"}) {
+        QVERIFY2(FirmwareCli::helpText(QLatin1String(command)).contains(QStringLiteral("\n  --profile ID ")), command);
+    }
+    QVERIFY(FirmwareCli::helpText().startsWith(
+        QStringLiteral("su-fw - flash the BuildAI Node and Stacked boards (RV1106 SoC + CC1310 RF MCU) from a command shell\n")));
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarecli)

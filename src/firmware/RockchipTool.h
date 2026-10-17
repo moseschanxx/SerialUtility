@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QDateTime>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -47,6 +48,45 @@ struct PartitionImage
     bool operator==(const PartitionImage& other) const;
 };
 
+/// (v0.8.0) The fixed header of an RKFW image, read from the file itself - no tool, so the image's
+/// chip tag is known before any upgrade_tool runs and the command lines of a flash stay what they
+/// were (RockchipTool::readRkfwHeader()). Layout, verified on the Node image of 2026-10-13 (SFI
+/// prints the same values): bytes 0-3 "RKFW"; 4-5 header length LE (0x66); 6-9 version (build =
+/// bytes 6-7 LE, minor = byte 8, major = byte 9: "0.0.00"); 0x0e-0x0f year LE, 0x10 month, 0x11
+/// day, 0x12 hour, 0x13 minute, 0x14 second (2026-10-13 21:45:50); 0x15-0x18 the chip code as a
+/// little-endian 32-bit word whose four ASCII bytes read most-significant first: bytes 45 30 31 31
+/// = 0x31313045 = "110E" (the Node, RV1103B); the stacked board's rkImageMaker -RK1106 writes
+/// 0x31313036 = "1106" (RV1106G2_FACTS.md row 20); 0x19-0x1c loader offset, 0x1d-0x20 loader size,
+/// 0x21-0x24 image offset, 0x25-0x28 image size (all LE). Anything beyond the first 0x66 bytes is
+/// not read.
+struct RkfwHeader
+{
+    bool valid = false;      ///< the magic, the length and the chip code were read
+    QString chipTag;         ///< "110E" / "1106" (upper case, four characters)
+    QString version;         ///< "0.0.00" as SFI prints it
+    QDateTime buildTime;     ///< the header's date and time (local, no offset)
+    quint32 loaderOffset = 0;
+    quint32 loaderSize = 0;
+    quint32 imageOffset = 0;
+    quint32 imageSize = 0;
+    bool operator==(const RkfwHeader& other) const;
+};
+
+/// (v0.8.0) What a verify read-back found (RockchipTool::compareReadBack()): the first `bytes` of
+/// the file read back with `RL` against the image written with `WL`.
+struct ReadBackResult
+{
+    QString name;            ///< the partition ("rootfs"); filled by the caller
+    bool ok = false;         ///< every byte of the image equals what was read back
+    qint64 bytes = 0;        ///< the image's length = the compared length (never the partition's)
+    qint64 mismatchOffset = -1;   ///< the first differing byte, as an offset into the image; -1 when ok or not compared
+    quint8 readByte = 0;     ///< the byte read back at mismatchOffset
+    quint8 imageByte = 0;    ///< the image's byte there
+    qint64 milliseconds = 0; ///< the RL's duration; filled by the caller
+    QString error;           ///< why it could not be compared: "short read: 1024 of 3830272 bytes", "cannot read <file>: ...", the RL's failure tail
+    bool operator==(const ReadBackResult& other) const;
+};
+
 /// `upgrade_tool SFI <update.img>`.
 struct RkFirmwareInfo
 {
@@ -61,7 +101,7 @@ struct RkFirmwareInfo
     };
     QString file;            ///< "File:..." line
     QString type;            ///< "Update Firmware"
-    QString chipTag;         ///< "110E"
+    QString chipTag;         ///< "110E" (the Node); "1106" (the stacked RV1106G2 board, v0.8.0)
     QString version;         ///< "0.0.00"
     QString buildTime;       ///< "2026-10-13 21:45:50"
     bool signedImage = false;
@@ -109,6 +149,25 @@ struct RkFirmwareInfo
  * extractFirmware() / upgradeFirmware() / writeLba() / resetDevice() are untouched (the 0.6.0
  * single-board path is byte for byte what it was); `LD` lists every device and takes no `-s`,
  * `EXF` and `SFI` read a file and take none either.
+ *
+ * Reads from the board (v0.8.0; docs/DESIGN.md 4.15 / 4.16), ALL addressed - a read with several
+ * devices in download mode has the same hazard as a write, and the owner's rule is "every RL
+ * carries -s": readLbaOn() is `upgrade_tool -s <id> RL <startSector> <sectorCount> <file>`, the
+ * read-back of WL (the vendor's rkdownload.sh reads the env partition with `RL 0 1 /tmp/env.img`):
+ * the layout read of a board met in Loader mode - the FIRST source SocFlasher tries there, the
+ * vendor's own way - reads the first kEnvPartitionSectors (64 KiB: the env partition starts at
+ * sector 0 on both boards, row 18) and parses it with mtdPartsFromEnvImage(); the verify step reads
+ * ceil(imageSize / 512) sectors from the row's sector and compareReadBack() compares the image's
+ * length - never the partition's, so a jffs2 / erofs image padded on the flash compares over its
+ * own bytes. partitionListOn() is `upgrade_tool -s <id> PL`, the tool's partition table of the
+ * device, the FALLBACK when the env partition holds no layout: its output on a NOR board whose
+ * table lives in env.img is UNVERIFIED (open question 7 of RV1106G2_FACTS.md; parsePartitionList()
+ * is written for the documented shape and refuses anything else, so a tool default never becomes
+ * "the board's layout" - the raw output is logged for the first G2 to answer the question). An RL
+ * is never started while a WL of the same device is in flight (the callers' rule: SocFlasher
+ * writes one row at a time, the fleet keeps one process per board) and is counted like a WL for
+ * the fleet's LD gate. The image's chip tag comes from readRkfwHeader(), a file read: no tool runs
+ * for it.
  */
 class RockchipTool : public QObject
 {
@@ -149,7 +208,9 @@ public:
     /// Loader device `LD` lists - so the single-board flow is right only while `LD` lists ONE
     /// device; a fleet board left in Loader mode is retried by hand through `-s` (the retry lines
     /// FleetFlasher logs), never through `su-fw flash-soc --serial` while another device is in
-    /// download mode.
+    /// download mode. (v0.8.0: SocFlasher enforces this - when its `LD` lists more than one device
+    /// in download mode the flow refuses before EXF, PL / RL or any WL, SocFlasher.h "Several
+    /// devices in download mode"; this command itself is unchanged.)
     ToolInvocation* writeLba(quint64 startSector, quint64 sectorCount, const QString& file);
     ToolInvocation* resetDevice();                       ///< upgrade_tool RD ("Reset Device OK."); unaddressed, as writeLba()
 
@@ -170,6 +231,21 @@ public:
     /// timeout applies, as for resetDevice()). An empty id: Q_ASSERT, and null in a release build
     /// (nothing runs), as writeLbaOn().
     ToolInvocation* resetDeviceOn(const QString& locationId);
+
+    // ---- Addressed reads (v0.8.0: layout-pl implements partitionListOn() / readLbaOn(); verify-rl uses readLbaOn()) ----
+    static constexpr quint64 kEnvPartitionSectors = 128;   ///< 64 KiB / 512: the env partition at sector 0 on both boards
+    /// `upgrade_tool -s <locationId> PL`: the partition table the tool reads from the device, with
+    /// the LD timeout. The same empty-id rule as writeLbaOn(): Q_ASSERT, and null in a release build.
+    ToolInvocation* partitionListOn(const QString& locationId);
+    /// `upgrade_tool -s <locationId> RL <startSector> <sectorCount> <file>`: read sectors from the
+    /// flash into `file` (native path; its folder is created by the caller). No timeout, never
+    /// cancelled, like a WL - a cut RL is harmless, a timed-out one would call a slow read "not
+    /// verified"; the callers log the silence line as for a WL. Runs in `workingDirectory` when
+    /// given, else in the file's folder (upgrade_tool's Log folder, as writeLbaOn()). The same
+    /// empty-id rule as writeLbaOn(); `sectorCount` 0 is refused the same way (null): a read "to
+    /// the end" has no meaning here.
+    ToolInvocation* readLbaOn(const QString& locationId, quint64 startSector, quint64 sectorCount, const QString& file,
+                              const QString& workingDirectory = QString());
 
     // ---- Parsers -------------------------------------------------------------------------
     static QList<RockusbDevice> parseDeviceList(const QString& output);
@@ -200,6 +276,28 @@ public:
     static QString tailForMessage(const QString& output, int count = 8);
     /// True when `path` starts with the RKFW magic (the 4 bytes "RKFW"); false for a missing file.
     static bool isRkfwImage(const QString& path, QString* error = nullptr);
+    /// (v0.8.0) The RkfwHeader of `path` (the layout in its comment): valid when the file starts
+    /// with "RKFW" and holds at least 0x29 bytes; otherwise valid = false with *error ("file not
+    /// found", "not a Rockchip RKFW image", "header truncated"). chipTag is the four ASCII bytes
+    /// of the chip code read most-significant first ("110E"); a code with a non-printable byte
+    /// gives the hex word instead ("0x31313045") so nothing is ever guessed.
+    static RkfwHeader readRkfwHeader(const QString& path, QString* error = nullptr);
+    /// (v0.8.0, layout-pl; UNVERIFIED on NOR boards, open question 7) `upgrade_tool PL`'s output
+    /// as partitions in bytes. Accepted lines: an optional index, then an offset and a size (hex
+    /// "0x..." or decimal, in 512-byte sectors - the unit WL takes) and a name of [A-Za-z0-9_-]+,
+    /// in either order "offset size name" or "name offset size"; the banner, "List of ..." and
+    /// header lines are skipped; a size of 0 or "-" is "to the end" (size 0). The result must have
+    /// at least two entries with strictly ascending offsets and the first at sector 0 (the env on
+    /// both boards); anything else - garbage, a header only, a table that is not the NOR's - is an
+    /// empty list, and the caller falls back to the env read.
+    static QList<MtdPartition> parsePartitionList(const QString& output);
+    /// (v0.8.0, verify-rl) Compare `readBackFile` with `imageFile` over the image's length: ok
+    /// when every byte equals; a shorter read-back is error "short read: <n> of <m> bytes"
+    /// (mismatchOffset -1); the first differing byte fills mismatchOffset / readByte / imageByte;
+    /// a file that cannot be opened is error "cannot read <native path>: <reason>". Streamed in
+    /// 1 MiB blocks (a 12 MiB boot image is compared without loading it). `name` and
+    /// `milliseconds` are left for the caller.
+    static ReadBackResult compareReadBack(const QString& imageFile, const QString& readBackFile);
     /// Parse a Linux mtdparts string: the whole "mtdparts=<dev>:<list>" word, "<dev>:<list>" or
     /// the bare list. Each entry is "<size>(<name>)" or "<size>@<offset>(<name>)"; sizes and
     /// offsets take a K / M / G suffix (1024-based) or are plain bytes; an entry without "@"
@@ -213,7 +311,9 @@ public:
     /// blob (a 4-byte CRC, then NUL-separated "key=value" entries) whose first entry is
     /// "mtdparts=<dev>:<list>" on the Node board. Returns the value without the "mtdparts="
     /// prefix, or an empty string when the file is missing or has no such entry. This is the
-    /// layout the image was built for, so SocFlasher prefers it over the board's (see there).
+    /// layout the image was built for, so SocFlasher prefers it over the board's (see there)
+    /// (v0.8.0: refused unless forced - rule 2 in SocFlasher.h; the same parser reads the env
+    /// partition a Loader-met board's `RL 0 128` brings back).
     static QString mtdPartsFromEnvImage(const QString& envImagePath);
     /// `package-file` of an extracted image: one "<partition>\t<file>" (or space separated) per
     /// line; blank lines and lines starting with '#' skipped. First = partition name, second = file.

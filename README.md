@@ -420,7 +420,20 @@ button. The tab has three sections and a log pane:
 - **SoC** - a status line refreshed every 2 s tells what the PC sees: *ADB device <serial>*,
   *Loader mode*, *Maskrom mode*, *no board*, or - when a Rockchip USB device is plugged in but no
   driver claims it - the hint to install the drivers. The image line shows what `upgrade_tool`
-  says about the selected image (chip, build time, entries).
+  says about the selected image (chip, build time, entries); its tooltip adds the image's RKFW
+  header (chip tag, version, build time) and the image's profile.
+
+  *Board profile* (v0.8.0) - the tool tells the two boards apart: the **Node** (RV1106BG2) and the
+  **Stacked core** (RV1106G2). Next to the status line the *Board profile* box (*Auto-detect*,
+  *Node (RV1106BG2)*, *Stacked (RV1106G2)*; remembered) and a label with what was detected and why:
+  *Profile: Node (RV1106BG2) - from the board's flash layout (7 partitions: ...)*, *... - from the
+  board's Loader PID 0x110c*, *... - from the ADB gadget's product string ...* or *Profile: unknown*.
+  Leave the box on *Auto-detect* unless the tool cannot tell the board; a box that contradicts the
+  Loader PID the board shows fails the flash with *the --profile ... override contradicts the
+  board's Loader PID ...; drop --profile* (set the box back to *Auto-detect*). When a new image is
+  planned and the board's profile is known, the partition table checks the profile's daily
+  partitions only - *rootfs* on the Node, *boot* on the Stacked core (its rootfs lives inside a
+  12 MiB boot) - instead of every row; *All* / *None* and your own checks rule afterwards.
 
   *Partitions* (v0.5.1) lists what the image holds, as SocToolKit's Download page does: the tab
   unpacks it (`upgrade_tool EXF`, into `<image folder>/update.extracted`) and shows one row per
@@ -430,9 +443,10 @@ button. The tab has three sections and a log pane:
   build was made for, and that is the layout the board uses after the flash. An image without one
   falls back to the board's: the tab reads `/proc/cmdline` once from a running board it sees on ADB
   and remembers it per board, and every flash reads it again before `adb reboot loader`. When both
-  are known and differ (a build with a changed partition layout), the image's is used and the log
-  shows both. The label ends with where the layout came from (*layout from the image* / *layout
-  from the board*); its tooltip shows the string. A row the layout does not have, or whose image
+  are known and differ (a build with a changed partition layout), the flash is refused unless
+  --force-layout (the tab asks); the log shows both. The label ends with where the layout came
+  from (*layout from the image* / *layout from the image (the board's differs)* / *layout from the
+  board*); its tooltip shows the string. A row the layout does not have, or whose image
   is larger than its partition, is unchecked and disabled with the reason as its tooltip; with
   neither layout the label says *partition layout unknown: connect the board running once*.
   **All** / **None** set the checkboxes; the label counts the checked rows and their size.
@@ -453,6 +467,14 @@ button. The tab has three sections and a log pane:
   The progress bar follows the bytes written (or UF's own percentage); afterwards the tab waits
   for the board to come back on ADB (60 s) and shows its kernel version and uptime. **Cancel**
   works while waiting, never while `upgrade_tool` writes the flash.
+
+  Before anything is written (and before `adb reboot loader`) the board profiles' rules run
+  (v0.8.0): an image built for the other board is refused (its RKFW chip tag - 110E the Node,
+  1106 the Stacked core - against the board's profile); an image whose flash layout differs from
+  the board's asks *Write anyway?* (**Write the image's layout** / **Cancel**, Cancel is the
+  default); idblock, uboot, env or meta on the Stacked core - which has no documented MASKROM
+  entry, so a bad loader write could not be recovered - ask *Write them anyway?*. Two devices in
+  download mode at once refuse a single-board flash (it writes unaddressed); flash them as a fleet.
 - **MCU (CC1310)** - pick a firmware package (`firmware-x.y.z.pkg`); the header and both CRC32s
   are checked and target, version and size are shown (a bad file is refused with the reason).
   **Read** asks the running MCU for its version and role through ADB; the role (**rx** or **tx**)
@@ -461,7 +483,9 @@ button. The tab has three sections and a log pane:
   per acknowledged block), waits for the restart banner and shows the new version; **Set role**
   changes only the role. The updater protocol (COBS framing, CRC16, the `fw_update.py` state
   machine and its retries) is implemented natively in C++ - nothing runs Python. The MCU path
-  needs `rfmcu` on the SoC, so flash the SoC first.
+  needs `rfmcu` on the SoC, so flash the SoC first. On the Stacked core the CC1310 holds the
+  SoC's power (SOC_PWR_EN): **Update MCU** and **Set role** ask *Proceed?* first - confirm only
+  once the carrier's CC1310 bootloader is known to hold it (the 14 Oct 2026 build or later).
 - **Pull & Flash** - pull (skipped when unchanged) -> Flash SoC with every partition checked (in
   Loader mode it stops before writing anything when one image does not fit) -> wait for ADB -> if
   a package is selected and its version differs from the running MCU version, Update MCU. It stops
@@ -523,15 +547,16 @@ pauses.
 
 | Command | What it does |
 |---|---|
-| `su-fw status [--serial S] [--mcu]` | The board the PC sees: *ADB device ...*, *Loader mode*, *Maskrom mode*, *no board* or the driver hint; a running board's flash layout; `--mcu` adds the CC1310's version and role |
-| `su-fw partitions [--image F] [--layout M \| --serial S]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; the board is not touched |
+| `su-fw status [--serial S] [--mcu] [--profile ID]` | The board the PC sees: *ADB device ...*, *Loader mode*, *Maskrom mode*, *no board* or the driver hint; a running board's flash layout; (0.8.0) the board's profile with its evidence; `--mcu` adds the CC1310's version and role |
+| `su-fw partitions [--image F] [--layout M \| --serial S] [--profile ID]` | The partition table of an image (name, file, offset, partition size, image size, fits, why a row cannot be written) - to choose before flashing; (0.8.0) the image's RKFW header and profile; the board is not touched |
 | `su-fw pull [--target T] [--remote-folder F] [--cache D] [--identity K] [--password-env VAR \| --password-stdin] [--accept-host-key]` | Pull `update.img` from the build machine (skipped when unchanged, the previous one kept) |
-| `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question |
+| `su-fw flash-soc [--image F] (--all \| --partitions boot,rootfs) [--serial S] [--layout M] [--no-wait] [--profile ID] [--force-layout] [--force-loader-partitions]` | Flash the SoC: Loader mode writes the chosen partitions with `WL`, MASKROM mode the whole image with `UF`; a running board gets `adb reboot loader` without a question |
 | `su-fw flash-soc (--serials S1,S2,... \| --all-boards) --partitions rootfs [--image F] [--max-parallel N] [--dry-run] [--layout M] [--no-wait]` | (0.7.0) Flash several boards at once: each one's USB port is learned, then the named partitions are written on up to N boards in parallel, every `upgrade_tool` addressed with `-s <LocationID>`; a table per board at the end (see *Flashing several boards*) |
-| `su-fw mcu-info [--serial S]` | The running CC1310's version and role |
-| `su-fw mcu-update --package P --role rx\|tx [--serial S]` | Update the CC1310 (the role is never guessed) |
-| `su-fw mcu-set-role --role rx\|tx [--serial S]` | Set the CC1310's role |
-| `su-fw pull-flash [pull options] [--package P] [--role rx\|tx] [--serial S] [--layout M]` | The tab's Pull & Flash: pull, flash every partition, wait for ADB, update the CC1310 when the package's version differs; stops at the first failure |
+| `su-fw mcu-info [--serial S] [--profile ID]` | The running CC1310's version and role |
+| `su-fw mcu-update --package P --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Update the CC1310 (the role is never guessed) |
+| `su-fw mcu-set-role --role rx\|tx [--serial S] [--profile ID] [--confirm-soc-power]` | Set the CC1310's role |
+| `su-fw pull-flash [pull options] [--package P] [--role rx\|tx] [--serial S] [--layout M] [--profile ID] [--force-layout] [--force-loader-partitions] [--confirm-soc-power]` | The tab's Pull & Flash: pull, flash every partition, wait for ADB, update the CC1310 when the package's version differs; stops at the first failure |
+| `--profile ID` / `--force-layout` / `--force-loader-partitions` / `--confirm-soc-power` | (0.8.0) The attached board when the tool cannot tell it (`node`, `stacked`; anything else is usage error 2) / write an image whose flash layout differs from the board's / write idblock, uboot, env or meta on the Stacked core / update or re-role the Stacked core's CC1310 - see *Board profiles* below |
 
 Every command also takes `--tools DIR` (default: the app's tool paths, then `tools/` next to
 su-fw), `--log FILE` (append every line, also with `--quiet`), `--json`, `--quiet` (only the
@@ -584,6 +609,48 @@ su-fw pull-flash --target builder@10.0.10.71 --password-env SU_PASSWORD --accept
 `su-fw pull ...`, then `su-fw flash-soc --partitions boot,rootfs`. su-fw prints English only (its
 output is read by scripts); `QT_LOGGING_RULES="buildai.*=true"` adds the internal diagnostics on
 stderr.
+
+**Board profiles (v0.8.0).** su-fw knows two boards and tells them apart by evidence, never by
+guessing:
+
+- **Node** (`node`, RV1106BG2): RKFW chip tag `110E`, U-Boot Loader PID `0x110e`, 7 partitions
+  (`...,3M(boot),5M(rootfs),3M(userdata)`), a daily update writes `rootfs`, MASKROM button.
+- **Stacked core** (`stacked`, RV1106G2): chip tag `1106`, Loader PID `0x110c`, 6 partitions with
+  the erofs rootfs inside a 12 MiB `boot` (`...,12M(boot),3M(userdata)`), a daily update writes
+  `boot`; no documented MASKROM entry; its CC1310 holds the SoC's power (SOC_PWR_EN).
+
+The board's profile comes from `--profile` (when given), its Loader PID (a board in Loader mode;
+a MASKROM device's PID is the BootROM's and is no evidence), the ADB gadget's product string (read
+with `adb shell cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product` only when the
+board's `/proc/cmdline` layout tells nothing) or its flash layout; the image's from its RKFW header
+(no tool runs for it) or its `env.img` layout. Both are logged with their evidence -
+`profile: Node (RV1106BG2) - from the board's flash layout (7 partitions: ...)`,
+`image profile: Stacked (RV1106G2) - from the image's chip tag 1106` - and an unknown profile makes
+the rules that need it inert (logged as `profile: unknown (...)`). Four refusals, each exit 1 with
+its text as the result:
+
+1. an image for the other board (no override: a wrong image is never written);
+2. an image whose flash layout differs from the board's - `--force-layout` writes it anyway (the
+   0.5.1 "the image's wins" is gone);
+3. idblock / uboot / env / meta on the Stacked core - `--force-loader-partitions`;
+4. `mcu-update` / `mcu-set-role` / pull-flash's MCU step on the Stacked core -
+   `--confirm-soc-power`, once its CC1310 bootloader is known to hold SOC_PWR_EN (14 Oct 2026 or
+   later).
+
+`--profile` that contradicts a Loader PID the board shows is refused too (`... drop --profile`), and
+a fleet stops before anything is written when a board's profile differs from the plan's
+(`mapping stopped: mixed bench: ...`; name boards of one profile with `--serials`). The JSON:
+`status`'s `board.profile` = `{"id","name","source","evidence"}` (source `option` / `loaderPid` /
+`adbProduct` / `boardLayout`; all `""` when unknown); `partitions`, `flash-soc` and `pull-flash`
+carry `imageHeader` (`chipTag`, `version`, `buildTime`) and `imageProfile`; a fleet's
+`boards[].profile` is the id. Agent recipe:
+
+```powershell
+su-fw status --json                               # board.profile.id: "node", "stacked" or ""
+su-fw partitions --image update.img --json        # imageProfile.id must equal board.profile.id
+su-fw flash-soc --image update.img --partitions boot --json                      # the Stacked core's daily update
+su-fw flash-soc --image update.img --partitions boot --profile stacked --json    # only when status said ""
+```
 
 #### Flashing several boards (`--serials` / `--all-boards`, v0.7.0)
 

@@ -159,6 +159,21 @@ bool PartitionImage::operator==(const PartitionImage& o) const
            && inLayout == o.inLayout && fits == o.fits && selected == o.selected;
 }
 
+bool RkfwHeader::operator==(const RkfwHeader& o) const
+{
+    return valid == o.valid && chipTag == o.chipTag && version == o.version && buildTime == o.buildTime
+           && loaderOffset == o.loaderOffset && loaderSize == o.loaderSize && imageOffset == o.imageOffset
+           && imageSize == o.imageSize;
+}
+
+// (v0.8.0) Defined here because the signals that carry a ReadBackResult (SocFlasher, FleetFlasher,
+// FirmwareJob) register its meta type, and Qt's meta type takes the operator it finds declared.
+bool ReadBackResult::operator==(const ReadBackResult& o) const
+{
+    return name == o.name && ok == o.ok && bytes == o.bytes && mismatchOffset == o.mismatchOffset && readByte == o.readByte
+           && imageByte == o.imageByte && milliseconds == o.milliseconds && error == o.error;
+}
+
 QString RkFirmwareInfo::summary() const
 {
     if (!isValid()) {
@@ -461,6 +476,84 @@ bool RockchipTool::isRkfwImage(const QString& path, QString* error)
         return false;
     }
     return true;
+}
+
+namespace {
+
+/// The RKFW header's fixed part (RockchipTool.h, RkfwHeader): its length and the bytes the fields
+/// need (up to the end of the image size at 0x25..0x28).
+constexpr qint64 kRkfwHeaderBytes = 0x66;
+constexpr qsizetype kRkfwFieldsEnd = 0x29;
+
+quint32 littleEndian32(const QByteArray& bytes, qsizetype at)
+{
+    return static_cast<quint32>(static_cast<quint8>(bytes.at(at))) | (static_cast<quint32>(static_cast<quint8>(bytes.at(at + 1))) << 8)
+           | (static_cast<quint32>(static_cast<quint8>(bytes.at(at + 2))) << 16)
+           | (static_cast<quint32>(static_cast<quint8>(bytes.at(at + 3))) << 24);
+}
+
+quint16 littleEndian16(const QByteArray& bytes, qsizetype at)
+{
+    return static_cast<quint16>(static_cast<quint8>(bytes.at(at)) | (static_cast<quint8>(bytes.at(at + 1)) << 8));
+}
+
+} // namespace
+
+RkfwHeader RockchipTool::readRkfwHeader(const QString& path, QString* error)
+{
+    RkfwHeader header;
+    const auto fail = [&header, error](const QString& reason) {
+        if (error) {
+            *error = reason;
+        }
+        return header;
+    };
+    if (error) {
+        error->clear();
+    }
+    QFile file(path);
+    if (path.isEmpty() || !file.exists()) {
+        return fail(QCoreApplication::translate("RockchipTool", "file not found"));
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        return fail(QCoreApplication::translate("RockchipTool", "cannot read %1: %2").arg(QDir::toNativeSeparators(path), file.errorString()));
+    }
+    const QByteArray bytes = file.read(kRkfwHeaderBytes);
+    if (!bytes.startsWith(QByteArrayLiteral("RKFW"))) {
+        return fail(QCoreApplication::translate("RockchipTool", "not a Rockchip RKFW image"));
+    }
+    if (bytes.size() < kRkfwFieldsEnd) {
+        return fail(QCoreApplication::translate("RockchipTool", "header truncated"));
+    }
+    // The chip code: a little-endian word whose four ASCII bytes read most-significant first
+    // ("110E" is stored as 45 30 31 31). A byte that is no printable character is never read as
+    // a letter: the whole word is shown in hex instead.
+    const quint32 code = littleEndian32(bytes, 0x15);
+    QString tag;
+    bool printable = true;
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        const auto byte = static_cast<quint8>((code >> shift) & 0xFFu);
+        if (byte < 0x20 || byte > 0x7E) {
+            printable = false;
+            break;
+        }
+        tag += QLatin1Char(static_cast<char>(byte));
+    }
+    header.chipTag = printable ? tag.toUpper() : QStringLiteral("0x%1").arg(code, 8, 16, QLatin1Char('0'));
+    const auto byteAt = [&bytes](qsizetype at) { return static_cast<int>(static_cast<quint8>(bytes.at(at))); };
+    const auto build = static_cast<int>(littleEndian16(bytes, 6));
+    header.version = QStringLiteral("%1.%2.%3").arg(byteAt(9)).arg(byteAt(8)).arg(build, 2, 10, QLatin1Char('0'));
+    const QDate date(static_cast<int>(littleEndian16(bytes, 0x0e)), byteAt(0x10), byteAt(0x11));
+    const QTime time(byteAt(0x12), byteAt(0x13), byteAt(0x14));
+    if (date.isValid() && time.isValid()) {
+        header.buildTime = QDateTime(date, time);
+    }
+    header.loaderOffset = littleEndian32(bytes, 0x19);
+    header.loaderSize = littleEndian32(bytes, 0x1d);
+    header.imageOffset = littleEndian32(bytes, 0x21);
+    header.imageSize = littleEndian32(bytes, 0x25);
+    header.valid = true;
+    return header;
 }
 
 // ---------------------------------------------------------------------------------------------

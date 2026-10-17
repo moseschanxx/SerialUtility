@@ -189,6 +189,64 @@
     </message>
 </context>
 <context>
+    <name>BoardProfile</name>
+    <message>
+        <location filename="../src/firmware/BoardProfile.cpp" line="+108"/>
+        <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
+        <translation>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>No board found: the %1 board has no documented MASKROM entry: put it into Loader mode from a running system (adb reboot loader, or &quot;reboot loader&quot; on its console); waiting up to %2 s</source>
+        <translation>No board found: the %1 board has no documented MASKROM entry: put it into Loader mode from a running system (adb reboot loader, or &quot;reboot loader&quot; on its console); waiting up to %2 s</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>; on the stacked board the CC1310 may have cut the SoC&apos;s power: power-cycle it, then retry</source>
+        <translation>; on the stacked board the CC1310 may have cut the SoC&apos;s power: power-cycle it, then retry</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>set by --profile %1 (or the Board profile box)</source>
+        <translation>set by --profile %1 (or the Board profile box)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>from the image&apos;s chip tag %1</source>
+        <translation>from the image&apos;s chip tag %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>from the board&apos;s Loader PID %1</source>
+        <translation>from the board&apos;s Loader PID %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>from the ADB gadget&apos;s product string %1</source>
+        <translation>from the ADB gadget&apos;s product string %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>from the board&apos;s flash layout (%1)</source>
+        <translation>from the board&apos;s flash layout (%1)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>from the image&apos;s env.img layout (%1)</source>
+        <translation>from the image&apos;s env.img layout (%1)</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>profile: unknown (no --profile, no Loader PID, product string or flash layout matched a profile)</source>
+        <translation>profile: unknown (no --profile, no Loader PID, product string or flash layout matched a profile)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>profile: %1 - %2</source>
+        <translation>profile: %1 - %2</translation>
+    </message>
+</context>
+<context>
     <name>CommandInput</name>
     <message>
         <location filename="../src/ui/CommandInput.cpp" line="+106"/>
@@ -505,7 +563,7 @@
 <context>
     <name>FirmwareJob</name>
     <message>
-        <location filename="../src/firmware/FirmwareJob.cpp" line="+329"/>
+        <location filename="../src/firmware/FirmwareJob.cpp" line="+391"/>
         <source>SSH: %1</source>
         <translation>SSH: %1</translation>
     </message>
@@ -530,7 +588,7 @@
         <translation>Pulling update.img: %1</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+44"/>
         <source>Flashing SoC: %1 %2 %</source>
         <translation>Flashing SoC: %1 %2 %</translation>
     </message>
@@ -615,12 +673,37 @@
         <translation>Package %1: %2</translation>
     </message>
     <message>
-        <location line="+37"/>
+        <location line="+41"/>
         <source>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</source>
         <translation>No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); waiting up to %1 s</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+130"/>
+        <source>image: %1, chip tag %2, built %3</source>
+        <translation>image: %1, chip tag %2, built %3</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>image: %1, chip tag %2</source>
+        <translation>image: %1, chip tag %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>image: %1: RKFW header unreadable (%2)</source>
+        <translation>image: %1: RKFW header unreadable (%2)</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Board %1 reports no ADB gadget product string</source>
+        <translation>Board %1 reports no ADB gadget product string</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ADB gadget product string of board %1: %2</source>
+        <translation>ADB gadget product string of board %1: %2</translation>
+    </message>
+    <message>
+        <location line="+24"/>
         <source>Pull</source>
         <translation>Pull</translation>
     </message>
@@ -661,12 +744,12 @@
     </message>
     <message>
         <location line="+0"/>
-        <location line="+546"/>
+        <location line="+571"/>
         <source>%1 failed: %2</source>
         <translation>%1 failed: %2</translation>
     </message>
     <message>
-        <location line="-502"/>
+        <location line="-527"/>
         <source>the SSH profile of the build machine no longer exists</source>
         <translation>the SSH profile of the build machine no longer exists</translation>
     </message>
@@ -686,12 +769,12 @@
         <translation>authentication failed: nobody answered &quot;%1&quot;</translation>
     </message>
     <message>
-        <location line="+62"/>
+        <location line="+63"/>
         <source>upgrade_tool not found</source>
         <translation>upgrade_tool not found</translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+47"/>
         <source>Partitions of %1: %2</source>
         <translation>Partitions of %1: %2</translation>
     </message>
@@ -706,7 +789,7 @@
         <translation>Cannot list the partitions of %1: %2</translation>
     </message>
     <message>
-        <location line="+64"/>
+        <location line="+68"/>
         <source>Cannot read the flash layout of board %1: %2</source>
         <translation>Cannot read the flash layout of board %1: %2</translation>
     </message>
@@ -716,12 +799,12 @@
         <translation>Board %1 reports no flash layout (no mtdparts in /proc/cmdline)</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+2"/>
         <source>Flash layout of board %1: %2</source>
         <translation>Flash layout of board %1: %2</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+36"/>
         <source>partition layout unknown: connect the board running once</source>
         <translation>partition layout unknown: connect the board running once</translation>
     </message>
@@ -747,12 +830,12 @@
     </message>
     <message>
         <location line="+16"/>
-        <location line="+1033"/>
+        <location line="+1116"/>
         <source>another firmware operation is running (%1)</source>
         <translation>another firmware operation is running (%1)</translation>
     </message>
     <message>
-        <location line="-1027"/>
+        <location line="-1110"/>
         <source>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</source>
         <translation>Cannot create the lock file %1: another firmware operation on this PC would not be noticed</translation>
     </message>
@@ -803,7 +886,9 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+485"/>
+        <location line="+350"/>
+        <location line="+106"/>
+        <location line="+112"/>
         <location line="+36"/>
         <location line="+226"/>
         <location line="+10"/>
@@ -812,7 +897,7 @@
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="-768"/>
+        <location line="-851"/>
         <location line="+11"/>
         <source>the connection to %1 closed</source>
         <translation>the connection to %1 closed</translation>
@@ -829,7 +914,7 @@
     </message>
     <message>
         <location line="+42"/>
-        <location line="+173"/>
+        <location line="+180"/>
         <source>no image: pull one or choose a local image first</source>
         <translation>no image: pull one or choose a local image first</translation>
     </message>
@@ -945,7 +1030,7 @@
         <translation>boards written at once must be 0 (all of them) to 64, not %1</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+74"/>
         <source>Flashing fleet: starting...</source>
         <translation>Flashing fleet: starting...</translation>
     </message>
@@ -970,7 +1055,7 @@
         <translation>choose the MCU role (rx or tx) first: it is never guessed</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+37"/>
         <source>Updating the MCU with %1 (role %2)</source>
         <translation>Updating the MCU with %1 (role %2)</translation>
     </message>
@@ -1093,7 +1178,17 @@
         <translation>Cancelling %1</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="-2472"/>
+        <source>image profile: unknown (no chip tag or env.img layout matched a profile)</source>
+        <translation>image profile: unknown (no chip tag or env.img layout matched a profile)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>image profile: %1 - %2</source>
+        <translation>image profile: %1 - %2</translation>
+    </message>
+    <message>
+        <location line="+2513"/>
         <source>Roll back failed: %1</source>
         <translation>Roll back failed: %1</translation>
     </message>
@@ -1116,12 +1211,42 @@
 <context>
     <name>FirmwareTab</name>
     <message>
-        <location filename="../src/ui/FirmwareTab.cpp" line="+611"/>
+        <location filename="../src/ui/FirmwareTab.cpp" line="+644"/>
         <source>Choose the Local Image Cache</source>
         <translation>Choose the Local Image Cache</translation>
     </message>
     <message>
-        <location line="+113"/>
+        <location line="+127"/>
+        <source>Write anyway?</source>
+        <translation>Write anyway?</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Write the image&apos;s layout</source>
+        <translation>Write the image&apos;s layout</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Write them anyway?</source>
+        <translation>Write them anyway?</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Write them</source>
+        <translation>Write them</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Confirm only once the carrier&apos;s CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later). Proceed?</source>
+        <translation>Confirm only once the carrier&apos;s CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later). Proceed?</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Proceed</source>
+        <translation>Proceed</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>Source</source>
         <translation>Source</translation>
     </message>
@@ -1192,12 +1317,12 @@
     </message>
     <message>
         <location line="+1"/>
-        <location line="+8"/>
+        <location line="+13"/>
         <source>Image:</source>
         <translation>Image:</translation>
     </message>
     <message>
-        <location line="-7"/>
+        <location line="-12"/>
         <source>Roll back</source>
         <translation>Roll back</translation>
     </message>
@@ -1215,6 +1340,26 @@
         <location line="+1"/>
         <source>Device:</source>
         <translation>Device:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Board profile:</source>
+        <translation>Board profile:</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Auto-detect</source>
+        <translation>Auto-detect</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The attached board when the tool cannot tell it; Auto-detect reads it from the board&apos;s Loader PID, product string or flash layout</source>
+        <translation>The attached board when the tool cannot tell it; Auto-detect reads it from the board&apos;s Loader PID, product string or flash layout</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Verify after writing</source>
+        <translation>Verify after writing</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -1288,11 +1433,12 @@
     </message>
     <message>
         <location line="+3"/>
+        <location line="+732"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-731"/>
         <source>Stop the running step (not while upgrade_tool writes the flash)</source>
         <translation>Stop the running step (not while upgrade_tool writes the flash)</translation>
     </message>
@@ -1407,12 +1553,12 @@
         <translation>Ready</translation>
     </message>
     <message>
-        <location line="+51"/>
+        <location line="+57"/>
         <source>Firmware</source>
         <translation>Firmware</translation>
     </message>
     <message>
-        <location line="+356"/>
+        <location line="+360"/>
         <source>no image yet: pull one from the build machine or use a local image</source>
         <translation>no image yet: pull one from the build machine or use a local image</translation>
     </message>
@@ -1433,7 +1579,7 @@
         <translation>previous: %1</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>upgrade_tool not found: no image details</source>
         <translation>upgrade_tool not found: no image details</translation>
     </message>
@@ -1489,7 +1635,7 @@
         <translation>%1 partitions, %2 selected (%3)</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+147"/>
         <source>not checked yet</source>
         <translation>not checked yet</translation>
     </message>
@@ -1544,7 +1690,8 @@
         <translation>adb: %1</translation>
     </message>
     <message>
-        <location line="+103"/>
+        <location line="-146"/>
+        <location line="+249"/>
         <source>Firmware Update</source>
         <translation>Firmware Update</translation>
     </message>
@@ -1569,22 +1716,22 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>No, use the MASKROM button</translation>
     </message>
     <message>
-        <location line="-1549"/>
+        <location line="-1730"/>
         <source>to the end</source>
         <translation>to the end</translation>
     </message>
     <message>
-        <location line="+229"/>
+        <location line="+242"/>
         <source>Role %1 remembered from the last session: click it or press Read to confirm it</source>
         <translation>Role %1 remembered from the last session: click it or press Read to confirm it</translation>
     </message>
     <message>
-        <location line="+446"/>
+        <location line="+500"/>
         <source>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</source>
         <translation>Write the image to the Rockchip SoC over the USB-C cable: the checked partitions in Loader mode, the whole image in MASKROM mode</translation>
     </message>
     <message>
-        <location line="+597"/>
+        <location line="+608"/>
         <source>layout from the board</source>
         <translation>layout from the board</translation>
     </message>
@@ -1614,7 +1761,37 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>Flash layout from the board: %1</translation>
     </message>
     <message>
-        <location line="+362"/>
+        <location line="+32"/>
+        <source>Profile: %1 - %2</source>
+        <translation>Profile: %1 - %2</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Profile: unknown</source>
+        <translation>Profile: unknown</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>RKFW header: chip tag %1, version %2, built %3</source>
+        <translation>RKFW header: chip tag %1, version %2, built %3</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>RKFW header unreadable</source>
+        <translation>RKFW header unreadable</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Image profile: %1 - %2</source>
+        <translation>Image profile: %1 - %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Image profile: unknown</source>
+        <translation>Image profile: unknown</translation>
+    </message>
+    <message>
+        <location line="+406"/>
         <source>Choose a Rockchip Update Image</source>
         <translation>Choose a Rockchip Update Image</translation>
     </message>
@@ -1682,7 +1859,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>internal: unaddressed write refused</translation>
     </message>
     <message>
-        <location line="+130"/>
+        <location line="+131"/>
         <source>no change on the USB bus yet: the board is still on ADB</source>
         <translation>no change on the USB bus yet: the board is still on ADB</translation>
     </message>
@@ -1742,7 +1919,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>in Loader mode on port %1, LocationID %2</translation>
     </message>
     <message>
-        <location line="+238"/>
+        <location line="+242"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -1763,18 +1940,18 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+22"/>
-        <location line="+429"/>
+        <location line="+431"/>
         <source>upgrade_tool could not be run: %1</source>
         <translation>upgrade_tool could not be run: %1</translation>
     </message>
     <message>
-        <location line="-427"/>
-        <location line="+431"/>
+        <location line="-429"/>
+        <location line="+433"/>
         <source>upgrade_tool LD timed out</source>
         <translation>upgrade_tool LD timed out</translation>
     </message>
     <message>
-        <location line="-393"/>
+        <location line="-395"/>
         <source>left in Loader mode on port %1, LocationID %2: nothing else is written to it. Retry by hand, addressed: one `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;` per missing row, then `upgrade_tool -s %2 RD` (the lines follow); `su-fw flash-soc --serial %3` only once `upgrade_tool LD` lists it as the ONLY device in download mode (the single-board flow writes without -s and takes any Loader device)</source>
         <translation>left in Loader mode on port %1, LocationID %2: nothing else is written to it. Retry by hand, addressed: one `upgrade_tool -s %2 WL &lt;sector&gt; &lt;count&gt; &lt;file&gt;` per missing row, then `upgrade_tool -s %2 RD` (the lines follow); `su-fw flash-soc --serial %3` only once `upgrade_tool LD` lists it as the ONLY device in download mode (the single-board flow writes without -s and takes any Loader device)</translation>
     </message>
@@ -1834,6 +2011,11 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>Dry run: the selection, the remembered ports and the plan; no reboot, no write</translation>
     </message>
     <message>
+        <location line="+2"/>
+        <source>Dry run: the boards&apos; profiles are read before their reboot in a real run</source>
+        <translation>Dry run: the boards&apos; profiles are read before their reboot in a real run</translation>
+    </message>
+    <message>
         <location line="+14"/>
         <source>%1 (%2 bytes)</source>
         <translation>%1 (%2 bytes)</translation>
@@ -1871,12 +2053,12 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+4"/>
-        <location line="+548"/>
+        <location line="+577"/>
         <source>adb devices timed out</source>
         <translation>adb devices timed out</translation>
     </message>
     <message>
-        <location line="-536"/>
+        <location line="-565"/>
         <source>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</source>
         <translation>adb lists %1 as &apos;%2&apos;: not selected (--all-boards takes the boards in state &quot;device&quot;)</translation>
     </message>
@@ -2006,13 +2188,23 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>Plan: write %1 on %2 boards, up to %3 at once</translation>
     </message>
     <message>
-        <location line="+53"/>
-        <location line="+305"/>
+        <location line="+5"/>
+        <source>plan profile: %1 - %2</source>
+        <translation>plan profile: %1 - %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>plan profile: unknown; the profile gate is off</source>
+        <translation>plan profile: unknown; the profile gate is off</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <location line="+342"/>
         <source>cancelled before its reboot; not touched</source>
         <translation>cancelled before its reboot; not touched</translation>
     </message>
     <message>
-        <location line="-291"/>
+        <location line="-328"/>
         <source>board running %1, rebooting it into Loader mode</source>
         <translation>board running %1, rebooting it into Loader mode</translation>
     </message>
@@ -2042,7 +2234,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>flash layout of the board: %1</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+21"/>
         <source>no flash layout in its /proc/cmdline: not a board this plan can place its rows on; name it with --serials to write it anyway</source>
         <translation>no flash layout in its /proc/cmdline: not a board this plan can place its rows on; name it with --serials to write it anyway</translation>
     </message>
@@ -2113,12 +2305,13 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation> (moved: expected %1)</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+44"/>
+        <location line="+13"/>
         <source>mapping stopped: resetting the board back to ADB</source>
         <translation>mapping stopped: resetting the board back to ADB</translation>
     </message>
     <message>
-        <location line="+149"/>
+        <location line="+151"/>
         <location line="+533"/>
         <source>port %1 shows %2</source>
         <translation>port %1 shows %2</translation>
@@ -2134,7 +2327,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>cancelled: resetting the board back to ADB</translation>
     </message>
     <message>
-        <location line="-105"/>
+        <location line="-107"/>
         <source>reconciled: %1 devices in download mode, every one a mapped board</source>
         <translation>reconciled: %1 devices in download mode, every one a mapped board</translation>
     </message>
@@ -2165,23 +2358,23 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
     </message>
     <message>
         <location line="+7"/>
-        <location line="+913"/>
+        <location line="+915"/>
         <source>; it is in Loader mode now (port %1, LocationID %2)</source>
         <translation>; it is in Loader mode now (port %1, LocationID %2)</translation>
     </message>
     <message>
-        <location line="-912"/>
-        <location line="+916"/>
+        <location line="-914"/>
+        <location line="+918"/>
         <source>; it is in Loader mode now (port %1)</source>
         <translation>; it is in Loader mode now (port %1)</translation>
     </message>
     <message>
-        <location line="-912"/>
+        <location line="-914"/>
         <source>a Loader device appeared late %1 and belongs to no mapped board</source>
         <translation>a Loader device appeared late %1 and belongs to no mapped board</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+42"/>
         <source>reset back to ADB; nothing was written</source>
         <translation>reset back to ADB; nothing was written</translation>
     </message>
@@ -2204,7 +2397,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>timed out</translation>
     </message>
     <message>
-        <location line="-1671"/>
+        <location line="-1730"/>
         <source>an ADB device</source>
         <translation>an ADB device</translation>
     </message>
@@ -2214,7 +2407,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>nothing</translation>
     </message>
     <message>
-        <location line="+1156"/>
+        <location line="+1215"/>
         <source>cancelled before its write started</source>
         <translation>cancelled before its write started</translation>
     </message>
@@ -2420,7 +2613,7 @@ Send &quot;reboot loader&quot; through the connected session %1 so the board res
         <translation>still in Loader mode on port %1, LocationID %2: reset it by hand with `%3` (the line follows)</translation>
     </message>
     <message>
-        <location line="+154"/>
+        <location line="+164"/>
         <source>port mapping not available on this platform</source>
         <translation>port mapping not available on this platform</translation>
     </message>
@@ -4498,6 +4691,69 @@ Quitting now stops it: a board left in Loader mode needs a replug, and an interr
     </message>
 </context>
 <context>
+    <name>ProfileRules</name>
+    <message>
+        <location filename="../src/firmware/BoardProfile.cpp" line="+162"/>
+        <source>its chip tag %1</source>
+        <translation>its chip tag %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>its env.img layout (%1)</source>
+        <translation>its env.img layout (%1)</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>it</source>
+        <translation>it</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>the image is for another board: %1 is the %2&apos;s, the board is %3 (%4); nothing was written</source>
+        <translation>the image is for another board: %1 is the %2&apos;s, the board is %3 (%4); nothing was written</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used (--force-layout). image: %1; board: %2</source>
+        <translation>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used (--force-layout). image: %1; board: %2</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the image&apos;s flash layout differs from the board&apos;s (image: %1; board: %2): refused, the image&apos;s layout would be written over a board laid out differently; --force-layout (the tab: confirm the question) writes it anyway; nothing was written</source>
+        <translation>the image&apos;s flash layout differs from the board&apos;s (image: %1; board: %2): refused, the image&apos;s layout would be written over a board laid out differently; --force-layout (the tab: confirm the question) writes it anyway; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>warning: writing loader partition(s) %1 on a %2 board without a documented MASKROM entry (--force-loader-partitions)</source>
+        <translation>warning: writing loader partition(s) %1 on a %2 board without a documented MASKROM entry (--force-loader-partitions)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>%1: loader partition(s) on a %2 board, whose MASKROM entry is not documented: a bad write could not be recovered; refused until the MASKROM route is known - --force-loader-partitions (the tab: confirm the question) writes them anyway; nothing was written</source>
+        <translation>%1: loader partition(s) on a %2 board, whose MASKROM entry is not documented: a bad write could not be recovered; refused until the MASKROM route is known - --force-loader-partitions (the tab: confirm the question) writes them anyway; nothing was written</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>warning: the CC1310 of a %1 board holds the SoC&apos;s power; proceeding as confirmed (--confirm-soc-power)</source>
+        <translation>warning: the CC1310 of a %1 board holds the SoC&apos;s power; proceeding as confirmed (--confirm-soc-power)</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>the CC1310 of a %1 board holds the SoC&apos;s power (SOC_PWR_EN): rebooting it into its bootloader can switch the SoC off and cut the update; refused until confirmed - --confirm-soc-power (the tab: confirm the question) once the carrier&apos;s CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later)</source>
+        <translation>the CC1310 of a %1 board holds the SoC&apos;s power (SOC_PWR_EN): rebooting it into its bootloader can switch the SoC off and cut the update; refused until confirmed - --confirm-soc-power (the tab: confirm the question) once the carrier&apos;s CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later)</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>mixed bench: board %1 is %2 (%3) but the plan is for %4 (%5); one profile per run: name boards of one profile with --serials</source>
+        <translation>mixed bench: board %1 is %2 (%3) but the plan is for %4 (%5); one profile per run: name boards of one profile with --serials</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>the --profile %1 override contradicts the board&apos;s Loader PID %2 (the %3&apos;s); drop --profile</source>
+        <translation>the --profile %1 override contradicts the board&apos;s Loader PID %2 (the %3&apos;s); drop --profile</translation>
+    </message>
+</context>
+<context>
     <name>QuickCommandBar</name>
     <message>
         <location filename="../src/ui/QuickCommandBar.cpp" line="+223"/>
@@ -5175,7 +5431,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>RkFirmwareInfo</name>
     <message>
-        <location filename="../src/firmware/RockchipTool.cpp" line="+169"/>
+        <location filename="../src/firmware/RockchipTool.cpp" line="+184"/>
         <source>chip %1</source>
         <translation>chip %1</translation>
     </message>
@@ -5209,12 +5465,13 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+8"/>
-        <location line="+221"/>
+        <location line="+56"/>
+        <location line="+243"/>
         <source>cannot read %1: %2</source>
         <translation>cannot read %1: %2</translation>
     </message>
     <message>
-        <location line="-219"/>
+        <location line="-297"/>
         <source>no firmware image at %1</source>
         <translation>no firmware image at %1</translation>
     </message>
@@ -5224,7 +5481,22 @@ Nothing is saved until you press OK.</translation>
         <translation>%1 is not a Rockchip update image (the RKFW magic is missing)</translation>
     </message>
     <message>
-        <location line="+204"/>
+        <location line="+43"/>
+        <source>file not found</source>
+        <translation>file not found</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>not a Rockchip RKFW image</source>
+        <translation>not a Rockchip RKFW image</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>header truncated</source>
+        <translation>header truncated</translation>
+    </message>
+    <message>
+        <location line="+229"/>
         <source>no package-file in %1: the image was not unpacked</source>
         <translation>no package-file in %1: the image was not unpacked</translation>
     </message>
@@ -6031,7 +6303,7 @@ Nothing is saved until you press OK.</translation>
 <context>
     <name>SocFlasher</name>
     <message>
-        <location filename="../src/firmware/SocFlasher.cpp" line="+234"/>
+        <location filename="../src/firmware/SocFlasher.cpp" line="+332"/>
         <source>  could not run: %1</source>
         <translation>  could not run: %1</translation>
     </message>
@@ -6046,7 +6318,7 @@ Nothing is saved until you press OK.</translation>
         <translation>  exit code %1</translation>
     </message>
     <message>
-        <location line="+82"/>
+        <location line="+85"/>
         <source>upgrade_tool could not be run: %1</source>
         <translation>upgrade_tool could not be run: %1</translation>
     </message>
@@ -6056,7 +6328,7 @@ Nothing is saved until you press OK.</translation>
         <translation>upgrade_tool LD timed out</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+31"/>
         <source>adb could not be run: %1</source>
         <translation>adb could not be run: %1</translation>
     </message>
@@ -6066,7 +6338,22 @@ Nothing is saved until you press OK.</translation>
         <translation>adb devices timed out</translation>
     </message>
     <message>
-        <location line="+287"/>
+        <location line="+111"/>
+        <source>image profile: unknown (no chip tag or env.img layout matched a profile)</source>
+        <translation>image profile: unknown (no chip tag or env.img layout matched a profile)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>image profile: %1 - %2</source>
+        <translation>image profile: %1 - %2</translation>
+    </message>
+    <message>
+        <location line="+333"/>
+        <source>warning: the image&apos;s flash layout differs from the board&apos;s: the flash will refuse unless --force-layout (the tab: the question). image: %1; board: %2</source>
+        <translation>warning: the image&apos;s flash layout differs from the board&apos;s: the flash will refuse unless --force-layout (the tab: the question). image: %1; board: %2</translation>
+    </message>
+    <message>
+        <location line="+63"/>
         <source>upgrade_tool not found: set its path in Preferences</source>
         <translation>upgrade_tool not found: set its path in Preferences</translation>
     </message>
@@ -6081,7 +6368,7 @@ Nothing is saved until you press OK.</translation>
         <translation>no tool runner</translation>
     </message>
     <message>
-        <location line="+68"/>
+        <location line="+87"/>
         <source>cannot cancel while upgrade_tool writes the flash</source>
         <translation>cannot cancel while upgrade_tool writes the flash</translation>
     </message>
@@ -6091,13 +6378,18 @@ Nothing is saved until you press OK.</translation>
         <translation>stopped waiting for ADB; the image was already written</translation>
     </message>
     <message>
-        <location line="-181"/>
-        <location line="+189"/>
+        <location line="-202"/>
+        <location line="+210"/>
         <source>cancelled</source>
         <translation>cancelled</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="-947"/>
+        <source>several rockusb devices are in download mode (LocationIDs %1): the single-board flow writes unaddressed and cannot tell them apart; reset the ones that are not this board with `upgrade_tool -s &lt;id&gt; RD`, or flash them as a fleet with --serials</source>
+        <translation>several rockusb devices are in download mode (LocationIDs %1): the single-board flow writes unaddressed and cannot tell them apart; reset the ones that are not this board with `upgrade_tool -s &lt;id&gt; RD`, or flash them as a fleet with --serials</translation>
+    </message>
+    <message>
+        <location line="+993"/>
         <source>no usable board: %1</source>
         <translation>no usable board: %1</translation>
     </message>
@@ -6112,7 +6404,7 @@ Nothing is saved until you press OK.</translation>
         <translation>an unknown kernel</translation>
     </message>
     <message>
-        <location line="+69"/>
+        <location line="+103"/>
         <source>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</source>
         <translation>no board found in ADB, MASKROM or Loader mode: send &apos;reboot loader&apos; through a session, or hold MASKROM and replug the cable</translation>
     </message>
@@ -6122,23 +6414,23 @@ Nothing is saved until you press OK.</translation>
         <translation>waiting for the board to enter MASKROM/Loader mode (up to %1 s)</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <location line="+19"/>
+        <location line="+25"/>
+        <location line="+36"/>
         <source>board is in download mode</source>
         <translation>board is in download mode</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+17"/>
         <source>board did not enter MASKROM/Loader within %1 s</source>
         <translation>board did not enter MASKROM/Loader within %1 s</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+11"/>
         <source>board flashed, but ADB did not come back within %1 s; check the serial console</source>
         <translation>board flashed, but ADB did not come back within %1 s; check the serial console</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+33"/>
         <source>flashing %1 (%2 mode)</source>
         <translation>flashing %1 (%2 mode)</translation>
     </message>
@@ -6148,19 +6440,19 @@ Nothing is saved until you press OK.</translation>
         <translation>upgrade_tool has printed nothing for %1 min; it is left running, because stopping it half way needs MASKROM recovery (if it hangs for good, end the upgrade_tool process by hand)</translation>
     </message>
     <message>
-        <location line="-461"/>
-        <location line="+489"/>
-        <location line="+232"/>
+        <location line="-571"/>
+        <location line="+599"/>
+        <location line="+237"/>
         <source>cannot run upgrade_tool: %1</source>
         <translation>cannot run upgrade_tool: %1</translation>
     </message>
     <message>
-        <location line="-1194"/>
+        <location line="-1633"/>
         <source>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</source>
         <translation>partition layout unknown: boot the board once so it can be read over ADB, or flash it in MASKROM mode</translation>
     </message>
     <message>
-        <location line="+432"/>
+        <location line="+756"/>
         <source>cannot create the folder %1 to unpack the image in</source>
         <translation>cannot create the folder %1 to unpack the image in</translation>
     </message>
@@ -6190,17 +6482,12 @@ Nothing is saved until you press OK.</translation>
         <translation>the image lists no partition images</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+9"/>
         <source>layout from the image&apos;s env.img: %1</source>
         <translation>layout from the image&apos;s env.img: %1</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used. image: %1; board: %2</source>
-        <translation>warning: the image&apos;s flash layout differs from the board&apos;s; the image&apos;s is used. image: %1; board: %2</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>the image&apos;s env.img has an unreadable mtdparts (%1); using the board&apos;s layout</source>
         <translation>the image&apos;s env.img has an unreadable mtdparts (%1); using the board&apos;s layout</translation>
     </message>
@@ -6210,7 +6497,7 @@ Nothing is saved until you press OK.</translation>
         <translation>%1 partition images, %2 in the layout</translation>
     </message>
     <message>
-        <location line="+192"/>
+        <location line="+234"/>
         <source>partition layout of the board: %1</source>
         <translation>partition layout of the board: %1</translation>
     </message>
@@ -6225,7 +6512,7 @@ Nothing is saved until you press OK.</translation>
         <translation>the board&apos;s /proc/cmdline has no mtdparts</translation>
     </message>
     <message>
-        <location line="+141"/>
+        <location line="+207"/>
         <source>MASKROM mode: writing the whole image with upgrade_tool UF</source>
         <translation>MASKROM mode: writing the whole image with upgrade_tool UF</translation>
     </message>
@@ -6246,12 +6533,12 @@ Nothing is saved until you press OK.</translation>
     </message>
     <message>
         <location line="+1"/>
-        <location line="+271"/>
+        <location line="+276"/>
         <source>no output</source>
         <translation>no output</translation>
     </message>
     <message>
-        <location line="-268"/>
+        <location line="-273"/>
         <source>Upgrade firmware ok</source>
         <translation>Upgrade firmware ok</translation>
     </message>
@@ -6311,7 +6598,7 @@ Nothing is saved until you press OK.</translation>
         <translation>nothing to write: no selected partition image is in the layout</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+12"/>
         <source>writing %1 of %2 partitions (%3 bytes): %4</source>
         <translation>writing %1 of %2 partitions (%3 bytes): %4</translation>
     </message>

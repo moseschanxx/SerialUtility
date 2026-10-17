@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 
+#include "firmware/BoardProfile.h"
 #include "firmware/CcPackage.h"
 #include "firmware/FleetFlasher.h"
 #include "firmware/ImagePuller.h"
@@ -148,7 +149,12 @@ class ToolRunner;
  * AppSettings::firmwareMtdParts()) or from setMtdParts(); a layout the job reads itself (the first
  * time the status shows an ADB board without one: `adb -s <serial> shell cat /proc/cmdline`, once
  * per board and job; or the flasher's step 2) is kept and reported with mtdPartsRead(serial,
- * mtdparts) so the owner can store it. The status's own read ends with layoutReadFinished(serial,
+ * mtdparts) so the owner can store it. (v0.8.0) A layout the flasher read in LOADER mode (the env
+ * partition, or PL: SocFlasher::mtdPartsRead() while the flow's status is not Adb) belongs to no
+ * serial: it is stored under "" (the Loader-mode key) only and reported as mtdPartsRead("",
+ * mtdparts) - never under the last ADB serial this job saw, which may be another board's (the
+ * flasher's mtdPartsRead wiring passes QString() whenever the device status is not Adb). The
+ * status's own read ends with layoutReadFinished(serial,
  * ok) whatever it found (after mtdPartsRead() when it found a layout; ok = false when adb could not
  * run or the board reports none), so an owner that waits for it needs no log text. Settings: the
  * job reads no AppSettings (only its data folder, for the lock); the owner hands in the values
@@ -167,6 +173,53 @@ class ToolRunner;
  * QMessageBox, and returns the job's collaborators from its own accessors (socFlasher(), ...).
  * su-fw sets the inputs from its command line, sets the callbacks it can answer (or none: the
  * headless defaults), calls one slot and waits for operationFinished().
+ *
+ * Board profiles (v0.8.0, profiles; BoardProfile.h, docs/DESIGN.md 4.14). The job reads the
+ * image's RKFW header whenever the image changes (imageHeader(): the chip tag, the version, the
+ * build time - a file read, never a tool) and derives imageProfile() from it (the chip tag, else
+ * the plan's env.img layout once the plan is Ready); the log says "image: update.img, chip tag
+ * 110E, built 2026-10-13 21:45:50" and "image profile: Node (RV1106BG2) - from the image's chip tag
+ * 110E" with every image change. boardProfile() is BoardProfiles::detectBoard() over
+ * profileOverride() (the owner's --profile / the tab's Board profile box), the last status's
+ * Loader PID (DeviceStatus::pid with Mode::Loader ONLY - a Maskrom status hands 0: the BootROM's
+ * PID is unknown on both boards, RV1106G2_FACTS.md row 33, and must never read as the other
+ * board's Loader PID), the gadget's product string and the layout known for the status's board
+ * (boardLayout()). The product string is the USB enumeration's (UsbProbe::presentDevices(), when
+ * the OS reports it: Linux) or, when the status's /proc/cmdline read (readBoardLayout) yielded a
+ * layout matching no profile - or none, open question 6 - and the profile is still unknown, the
+ * one the job reads from the board itself once per board and job: `adb -s <serial> shell cat
+ * /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product` (the configfs path usb_adb.sh
+ * writes, row 29; logged like every adb command; kept per serial as the layout is; a failure or an
+ * empty answer leaves the profile unknown) - conditional on the layout telling nothing, so a Node
+ * whose cmdline carries its layout runs no extra command and every pinned 0.7.0 list is unchanged;
+ * this is what makes rule 4 bite on a G2 whose cmdline carries no mtdparts (the MCU operations run
+ * on an ADB board, which never shows a Loader PID, and Windows reports the driver's name).
+ * boardProfileChanged() follows every status, layout read, product read and override change, and
+ * the flasher's own detection inside a flow (SocFlasher::profileDetected()) is mirrored into it.
+ * boardProfile() keeps reporting an override as Source::Option even when the last status's Loader
+ * PID names the other profile: the contradiction is the FLOW's refusal (SocFlasher step 1 / 4,
+ * the fleet at Mapped: ProfileRules::overrideRefusal()), a step failure with that text, so the
+ * tab's label says what the box says and the log says why the flash stopped. Every flash
+ * hands profileOverride(), forceLayout(), forceLoaderPartitions() and the two handlers to the
+ * SocFlasher (startFlash()); the fleet gets setPlanProfile() (the override's profile when set,
+ * else imageProfile()) and the override. The job's own refusals, framed as step failures like
+ * every input check, in this order: flashFleet() applies rule 1 (ProfileRules::imageRefusal() with
+ * the override's profile as the board - without an override the fleet learns the boards' profiles
+ * only inside its run: in step 2 b from the layout and at Mapped from the Loader PID, the profile
+ * gate) and rule 3 (loaderPartitionRefusal() on the named rows
+ * against the plan's profile; forceLoaderPartitions() turns it into the logged note, the
+ * LoaderPartitionsHandler is asked otherwise) before the fleet starts and before any reboot;
+ * updateMcu() / setMcuRole(), and the MCU step of pullAndFlash(), apply rule 4 (socPowerRefusal()
+ * on boardProfile(); confirmSocPower() turns it into the note, else the SocPowerHandler is asked
+ * once - the tab's question, headless default: refuse) before McuLink::open(). maskromInstructions()
+ * is the override's profile's text when one is set (BoardProfile::maskromInstructions(): the
+ * stacked board has no MASKROM button to hold). None of this changes the command lines a Node
+ * flash runs: the pinned single-board lists of 0.7.0 hold.
+ *
+ * Verify after write (v0.8.0, verify-rl; docs/DESIGN.md 4.16): verifyAfterWrite() is handed to
+ * the SocFlasher and the FleetFlasher at every flash; partitionVerified() mirrors the single-board
+ * flasher's per-row verdict (verifyResults() after the flow); the fleet's verdicts are in its
+ * FleetBoard fields (fleetBoards(), fleetReport()).
  */
 class FirmwareJob : public QObject
 {
@@ -313,7 +366,37 @@ public:
     bool hasStatus() const;                         ///< a status query reported at least once
     SocFlasher::DeviceStatus lastStatus() const;
     QString boardInfo() const;                      ///< /proc/version + uptime after the last flash ("" before)
-    QString maskromInstructions() const;            ///< "No board found: hold the MASKROM button ..."
+    /// "No board found: hold the MASKROM button ..." (the Node's, and the default without an
+    /// override); (v0.8.0) the override's profile's BoardProfile::maskromInstructions() when
+    /// profileOverride() names one.
+    QString maskromInstructions() const;
+
+    // ---- Board profiles (v0.8.0, profiles) --------------------------------------------------------
+    void setProfileOverride(const QString& id);     ///< a BoardProfiles::ids() entry, or "" = auto (default); the owner validates the id (su-fw: usage error 2)
+    QString profileOverride() const;
+    RkfwHeader imageHeader() const;                 ///< the current image's RKFW header (valid = false without an image, or unreadable: logged)
+    ProfileDetection imageProfile() const;          ///< the image's profile (the class comment); known() false without one
+    ProfileDetection boardProfile() const;          ///< the board's profile from the override and the last status (the class comment); known() false before any status
+    void setForceLayout(bool on);                   ///< rule 2's override (--force-layout); default false
+    bool forceLayout() const;
+    void setForceLoaderPartitions(bool on);         ///< rule 3's override (--force-loader-partitions); default false
+    bool forceLoaderPartitions() const;
+    void setConfirmSocPower(bool on);               ///< rule 4's confirmation (--confirm-soc-power); default false
+    bool confirmSocPower() const;
+    using LayoutConflictHandler = SocFlasher::LayoutConflictHandler;
+    using LoaderPartitionsHandler = SocFlasher::LoaderPartitionsHandler;
+    /// Rule 4's question when confirmSocPower() is off: the board's profile -> true proceeds with
+    /// the MCU operation. Copied before the call, may run a dialog's nested loop, the job checks
+    /// afterwards that it still exists; headless default (no handler): refuse.
+    using SocPowerHandler = std::function<bool(const BoardProfile& profile)>;
+    void setLayoutConflictHandler(LayoutConflictHandler handler);     ///< handed to the SocFlasher at every flash
+    void setLoaderPartitionsHandler(LoaderPartitionsHandler handler); ///< handed to the SocFlasher at every flash; asked by flashFleet() itself for the fleet
+    void setSocPowerHandler(SocPowerHandler handler);
+
+    // ---- Verify after write (v0.8.0, verify-rl) ----------------------------------------------------
+    void setVerifyAfterWrite(bool on);              ///< default false; handed to SocFlasher / FleetFlasher at every flash
+    bool verifyAfterWrite() const;
+    QList<ReadBackResult> verifyResults() const;    ///< SocFlasher::verifyResults() of the last single-board flash
 
     // ---- Partitions (v0.5.1) ---------------------------------------------------------------------
     PlanState planState() const;
@@ -406,6 +489,8 @@ signals:
     void mtdPartsRead(const QString& serial, const QString& mtdparts);
     /// The status's /proc/cmdline read of `serial` ended: ok = a layout was read (mtdPartsRead() came first).
     void layoutReadFinished(const QString& serial, bool ok);
+    void boardProfileChanged(const ProfileDetection& profile);   ///< (v0.8.0) boardProfile() may have changed: a status, a layout read, the override, the flasher's own detection
+    void partitionVerified(const ReadBackResult& result);        ///< (v0.8.0) the single-board flasher's verdict per row (the fleet's are in its boards)
     // ---- Fleet (v0.7.0): FleetFlasher's per-board signals, forwarded while flashFleet() runs ----
     void boardEvent(const FleetBoard& board, const QString& text);                   ///< one line per board per event (the owner prefixes board.label())
     void boardProgress(const FleetBoard& board, const QString& stage, int percent);  ///< 0..100 over the board's bytes

@@ -21,10 +21,30 @@ bool writeFile(const QString& path, const QByteArray& bytes)
     return file.write(bytes) == bytes.size();
 }
 
-QByteArray rkfwBytes(int size)
+QByteArray rkfwBytes(int size, const QString& chipTag)
 {
-    QByteArray bytes("RKFW");
-    bytes.append(QByteArray(size - 4, '\x5A'));
+    // The header of the real Node image of 2026-10-13 (RockchipTool.h, RkfwHeader), with the
+    // chip code of `chipTag` and simple offsets.
+    QByteArray header(0x66, '\0');
+    header.replace(0, 4, "RKFW");
+    header[4] = '\x66';                                 // header length 0x66 LE; version 0.0.00 = zeros
+    header[0x0e] = static_cast<char>(2026 & 0xFF);       // year LE
+    header[0x0f] = static_cast<char>(2026 >> 8);
+    header[0x10] = 10;
+    header[0x11] = 13;
+    header[0x12] = 21;
+    header[0x13] = 45;
+    header[0x14] = 50;
+    const QByteArray tag = chipTag.toLatin1().leftJustified(4, '\0', true);
+    for (int k = 0; k < 4; ++k) {
+        header[0x15 + k] = tag.at(3 - k);                // "110E" is stored as 45 30 31 31
+    }
+    header[0x19] = '\x66';                              // loader offset 0x66, loader size 0
+    header[0x21] = '\x66';                              // image offset 0x66, image size 0
+    QByteArray bytes = header;
+    if (size > bytes.size()) {
+        bytes.append(QByteArray(size - bytes.size(), '\x5A'));
+    }
     return bytes;
 }
 
@@ -37,6 +57,23 @@ const QByteArray kLdMaskrom = "rockusb driver = 5.12,please upgrade it to enjoy 
                               "DevNo=1\tVid=0x2207,Pid=0x110c,LocationID=104\tMode=Maskrom\tSerialNo=\r\n";
 const QByteArray kProcVersion = "Linux version 5.10.209+ (builder@rk) #1 Tue Oct 13 21:40:00 CST 2026\n"
                                 " 10:42:01 up 0 min,  load average: 0.10, 0.03, 0.01\n";
+const QByteArray kLdLoaderStacked = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                                    "List of rockusb connected(1)\r\n"
+                                    "DevNo=1\tVid=0x2207,Pid=0x110c,LocationID=104\tMode=Loader\tSerialNo=\r\n";
+const QByteArray kLdEmpty = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                            "List of rockusb connected(0)\r\n";
+const QByteArray kLdTwoLoaders = "rockusb driver = 5.12,please upgrade it to enjoy fast download\r\n\r\n"
+                                 "List of rockusb connected(2)\r\n"
+                                 "DevNo=1\tVid=0x2207,Pid=0x110e,LocationID=104\tMode=Loader\tSerialNo=\r\n"
+                                 "DevNo=2\tVid=0x2207,Pid=0x110c,LocationID=112\tMode=Loader\tSerialNo=\r\n";
+const QByteArray kProductStacked = "rv1106g-stacked-gc2083\n";
+
+const QRegularExpression& productPattern()
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("^adb (-s \\S+ )?shell \"?cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product\"?$"));
+    return pattern;
+}
 
 const QString kNodeMtdParts =
     QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)");
@@ -64,6 +101,66 @@ QByteArray nodeEnvImage(const QString& layout)
                      + "sd_parts=mmcblk0:16K@512(env),512K@32K(idblock),4M(uboot),32M(boot),2G(rootfs),-(userdata)" + '\0' + '\0';
     env.append(QByteArray(kNodeImageBytes[0] - env.size(), '\0'));
     return env;
+}
+
+const QString kStackedMtdParts =
+    QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),12M(boot),3M(userdata)");
+const QByteArray kStackedCmdline = "console=ttyFIQ0 root=/dev/rd0 rootfstype=erofs mtdparts=sfc_nor:64K(env),256K@64K(idblock),"
+                                   "256K(uboot),384K(meta),12M(boot),3M(userdata) rk_dma_heap_cma=48M\n";
+const char* const kStackedNames[kStackedPartitionCount] = {"env", "idblock", "uboot", "meta", "boot", "userdata"};
+const qint64 kStackedImageBytes[kStackedPartitionCount] = {65536, 174080, 196608, 393216, 2097152, 3145728};
+const int kStackedSectors[kStackedPartitionCount] = {0, 128, 640, 1152, 1920, 26496};
+const int kStackedSizeSectors[kStackedPartitionCount] = {128, 512, 512, 768, 24576, 6144};
+
+QStringList stackedNames()
+{
+    QStringList names;
+    for (const char* name : kStackedNames) {
+        names << QLatin1String(name);
+    }
+    return names;
+}
+
+QByteArray stackedEnvImage(const QString& layout)
+{
+    QByteArray env = QByteArray::fromHex("5b1e0c77") + "mtdparts=" + layout.toLatin1() + '\0'
+                     + "sys_bootargs= mtdparts=" + layout.toLatin1() + " rk_dma_heap_cma=48M" + '\0'
+                     + "sd_parts=mmcblk0:16K@512(env),512K@32K(idblock),4M(uboot)" + '\0' + '\0';
+    env.append(QByteArray(kStackedImageBytes[0] - env.size(), '\0'));
+    return env;
+}
+
+void stackedExtractor(FakeToolInvocation* i)
+{
+    const QStringList args = i->arguments();
+    const QString dir = args.size() >= 3 ? QDir::fromNativeSeparators(args.at(2)) : QString();
+    const bool big = args.size() >= 2 && QFileInfo(args.at(1)).fileName().contains(QLatin1String("big"));
+    const bool withEnv = args.size() >= 2 && QDir::fromNativeSeparators(args.at(1)).contains(QLatin1String("withenv"));
+    QByteArray list;
+    bool ok = !dir.isEmpty();
+    for (int k = 0; k < kStackedPartitionCount && ok; ++k) {
+        const qint64 size = (big && k == 4) ? 12 * 1024 * 1024 + 1 : kStackedImageBytes[k];
+        const QByteArray bytes = (withEnv && k == 0) ? stackedEnvImage(kStackedMtdParts) : QByteArray(size, 's');
+        ok = writeFile(dir + QLatin1Char('/') + QLatin1String(kStackedNames[k]) + QStringLiteral(".img"), bytes);
+        list += QByteArray(kStackedNames[k]) + '\t' + kStackedNames[k] + ".img\n";
+    }
+    list += "package-file\tpackage-file\nbootloader\tdownload.bin\n";
+    ok = ok && writeFile(dir + QStringLiteral("/package-file"), list) && writeFile(dir + QStringLiteral("/download.bin"), "LDR ");
+    if (!ok) {
+        i->emitOutput("Extract failed\r\n");
+        i->finish(1);
+        return;
+    }
+    i->emitOutput("start to extract boot.img...(100%)\r\nExtract ok.\r\n");
+    i->finish(0);
+}
+
+QString expectedStackedWl(int k, const QString& extractDir)
+{
+    return ToolRunner::formatCommandLine(
+        QStringLiteral("upgrade_tool"),
+        {QStringLiteral("WL"), QString::number(kStackedSectors[k]), QString::number(kStackedSizeSectors[k]),
+         QDir::toNativeSeparators(extractDir + QLatin1Char('/') + QLatin1String(kStackedNames[k]) + QStringLiteral(".img"))});
 }
 
 void nodeExtractor(FakeToolInvocation* i)
@@ -94,6 +191,7 @@ void nodeExtractor(FakeToolInvocation* i)
 void scriptSocFlash(FakeToolRunner& runner, const QByteArray& ld)
 {
     runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), ld);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool EXF .*stacked")), &stackedExtractor);   // first: the path decides
     runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool EXF ")), &nodeExtractor);
     runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool WL ")), "Write LBA from file (50%)\rWrite LBA from file (100%)\r\n");
     runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool RD$")), "Reset Device OK.\r\n");

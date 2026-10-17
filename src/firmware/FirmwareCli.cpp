@@ -69,6 +69,7 @@ QString optionValueName(const QString& option)
         {QLatin1String("password-env"), QLatin1String("VAR")},    {QLatin1String("partitions"), QLatin1String("NAMES")},
         {QLatin1String("package"), QLatin1String("FILE")},        {QLatin1String("role"), QLatin1String("ROLE")},
         {QLatin1String("serials"), QLatin1String("SERIALS")},     {QLatin1String("max-parallel"), QLatin1String("N")},
+        {QLatin1String("profile"), QLatin1String("ID")},
     };
     for (const auto& entry : values) {
         if (option == entry.first) {
@@ -94,10 +95,11 @@ QStringList pullOptionNames()
 QStringList specificOptionNames(const QString& command)
 {
     if (command == kStatus) {
-        return {QStringLiteral("serial"), QStringLiteral("mcu")};
+        return {QStringLiteral("serial"), QStringLiteral("mcu"), QStringLiteral("profile")};
     }
     if (command == kPartitions) {
-        return {QStringLiteral("image"), QStringLiteral("cache"), QStringLiteral("layout"), QStringLiteral("serial")};
+        return {QStringLiteral("image"), QStringLiteral("cache"), QStringLiteral("layout"), QStringLiteral("serial"),
+                QStringLiteral("profile")};
     }
     if (command == kPull) {
         return pullOptionNames();
@@ -105,21 +107,25 @@ QStringList specificOptionNames(const QString& command)
     if (command == kFlashSoc) {
         return {QStringLiteral("image"),   QStringLiteral("cache"),      QStringLiteral("all"),          QStringLiteral("partitions"),
                 QStringLiteral("serial"),  QStringLiteral("layout"),     QStringLiteral("no-wait"),      QStringLiteral("serials"),
-                QStringLiteral("all-boards"), QStringLiteral("max-parallel"), QStringLiteral("dry-run")};
+                QStringLiteral("all-boards"), QStringLiteral("max-parallel"), QStringLiteral("dry-run"),
+                QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions")};
     }
     if (command == kMcuInfo) {
-        return {QStringLiteral("serial")};
+        return {QStringLiteral("serial"), QStringLiteral("profile")};
     }
     if (command == kMcuUpdate) {
-        return {QStringLiteral("package"), QStringLiteral("role"), QStringLiteral("serial")};
+        return {QStringLiteral("package"), QStringLiteral("role"), QStringLiteral("serial"), QStringLiteral("profile"),
+                QStringLiteral("confirm-soc-power")};
     }
     if (command == kMcuSetRole) {
-        return {QStringLiteral("role"), QStringLiteral("serial")};
+        return {QStringLiteral("role"), QStringLiteral("serial"), QStringLiteral("profile"), QStringLiteral("confirm-soc-power")};
     }
     if (command == kPullFlash) {
         return pullOptionNames()
-               + QStringList{QStringLiteral("package"), QStringLiteral("role"), QStringLiteral("serial"),
-                             QStringLiteral("layout"), QStringLiteral("all"), QStringLiteral("partitions")};
+               + QStringList{QStringLiteral("package"), QStringLiteral("role"),       QStringLiteral("serial"),
+                             QStringLiteral("layout"),  QStringLiteral("all"),        QStringLiteral("partitions"),
+                             QStringLiteral("profile"), QStringLiteral("force-layout"), QStringLiteral("force-loader-partitions"),
+                             QStringLiteral("confirm-soc-power")};
     }
     return {};
 }
@@ -173,7 +179,7 @@ const char* const kExitCodesHelp = R"HELP(Exit codes:
      back to ADB, a board being written finishes all its partitions and its reset first.
 )HELP";
 
-const char* const kGlobalHelp = R"HELP(su-fw - flash the BuildAI Node board (RV1106 SoC + CC1310 RF MCU) from a command shell
+const char* const kGlobalHelp = R"HELP(su-fw - flash the BuildAI Node and Stacked boards (RV1106 SoC + CC1310 RF MCU) from a command shell
 
 Usage:
   su-fw <command> [options]
@@ -219,17 +225,23 @@ Examples:
 
 const char* const kStatusHelp = R"HELP(su-fw status - the board the PC sees
 
-Usage: su-fw status [--serial SERIAL] [--mcu] [options]
+Usage: su-fw status [--serial SERIAL] [--mcu] [--profile ID] [options]
 
 Asks upgrade_tool (Loader / Maskrom mode) and adb (a running board), like the Firmware tab's
 status line: "ADB device <serial>", "Loader mode (...)", "Maskrom mode (...)", "no board", or the
 hint to install the Rockchip USB drivers. For a running board the flash layout is shown too: it
-is read from the board once and remembered, as the tab does.
+is read from the board once and remembered, as the tab does. Then the board's profile with its
+evidence: "profile: Node (RV1106BG2) - from the board's flash layout (7 partitions: ...)",
+"... from the board's Loader PID 0x110c", or "profile: unknown (...)" (a board whose layout tells
+nothing is asked for its ADB gadget's product string first; the JSON: board.profile).
 
 Options:
   --serial SERIAL      The ADB board to use when several are attached (adb devices lists them).
   --mcu                Also read the CC1310's firmware version and role (the board must be
                        running: ADB).
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
 )HELP";
 
 const char* const kStatusTail = R"HELP(
@@ -247,13 +259,15 @@ Examples:
 
 const char* const kPartitionsHelp = R"HELP(su-fw partitions - what flash-soc would write
 
-Usage: su-fw partitions [--image FILE] [--layout MTDPARTS | --serial SERIAL] [options]
+Usage: su-fw partitions [--image FILE] [--layout MTDPARTS | --serial SERIAL] [--profile ID] [options]
 
 Unpacks the image (upgrade_tool EXF, into <image folder>/<image name>.extracted) and lists one
 row per partition, as the Firmware tab's table: name, image file, flash offset, partition size,
 image size, whether it fits - and why a row cannot be written. The layout is the image's own when
 its env.img carries one; else the board's: --layout, the layout remembered for --serial, else the
 one read last from a board (su-fw status reads it from a running board). The board is not touched.
+The image's RKFW header is read first: "image: update.img, chip tag 110E, built ..." and "image
+profile: Node (RV1106BG2) - from the image's chip tag 110E" (the JSON: imageHeader, imageProfile).
 
 Options:
   --image FILE         The update.img to list. Default: the cached image of the last pull.
@@ -261,13 +275,17 @@ Options:
                        (Preferences > Firmware).
   --layout MTDPARTS    The board's flash layout, e.g. "sfc_nor:64K(env),256K@64K(idblock),...".
   --serial SERIAL      Use the layout remembered for the board with this ADB serial.
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
 )HELP";
 
 const char* const kPartitionsTail = R"HELP(
 Exit codes:
   0  listed (a row that cannot be written says why)
   1  the image could not be unpacked (upgrade_tool missing or failing)
-  2  usage: no image, a file that is not a Rockchip RKFW image, a layout that does not parse
+  2  usage: no image, a file that is not a Rockchip RKFW image, a layout that does not parse,
+     --profile with an unknown ID
   5  --timeout or Ctrl+C
 
 Examples:
@@ -324,9 +342,11 @@ Examples:
 const char* const kFlashSocHelp = R"HELP(su-fw flash-soc - flash the RV1106 SoC
 
 Usage: su-fw flash-soc [--image FILE] (--all | --partitions NAMES) [--serial SERIAL]
-                       [--layout MTDPARTS] [--no-wait] [options]
+                       [--layout MTDPARTS] [--no-wait] [--profile ID] [--force-layout]
+                       [--force-loader-partitions] [options]
        su-fw flash-soc (--serials S1,S2,... | --all-boards) --partitions NAMES [--image FILE]
-                       [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait] [options]
+                       [--max-parallel N] [--dry-run] [--layout MTDPARTS] [--no-wait]
+                       [--profile ID] [--force-loader-partitions] [options]
 
 Finds the board: already in Loader / Maskrom mode, or running on ADB (its /proc/version and
 flash layout are read, then "adb reboot loader" - no question asked); with no board at all it
@@ -358,6 +378,17 @@ download mode. The ports learned are remembered per board. Look first, touching 
 selection, the remembered ports and the plan):
     su-fw flash-soc --all-boards --partitions rootfs --image update.img --dry-run --json
 
+Board profiles: the tool tells the Node (RV1106BG2: chip tag 110E, Loader PID 0x110e, 7
+partitions, a daily update writes rootfs) from the Stacked core (RV1106G2: chip tag 1106,
+Loader PID 0x110c, 6 partitions with the rootfs inside a 12 MiB boot, a daily update writes
+boot) from the image's RKFW header and from the board (its Loader PID, its flash layout), logs
+both with their evidence, and refuses an image for the other board, an image whose flash
+layout differs from the board's (--force-layout writes it anyway), and idblock / uboot / env /
+meta on the Stacked core, whose MASKROM entry is not documented (--force-loader-partitions
+writes them anyway). --profile ID says which board is attached when the tool cannot tell.
+    su-fw flash-soc --image update.img --partitions rootfs            (Node)
+    su-fw flash-soc --image update.img --partitions boot --profile stacked   (Stacked core)
+
 Options:
   --image FILE         The Rockchip update.img. Default: the cached image of the last pull.
   --cache DIR          The cache folder that holds that image. Default: the app's.
@@ -369,7 +400,8 @@ Options:
   --serial SERIAL      The ADB board to use when several are attached.
   --layout MTDPARTS    The board's flash layout: only needed for a board already in Loader mode
                        whose layout is not remembered, flashed with an image without one of its
-                       own (the image's layout always wins).
+                       own (an image layout that differs from the board's is refused unless
+                       --force-layout).
   --no-wait            Do not wait for the board to come back on ADB after the flash.
   --serials SERIALS    A fleet: the ADB serials, comma separated, repeatable (entries add up).
                        TAG=SERIAL names a board for every line and the table
@@ -384,14 +416,26 @@ Options:
   --dry-run            A fleet: the selection, the remembered ports and the plan; no reboot, no
                        write (adb devices, the USB enumeration and upgrade_tool LD are the only
                        reads; the image is unpacked locally for the plan).
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
+                       A fleet: every board and the plan are this profile.
+  --force-layout       Write the image's flash layout although the board's differs (the env
+                       written defines the board's next layout). Without it that flash is refused.
+  --force-loader-partitions
+                       Write idblock, uboot, env or meta on a board without a documented MASKROM
+                       entry (the Stacked core). Without it those writes are refused there.
 )HELP";
 
 const char* const kFlashSocTail = R"HELP(
 Exit codes:
   0  flashed (also when the board did not come back on ADB in time: the log warns)
   1  the flash failed: upgrade_tool's error (its last lines are in the log), an image that does
-     not fit, the layout unknown in Loader mode
-  2  usage: neither or both of --all / --partitions, an unknown partition, no image
+     not fit, the layout unknown in Loader mode, a refusal of the board profiles (the wrong image,
+     a differing layout, loader partitions on the Stacked core, --profile against the board's
+     Loader PID), several devices in download mode
+  2  usage: neither or both of --all / --partitions, an unknown partition, no image, --profile
+     with an unknown ID
   3  no board entered Loader / Maskrom mode in time
   5  --timeout or Ctrl+C while waiting
 
@@ -406,12 +450,14 @@ Exit codes of a fleet (--serials / --all-boards):
      the whole image with UF, idblock, uboot, env and meta included) or skipped (not on ADB, a
      differing flash layout, --all-boards: no layout in its /proc/cmdline, the mapping stopped);
      the mapping stopped (two boards changed at once, a Loader device nobody can name, a late
-     arrival); or the run could not start (another firmware operation, port mapping not
+     arrival, a mixed bench: a board of another profile than the plan's); or the run could not
+     start (the wrong image for --profile, loader partitions on a Stacked plan without
+     --force-loader-partitions, another firmware operation, port mapping not
      available on this platform, flash layout unknown, adb or upgrade_tool LD could not be run,
      --all-boards next to a non-Rockchip ADB device, a Loader / MASKROM device on the bus that no
      selected board accounts for)
   2  usage: --serials with --all-boards or --serial, --all, no --partitions, a bad serial or tag,
-     --max-parallel outside 1..64, --dry-run / --max-parallel without a fleet
+     --max-parallel outside 1..64, --dry-run / --max-parallel without a fleet, --force-layout
   3  no selected board is on ADB (--all-boards: no board at all)
   5  --timeout or Ctrl+C: boards whose write had not started are skipped and reset back to ADB; a
      board being written finishes every one of its partitions and its reset first; the table
@@ -424,7 +470,7 @@ Examples:
 
 const char* const kMcuInfoHelp = R"HELP(su-fw mcu-info - the CC1310's firmware version and role
 
-Usage: su-fw mcu-info [--serial SERIAL] [options]
+Usage: su-fw mcu-info [--serial SERIAL] [--profile ID] [options]
 
 Through the running board: a stale rfmcu is stopped first, then "adb shell rfmcu cmd version"
 (and "help" when the firmware does not report its role). Needs the board running on ADB with
@@ -432,6 +478,9 @@ rfmcu (rockchip-platforms v1.2.0 or later).
 
 Options:
   --serial SERIAL      The ADB board to use when several are attached.
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
 )HELP";
 
 const char* const kMcuInfoTail = R"HELP(
@@ -449,24 +498,33 @@ Examples:
 
 const char* const kMcuUpdateHelp = R"HELP(su-fw mcu-update - update the CC1310's firmware
 
-Usage: su-fw mcu-update --package FILE --role rx|tx [--serial SERIAL] [options]
+Usage: su-fw mcu-update --package FILE --role rx|tx [--serial SERIAL] [--profile ID]
+                        [--confirm-soc-power] [options]
 
 Checks the package (header, CRCs), opens the link through the board (adb forward to "rfmcu
 bridge"), reboots the CC1310 into its UART updater, sends the package (progress per acknowledged
-block), waits for the restart banner and takes the link down again.
+block), waits for the restart banner and takes the link down again. On the Stacked core it is
+refused without --confirm-soc-power (its CC1310 holds the SoC's power).
 
 Options:
   --package FILE       The CC1310 package (firmware-x.y.z.pkg).
   --role rx|tx         The role the CC1310 runs with afterwards. Required: the role is never
                        guessed (su-fw mcu-info shows the running one).
   --serial SERIAL      The ADB board to use when several are attached.
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
+  --confirm-soc-power  The CC1310 of the Stacked core holds the SoC's power (SOC_PWR_EN); its reset
+                       into the bootloader can switch the SoC off. Confirm once the carrier's CC1310
+                       bootloader is known to hold it (the 14 Oct 2026 build or later).
 )HELP";
 
 const char* const kMcuUpdateTail = R"HELP(
 Exit codes:
   0  updated
-  1  the update failed (the log has the updater's reason)
-  2  usage: no or an invalid package, no or an invalid role
+  1  the update failed (the log has the updater's reason), or it was refused on the Stacked core
+     without --confirm-soc-power (its CC1310 holds the SoC's power)
+  2  usage: no or an invalid package, no or an invalid role, --profile with an unknown ID
   3  no board running on ADB
   5  --timeout or Ctrl+C
 
@@ -477,20 +535,28 @@ Examples:
 
 const char* const kMcuSetRoleHelp = R"HELP(su-fw mcu-set-role - set the CC1310's role
 
-Usage: su-fw mcu-set-role --role rx|tx [--serial SERIAL] [options]
+Usage: su-fw mcu-set-role --role rx|tx [--serial SERIAL] [--profile ID] [--confirm-soc-power] [options]
 
-Like mcu-update, but sends only the new role (SET_ROLE); the firmware stays as it is.
+Like mcu-update, but sends only the new role (SET_ROLE); the firmware stays as it is. On the
+Stacked core it is refused without --confirm-soc-power, as mcu-update.
 
 Options:
   --role rx|tx         The new role. Required.
   --serial SERIAL      The ADB board to use when several are attached.
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
+  --confirm-soc-power  The CC1310 of the Stacked core holds the SoC's power (SOC_PWR_EN); its reset
+                       into the bootloader can switch the SoC off. Confirm once the carrier's CC1310
+                       bootloader is known to hold it (the 14 Oct 2026 build or later).
 )HELP";
 
 const char* const kMcuSetRoleTail = R"HELP(
 Exit codes:
   0  the role is set
-  1  setting it failed (the log has the updater's reason)
-  2  usage: no or an invalid role
+  1  setting it failed (the log has the updater's reason), or it was refused on the Stacked core
+     without --confirm-soc-power (its CC1310 holds the SoC's power)
+  2  usage: no or an invalid role, --profile with an unknown ID
   3  no board running on ADB
   5  --timeout or Ctrl+C
 
@@ -502,7 +568,8 @@ Examples:
 const char* const kPullFlashHelp = R"HELP(su-fw pull-flash - pull, flash and update in one go (the tab's Pull & Flash)
 
 Usage: su-fw pull-flash [--target TARGET] [pull options] [--package FILE] [--role rx|tx]
-                        [--serial SERIAL] [--layout MTDPARTS] [--all] [options]
+                        [--serial SERIAL] [--layout MTDPARTS] [--all] [--profile ID] [--force-layout]
+                        [--force-loader-partitions] [--confirm-soc-power] [options]
 
 pull (skipped when unchanged) -> flash-soc with every partition -> wait for the board on ADB ->
 read the CC1310's version -> mcu-update when --package is given and its version differs from the
@@ -521,12 +588,24 @@ const char* const kPullFlashOptionsHelp = R"HELP(  --package FILE       The CC13
   --all                Every partition: the default, and the only choice here.
   --partitions NAMES   Not available: pull-flash writes every partition, like the tab's Pull &
                        Flash. To write some: su-fw pull, then su-fw flash-soc --partitions NAMES.
+  --profile ID         The attached board when the tool cannot tell it: node (the Node,
+                       RV1106BG2) or stacked (the Stacked core, RV1106G2). Default: detected from
+                       the board's Loader PID, product string or flash layout; the log says which.
+  --force-layout       Write the image's flash layout although the board's differs (the env
+                       written defines the board's next layout). Without it that flash is refused.
+  --force-loader-partitions
+                       Write idblock, uboot, env or meta on a board without a documented MASKROM
+                       entry (the Stacked core). Without it those writes are refused there.
+  --confirm-soc-power  The CC1310 of the Stacked core holds the SoC's power (SOC_PWR_EN); its reset
+                       into the bootloader can switch the SoC off. Confirm once the carrier's CC1310
+                       bootloader is known to hold it (the 14 Oct 2026 build or later).
 )HELP";
 
 const char* const kPullFlashTail = R"HELP(
 Exit codes:
   0  done (the MCU step may say "update skipped"; without --package: "no MCU package chosen")
-  1  a step failed: the result says "stopped at <step>: <reason>"
+  1  a step failed: the result says "stopped at <step>: <reason>" (also a refusal of the board
+     profiles, and the MCU update on the Stacked core without --confirm-soc-power)
   2  usage
   3  no board entered Loader / Maskrom mode, or no board on ADB for the MCU step
   4  SSH: the pull could not connect
@@ -599,13 +678,48 @@ QString modeKey(SocFlasher::DeviceStatus::Mode mode)
     return QStringLiteral("none");
 }
 
-QJsonObject boardJson(const SocFlasher::DeviceStatus& status)
+/// (v0.8.0) "option" / "chipTag" / "loaderPid" / "adbProduct" / "boardLayout" / "imageLayout"; "" unknown.
+QString profileSourceKey(ProfileDetection::Source source)
+{
+    switch (source) {
+    case ProfileDetection::Source::Option: return QStringLiteral("option");
+    case ProfileDetection::Source::ChipTag: return QStringLiteral("chipTag");
+    case ProfileDetection::Source::LoaderPid: return QStringLiteral("loaderPid");
+    case ProfileDetection::Source::AdbProduct: return QStringLiteral("adbProduct");
+    case ProfileDetection::Source::BoardLayout: return QStringLiteral("boardLayout");
+    case ProfileDetection::Source::ImageLayout: return QStringLiteral("imageLayout");
+    case ProfileDetection::Source::None: break;
+    }
+    return QString();
+}
+
+/// {"id","name","source","evidence"}; every field "" when nothing matched.
+QJsonObject profileJson(const ProfileDetection& detection)
+{
+    const bool known = detection.known();
+    return QJsonObject{{QStringLiteral("id"), known ? detection.profile.id : QString()},
+                       {QStringLiteral("name"), known ? detection.profile.name : QString()},
+                       {QStringLiteral("source"), known ? profileSourceKey(detection.source) : QString()},
+                       {QStringLiteral("evidence"), known ? detection.evidence : QString()}};
+}
+
+/// {"chipTag","version","buildTime"}: the image's RKFW header (buildTime "" when unreadable).
+QJsonObject imageHeaderJson(const RkfwHeader& header)
+{
+    const bool timed = header.valid && header.buildTime.isValid();
+    return QJsonObject{{QStringLiteral("chipTag"), header.valid ? header.chipTag : QString()},
+                       {QStringLiteral("version"), header.valid ? header.version : QString()},
+                       {QStringLiteral("buildTime"), timed ? header.buildTime.toString(QStringLiteral("yyyy-MM-dd'T'HH:mm:ss")) : QString()}};
+}
+
+QJsonObject boardJson(const SocFlasher::DeviceStatus& status, const ProfileDetection& profile)
 {
     return QJsonObject{{QStringLiteral("mode"), modeKey(status.mode)},
                        {QStringLiteral("serial"), status.serial},
                        {QStringLiteral("detail"), status.detail},
                        {QStringLiteral("hint"), status.hint},
-                       {QStringLiteral("text"), status.text()}};
+                       {QStringLiteral("text"), status.text()},
+                       {QStringLiteral("profile"), profileJson(profile)}};
 }
 
 QJsonObject imageJson(const ImagePuller::CacheEntry& entry)
@@ -676,6 +790,11 @@ struct FirmwareCli::Private
         bool allBoards = false;
         int maxParallel = 0;        ///< 0 = every board at once
         bool dryRun = false;
+        // ---- board profiles (v0.8.0) ----
+        QString profile;            ///< --profile: a BoardProfiles::ids() entry, "" = detect
+        bool forceLayout = false;
+        bool forceLoaderPartitions = false;
+        bool confirmSocPower = false;
     };
 
     FirmwareCli* q;
@@ -775,6 +894,7 @@ struct FirmwareCli::Private
     int requireRunningBoard();
     bool waitForPlan();
     void logPartitionTable();
+    void insertImageFields();
     QJsonObject mcuJson() const;
 
     // ---- Commands --------------------------------------------------------------------------------------
@@ -997,6 +1117,19 @@ QString FirmwareCli::Private::parseInputs(const QCommandLineParser& parser)
     opts.serial = value("serial");
     opts.mcu = isSet("mcu");
     opts.noWait = isSet("no-wait");
+    // (v0.8.0) The board's profile when the tool cannot tell it: validated here, never read from
+    // the tab's setting - an agent's run is steered by its command line alone.
+    if (isSet("profile")) {
+        const std::optional<BoardProfile> chosen = BoardProfiles::byId(value("profile"));
+        if (!chosen) {
+            return QStringLiteral("--profile: unknown profile \"%1\"; known: %2")
+                .arg(value("profile"), BoardProfiles::ids().join(QStringLiteral(", ")));
+        }
+        opts.profile = chosen->id;
+    }
+    opts.forceLayout = isSet("force-layout");
+    opts.forceLoaderPartitions = isSet("force-loader-partitions");
+    opts.confirmSocPower = isSet("confirm-soc-power");
     opts.cache = isSet("cache") ? QDir::fromNativeSeparators(value("cache")) : settings.firmwareCacheDirectory();
     if (isSet("cache") && opts.cache.isEmpty()) {
         return QStringLiteral("--cache needs a folder");
@@ -1115,6 +1248,10 @@ QString FirmwareCli::Private::parseFleet(const QCommandLineParser& parser, bool 
     if (opts.fleet) {
         if (serialsGiven && allBoardsGiven) {
             return QStringLiteral("--serials and --all-boards: choose one");
+        }
+        if (opts.forceLayout) {
+            return QStringLiteral("--force-layout: the single-board option; a fleet skips a board whose layout differs (name env "
+                                  "among --partitions to write a new layout)");
         }
         if (parser.isSet(QStringLiteral("serial"))) {
             return QStringLiteral("--serial is for one board; for a fleet use --serials S1,S2,... or --all-boards");
@@ -1607,6 +1744,12 @@ void FirmwareCli::Private::createJob()
     j->setLoaderWaitSeconds(settings.firmwareLoaderWaitSeconds());
     j->setAdbReturnSeconds(settings.firmwareAdbReturnSeconds());
     j->setSerial(opts.serial);
+    // (v0.8.0) The board profiles: the command line's answers. No profile handler is installed,
+    // even on a terminal: the flags are the answers, and a run never stalls on a question.
+    j->setProfileOverride(opts.profile);
+    j->setForceLayout(opts.forceLayout);
+    j->setForceLoaderPartitions(opts.forceLoaderPartitions);
+    j->setConfirmSocPower(opts.confirmSocPower);
 }
 
 void FirmwareCli::Private::configureTools()
@@ -1817,11 +1960,11 @@ bool FirmwareCli::Private::queryBoard()
         return false;
     }
     const SocFlasher::DeviceStatus status = job->lastStatus();
-    resultFields.insert(QStringLiteral("board"), boardJson(status));
     log(QStringLiteral("Board: %1").arg(status.text()));
     if (!serialSeen.isEmpty()) {
         if (readingLayout) {
-            // Its lines say what came of it; waiting keeps the next adb command from overlapping.
+            // Its lines say what came of it (and of the product read that may follow it); waiting
+            // keeps the next adb command from overlapping.
             waitUntil([this]() { return layoutReadDone; }, kLayoutReadWaitMs, /*abortable=*/true);
         } else {
             log(QStringLiteral("Flash layout of board %1 (remembered): %2").arg(serialSeen, job->mtdParts(serialSeen)));
@@ -1831,6 +1974,13 @@ bool FirmwareCli::Private::queryBoard()
             resultFields.insert(QStringLiteral("layout"), layout);
         }
     }
+    // (v0.8.0) The board's profile with its evidence, once everything the status reads is in (no
+    // line without a board: the status line is the last word then, as in 0.7.0).
+    const ProfileDetection profile = job->boardProfile();
+    if (status.mode != SocFlasher::DeviceStatus::Mode::None && status.mode != SocFlasher::DeviceStatus::Mode::NoDriver) {
+        log(profile.text());
+    }
+    resultFields.insert(QStringLiteral("board"), boardJson(status, profile));
     return !aborted();
 }
 
@@ -1928,7 +2078,15 @@ void FirmwareCli::Private::logPartitionTable()
                                                         : known                ? QStringLiteral("board")
                                                                                : QString());
     resultFields.insert(QStringLiteral("partitions"), array);
+    insertImageFields();
     resultMessage = QStringLiteral("%1 partitions, %2 can be written").arg(rows.size()).arg(writable);
+}
+
+void FirmwareCli::Private::insertImageFields()
+{
+    // (v0.8.0) The job logged its image lines when the image was chosen; the done object carries them.
+    resultFields.insert(QStringLiteral("imageHeader"), imageHeaderJson(job->imageHeader()));
+    resultFields.insert(QStringLiteral("imageProfile"), profileJson(job->imageProfile()));
 }
 
 QJsonObject FirmwareCli::Private::mcuJson() const
@@ -2090,6 +2248,7 @@ int FirmwareCli::Private::cmdFlashSoc()
     }
     resultFields.insert(QStringLiteral("image"), nativePath(job->imagePath()));
     resultFields.insert(QStringLiteral("partitions"), QJsonArray::fromStringList(job->selectedPartitions()));
+    insertImageFields();
     runOperation(QString(FirmwareJob::kOpFlash), [this]() { job->flashSoc(); });
     const int code = operationExitCode();
     resultMessage = operationResultMessage();
@@ -2200,6 +2359,7 @@ int FirmwareCli::Private::cmdFlashFleet()
     for (auto it = fields.constBegin(); it != fields.constEnd(); ++it) {
         resultFields.insert(it.key(), it.value());
     }
+    insertImageFields();
     resultMessage = operationResultMessage();
     return opOk ? ExitOk : aborted() ? ExitCancelled : report.exitCode();
 }
@@ -2261,6 +2421,9 @@ int FirmwareCli::Private::cmdPullFlash()
     const ImagePuller::CacheEntry entry = job->cacheEntry();
     if (entry.isValid()) {
         resultFields.insert(QStringLiteral("image"), imageJson(entry));
+    }
+    if (!job->imagePath().isEmpty()) {
+        insertImageFields();
     }
     if (!job->boardInfo().isEmpty()) {
         resultFields.insert(QStringLiteral("boardInfo"), job->boardInfo());

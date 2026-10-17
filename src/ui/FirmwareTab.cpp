@@ -2,6 +2,7 @@
 
 #include <QAbstractButton>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -42,6 +43,7 @@
 #include "app/Logging.h"
 #include "dialogs/AuthPromptDialog.h"
 #include "dialogs/HostKeyDialog.h"
+#include "firmware/BoardProfile.h"
 #include "firmware/CcProtocol.h"
 #include "firmware/FirmwareJob.h"
 #include "firmware/McuLink.h"
@@ -192,6 +194,10 @@ struct FirmwareTab::Private
     QLabel* deviceCaption = nullptr;
     QLabel* socStatusLabel = nullptr;
     QPushButton* installDriversButton = nullptr;
+    QLabel* profileCaption = nullptr;       ///< (v0.8.0) "Board profile:"
+    QComboBox* profileCombo = nullptr;
+    QLabel* profileLabel = nullptr;
+    QCheckBox* verifyCheckBox = nullptr;    ///< (v0.8.0, verify-rl's) hidden until that package
     QLabel* socImageCaption = nullptr;
     QLabel* socImageLabel = nullptr;
     QLabel* partitionsCaption = nullptr;
@@ -238,6 +244,8 @@ struct FirmwareTab::Private
     bool progressShowsReady = true; ///< the progress label still says "Ready" (retranslated with the rest)
     bool settingRole = false;       ///< setSelectedRole() is handing the role to the job
     QPointer<QMessageBox> downloadBox;   ///< the open "send reboot loader through <tab>" question
+    QPointer<QMessageBox> profileBox;    ///< (v0.8.0) the open question of a board-profile rule
+    QString dailyImageKey;               ///< (v0.8.0) the image whose first plan set the daily checks
     bool lastLogWasProgress = false;
     QString lastProgressStage;
 
@@ -276,6 +284,13 @@ struct FirmwareTab::Private
     FirmwareJob::HostKeyDecision askHostKey(const SshConnection::HostKeyInfo& info);
     std::optional<FirmwareJob::AuthAnswer> askAuthPrompt(const SshConnection::AuthPrompt& prompt);
     FirmwareJob::DownloadModeAnswer askDownloadMode();
+
+    // ---- Board profiles (v0.8.0) ------------------------------------------------------------
+    QString selectedProfileOverride() const;
+    void renderProfile();
+    void renderImageDetails();
+    void applyDailyPartitions();
+    bool askProfileQuestion(const QString& refusal, const QString& flag, const QString& question, const QString& accept);
 
     void appendLines(const QString& line, bool mirror);
     void appendToolLine(const QString& line);
@@ -441,10 +456,24 @@ void FirmwareTab::Private::setupUi()
     socStatusLabel = makeValueLabel("socStatusLabel");
     installDriversButton = makeButton("installDriversButton");
     installDriversButton->setVisible(false);   // only with the NoDriver status
+    // (v0.8.0) The board profile next to the status line, whose text stays the 0.7.0 one.
+    profileCaption = new QLabel(q);
+    profileCombo = new QComboBox(q);
+    profileCombo->setObjectName(QStringLiteral("profileCombo"));
+    profileCombo->addItem(QString(), QString());   // "Auto-detect" (retranslate())
+    for (const BoardProfile& profile : BoardProfiles::all()) {
+        profileCombo->addItem(profile.name, profile.id);
+    }
+    profileCaption->setBuddy(profileCombo);
+    profileLabel = makeValueLabel("profileLabel");
     auto* deviceRow = makeRow();
     deviceRow->addWidget(deviceCaption);
     deviceRow->addWidget(socStatusLabel, 1);
     deviceRow->addWidget(installDriversButton);
+    deviceRow->addSpacing(8);
+    deviceRow->addWidget(profileCaption);
+    deviceRow->addWidget(profileCombo);
+    deviceRow->addWidget(profileLabel, 1);
     socLayout->addLayout(deviceRow);
 
     socImageCaption = new QLabel(q);
@@ -485,9 +514,13 @@ void FirmwareTab::Private::setupUi()
 
     flashSocButton = makeButton("flashSocButton");
     cancelButton = makeButton("cancelButton");
+    verifyCheckBox = new QCheckBox(q);
+    verifyCheckBox->setObjectName(QStringLiteral("verifyCheckBox"));
+    verifyCheckBox->setVisible(false);   // verify-rl wires it; until then it is not offered
     auto* flashRow = makeRow();
     flashRow->addWidget(flashSocButton);
     flashRow->addWidget(cancelButton);
+    flashRow->addWidget(verifyCheckBox);
     flashRow->addStretch(1);
     socLayout->addLayout(flashRow);
     root->addWidget(socGroup);
@@ -626,6 +659,14 @@ void FirmwareTab::Private::wireWidgets()
     // "None" has no SocFlasher form: the job keeps it and Flash SoC refuses it.
     connect(partitionsNoneButton, &QPushButton::clicked, q, [this]() { job->setSelectedPartitions({}); });
     connect(partitionTable, &QTableWidget::itemChanged, q, [this](QTableWidgetItem* item) { onPartitionItemChanged(item); });
+    // (v0.8.0) The board profile box: remembered, and the job's override at once.
+    connect(profileCombo, &QComboBox::currentIndexChanged, q, [this](int) {
+        const QString id = selectedProfileOverride();
+        if (!restoring && id != AppSettings::instance().firmwareProfile()) {
+            AppSettings::instance().setFirmwareProfile(id);
+        }
+        job->setProfileOverride(id);
+    });
 
     // ---- MCU ----
     connect(packageEdit, &QLineEdit::editingFinished, q, [this]() {
@@ -661,6 +702,8 @@ void FirmwareTab::Private::wireJob()
     connect(job, &FirmwareJob::busyChanged, q, [this](bool busy) {
         if (busy) {
             statusTimer.stop();   // no status queries while tools run
+        } else if (profileBox) {
+            profileBox->reject();   // the operation ended meanwhile: the question is moot
         }
         updateControls();
         if (!busy) {
@@ -689,6 +732,11 @@ void FirmwareTab::Private::wireJob()
     });
     connect(job, &FirmwareJob::mcuInfoChanged, q, [this]() { renderMcuStatus(); });
     connect(job, &FirmwareJob::partitionsChanged, q, [this]() { renderPartitions(); });
+    connect(job, &FirmwareJob::partitionsPlanned, q, [this]() {
+        applyDailyPartitions();
+        renderImageDetails();
+    });
+    connect(job, &FirmwareJob::boardProfileChanged, q, [this](const ProfileDetection&) { renderProfile(); });
     connect(job->socFlasher(), &SocFlasher::phaseChanged, q, [this](SocFlasher::Phase phase) {
         if (downloadBox && phase != SocFlasher::Phase::WaitingForLoader) {
             downloadBox->reject();   // the question is moot: the job sends nothing
@@ -717,6 +765,22 @@ void FirmwareTab::Private::wireJob()
     job->setHostKeyHandler([this](const SshConnection::HostKeyInfo& info) { return askHostKey(info); });
     job->setAuthPromptHandler([this](const SshConnection::AuthPrompt& prompt) { return askAuthPrompt(prompt); });
     job->setDownloadModeHandler([this]() { return askDownloadMode(); });
+    // (v0.8.0) The board profiles' three questions (the rules' overrides of su-fw's flags).
+    job->setLayoutConflictHandler([this](const QString& imageLayout, const QString& boardLayout) {
+        return askProfileQuestion(ProfileRules::layoutRefusal(imageLayout, boardLayout, false), QStringLiteral("--force-layout"),
+                                  FirmwareTab::tr("Write anyway?"), FirmwareTab::tr("Write the image's layout"));
+    });
+    job->setLoaderPartitionsHandler([this](const BoardProfile& profile, const QStringList& names) {
+        return askProfileQuestion(ProfileRules::loaderPartitionRefusal(profile, names, false),
+                                  QStringLiteral("--force-loader-partitions"), FirmwareTab::tr("Write them anyway?"),
+                                  FirmwareTab::tr("Write them"));
+    });
+    job->setSocPowerHandler([this](const BoardProfile& profile) {
+        return askProfileQuestion(ProfileRules::socPowerRefusal(profile, false), QStringLiteral("--confirm-soc-power"),
+                                  FirmwareTab::tr("Confirm only once the carrier's CC1310 bootloader is known to hold "
+                                                  "SOC_PWR_EN (the 14 Oct 2026 build or later). Proceed?"),
+                                  FirmwareTab::tr("Proceed"));
+    });
 }
 
 void FirmwareTab::Private::retranslate()
@@ -744,6 +808,11 @@ void FirmwareTab::Private::retranslate()
 
     socGroup->setTitle(FirmwareTab::tr("SoC"));
     deviceCaption->setText(FirmwareTab::tr("Device:"));
+    profileCaption->setText(FirmwareTab::tr("Board profile:"));
+    profileCombo->setItemText(0, FirmwareTab::tr("Auto-detect"));
+    profileCombo->setToolTip(FirmwareTab::tr("The attached board when the tool cannot tell it; Auto-detect reads it from the "
+                                             "board's Loader PID, product string or flash layout"));
+    verifyCheckBox->setText(FirmwareTab::tr("Verify after writing"));
     installDriversButton->setText(FirmwareTab::tr("Install drivers"));
     installDriversButton->setToolTip(FirmwareTab::tr("Run the bundled Rockchip DriverAssistant (rockusb and ADB drivers)"));
     socImageCaption->setText(FirmwareTab::tr("Image:"));
@@ -794,6 +863,8 @@ void FirmwareTab::Private::retranslate()
     renderSocImage();
     renderPartitions();
     renderDeviceStatus();
+    renderProfile();
+    renderImageDetails();
     renderPackage();
     renderMcuStatus();
 }
@@ -827,6 +898,10 @@ void FirmwareTab::Private::loadSettings()
     rememberedRole = FirmwareJob::roleFromText(QSettings().value(kRoleSettingsKey).toString());
     job->setRole(0);
     showRole(rememberedRole);   // logged by the constructor, after the tool paths
+    // (v0.8.0) The board profile box as it was left (the setting only knows valid ids).
+    const int profileIndex = profileCombo->findData(s.firmwareProfile());
+    profileCombo->setCurrentIndex(profileIndex >= 0 ? profileIndex : 0);
+    job->setProfileOverride(selectedProfileOverride());
     restoring = false;
 
     job->refreshImage();
@@ -1042,6 +1117,9 @@ QPushButton* FirmwareTab::localImageButton() const { return d->localImageButton;
 QLabel* FirmwareTab::imageInfoLabel() const { return d->imageInfoLabel; }
 QPushButton* FirmwareTab::rollbackButton() const { return d->rollbackButton; }
 QLabel* FirmwareTab::socStatusLabel() const { return d->socStatusLabel; }
+QComboBox* FirmwareTab::profileCombo() const { return d->profileCombo; }
+QLabel* FirmwareTab::profileLabel() const { return d->profileLabel; }
+QCheckBox* FirmwareTab::verifyCheckBox() const { return d->verifyCheckBox; }
 QLabel* FirmwareTab::socImageLabel() const { return d->socImageLabel; }
 QTableWidget* FirmwareTab::partitionTable() const { return d->partitionTable; }
 QPushButton* FirmwareTab::partitionsAllButton() const { return d->partitionsAllButton; }
@@ -1184,6 +1262,7 @@ void FirmwareTab::Private::syncJob()
     job->setSshDefaults(defaults);
     job->setGitDescribe(settings.firmwareGitDescribe());
     job->setExtraFiles(settings.firmwareExtraFiles());
+    job->setProfileOverride(selectedProfileOverride());   // (v0.8.0) the Board profile box
 }
 
 void FirmwareTab::Private::renderImage(bool reread)
@@ -1222,6 +1301,7 @@ void FirmwareTab::Private::renderImage(bool reread)
     }
     imageInfoLabel->setText(text);
     imageInfoLabel->setToolTip(image.isEmpty() ? QString() : nativePath(image));
+    renderImageDetails();
     if (image != sfiImage) {
         runFirmwareInfo(image);
     }
@@ -1390,6 +1470,109 @@ void FirmwareTab::Private::onPartitionItemChanged(QTableWidgetItem* item)
 // =======================================================================================
 // Rendering / enable states
 // =======================================================================================
+
+// ---- Board profiles (v0.8.0) ------------------------------------------------------------------
+
+QString FirmwareTab::Private::selectedProfileOverride() const
+{
+    return profileCombo->currentData().toString();
+}
+
+void FirmwareTab::Private::renderProfile()
+{
+    const ProfileDetection profile = job->boardProfile();
+    if (profile.known()) {
+        profileLabel->setText(FirmwareTab::tr("Profile: %1 - %2").arg(profile.profile.name, profile.sourceText()));
+        profileLabel->setToolTip(profile.evidence);
+    } else {
+        profileLabel->setText(FirmwareTab::tr("Profile: unknown"));
+        profileLabel->setToolTip(QString());
+    }
+}
+
+/// The image's RKFW header and profile in the image lines' tooltips (the job reads the header).
+void FirmwareTab::Private::renderImageDetails()
+{
+    const QString image = job->imagePath();
+    if (image.isEmpty()) {
+        socImageLabel->setToolTip(QString());
+        return;
+    }
+    const RkfwHeader header = job->imageHeader();
+    const ProfileDetection profile = job->imageProfile();
+    QStringList lines;
+    if (header.valid) {
+        lines << FirmwareTab::tr("RKFW header: chip tag %1, version %2, built %3")
+                     .arg(header.chipTag, header.version,
+                          header.buildTime.isValid() ? header.buildTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) : QStringLiteral("?"));
+    } else {
+        lines << FirmwareTab::tr("RKFW header unreadable");
+    }
+    lines << (profile.known() ? FirmwareTab::tr("Image profile: %1 - %2").arg(profile.profile.name, profile.sourceText())
+                              : FirmwareTab::tr("Image profile: unknown"));
+    socImageLabel->setToolTip(lines.join(QLatin1Char('\n')));
+    imageInfoLabel->setToolTip(nativePath(image) + QLatin1Char('\n') + lines.join(QLatin1Char('\n')));
+}
+
+/// A new image planned while the board's profile is known: its daily partitions are the default
+/// checks (the Node: rootfs; the stacked board: boot). Later plans of the same image and the
+/// user's own checks are left alone; an unknown profile keeps every row.
+void FirmwareTab::Private::applyDailyPartitions()
+{
+    if (job->planState() != FirmwareJob::PlanState::Ready) {
+        return;
+    }
+    const QString image = job->plannedImage();
+    const QString key = image + QLatin1Char('\n') + QString::number(QFileInfo(image).lastModified().toMSecsSinceEpoch());
+    if (key == dailyImageKey) {
+        return;
+    }
+    dailyImageKey = key;
+    const ProfileDetection profile = job->boardProfile();
+    if (!profile.known() || !job->allPartitionsSelected()) {
+        return;
+    }
+    const bool known = job->layoutKnown();
+    QStringList names;
+    for (const PartitionImage& row : job->partitions()) {
+        if (profile.profile.dailyPartitions.contains(row.name) && FirmwareJob::partitionProblem(row, known).isEmpty()) {
+            names << row.name;
+        }
+    }
+    if (!names.isEmpty()) {
+        job->setSelectedPartitions(names);
+    }
+}
+
+/// One rule's question: its refusal text up to the flag's sentence, then `question`; Cancel is
+/// the default. Closed by the end of the operation (busyChanged(false)).
+bool FirmwareTab::Private::askProfileQuestion(const QString& refusal, const QString& flag, const QString& question,
+                                              const QString& accept)
+{
+    QString message = refusal;
+    const qsizetype at = message.indexOf(flag);
+    if (at > 0) {
+        message = message.left(at).trimmed();
+        while (message.endsWith(QLatin1Char(';')) || message.endsWith(QLatin1Char('-'))) {
+            message.chop(1);
+            message = message.trimmed();
+        }
+    }
+    message += QStringLiteral("\n\n") + question;
+    QMessageBox box(QMessageBox::Question, FirmwareTab::tr("Firmware Update"), message, QMessageBox::NoButton, q->window());
+    QPushButton* yes = box.addButton(accept, QMessageBox::AcceptRole);
+    QPushButton* no = box.addButton(FirmwareTab::tr("Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton(no);
+    box.setEscapeButton(no);
+    QPointer<FirmwareTab> self(q);
+    profileBox = &box;
+    box.exec();
+    if (!self) {
+        return false;   // the tab (and its job) went away meanwhile
+    }
+    profileBox = nullptr;
+    return box.clickedButton() == yes;
+}
 
 void FirmwareTab::Private::renderDeviceStatus()
 {

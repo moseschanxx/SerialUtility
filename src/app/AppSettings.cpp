@@ -8,6 +8,7 @@
 #include <QVariantMap>
 
 #include "app/Logging.h"
+#include "firmware/BoardProfile.h"
 
 namespace {
 
@@ -62,6 +63,7 @@ constexpr auto kFirmwareGitDescribe = "firmware/gitDescribe";
 constexpr auto kFirmwareExtraFiles = "firmware/extraFiles";
 constexpr auto kFirmwareMtdParts = "firmware/mtdparts";
 constexpr auto kFirmwareBoardPorts = "firmware/boardPorts";
+constexpr auto kFirmwareProfile = "firmware/profile";
 
 constexpr int kMinScrollback = 100;
 constexpr int kMaxScrollback = 1000000;
@@ -852,6 +854,19 @@ void AppSettings::setFirmwareBoardPort(const QString& serial, const QString& por
         ports.insert(mtdPartsKey(serial), value);
     }
     SU_WRITE_SETTING(kFirmwareBoardPorts, ports);
+}
+
+QString AppSettings::firmwareProfile() const
+{
+    // Only an id the tool knows: a stale or hand-edited entry reads as auto-detect.
+    const std::optional<BoardProfile> profile = BoardProfiles::byId(readValue(kFirmwareProfile).toString());
+    return profile ? profile->id : QString();
+}
+
+void AppSettings::setFirmwareProfile(const QString& id)
+{
+    const std::optional<BoardProfile> profile = BoardProfiles::byId(id);
+    SU_WRITE_SETTING(kFirmwareProfile, profile ? profile->id : QString());
 }
 
 #undef SU_WRITE_SETTING

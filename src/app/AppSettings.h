@@ -176,6 +176,16 @@ public:
     /// unknown; "" as the value removes the entry. Not shown in Preferences.
     QString firmwareBoardPort(const QString& serial) const;
     void setFirmwareBoardPort(const QString& serial, const QString& port);
+    /// (v0.8.0) "firmware/profile": the Firmware tab's Board profile box - a BoardProfiles::ids()
+    /// entry ("node", "stacked") or "" = auto-detect (the default). Handed to
+    /// FirmwareJob::setProfileOverride() by the tab; su-fw takes --profile only and never reads
+    /// this, so an agent's run is not steered by the tab's box. Any other stored text reads as "".
+    QString firmwareProfile() const;
+    void setFirmwareProfile(const QString& id);
+    /// (v0.8.0) "firmware/verifyAfterWrite": the tab's "Verify after writing" checkbox; default
+    /// false. su-fw takes --verify only.
+    bool firmwareVerifyAfterWrite() const;
+    void setFirmwareVerifyAfterWrite(bool on);
 
     // ---- Logging --------------------------------------------------------------------
     QString logDirectory() const;             ///< default: defaultLogDirectory()

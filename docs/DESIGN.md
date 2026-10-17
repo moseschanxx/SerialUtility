@@ -459,7 +459,7 @@ with no vendor GUI, no USB-serial adapter and no MASKROM button; the common case
 **Pull & Flash**. Unlike the rest of the application this part is device-specific by design; it is
 a tab of its own and touches no behaviour of the serial and SSH tabs.
 
-**Facts the design rests on.**
+**Facts the design rests on.** (v0.8.0: the Stacked core's differences - chip tag, Loader PID, layout, MASKROM, the CC1310's power - are in `docs/firmware-update/RV1106G2_FACTS.md` and 4.14.)
 
 - The running firmware exposes ADB only (VID 0x2207, PID 0x0006). `adb reboot loader` sets the
   reboot-mode register, U-Boot enters `download` and shows up as rockusb in *Loader* mode (VID
@@ -539,7 +539,7 @@ mode decides (`flashMethod()`, logged):
   the unpacked files and the layout in use are unchanged; else `EXF` again, stage "Extracting").
   The layout in use is the image's own when its `env.img` carries a readable one (the layout the
   images were built for, which the env being written makes the board use from its next boot),
-  else `mtdParts()`; a board layout that differs is logged as a warning with both strings. Then every selected row is
+  else `mtdParts()`; a board layout that differs is refused unless --force-layout / the tab's question, 4.14 rule 2 (both strings are logged). Then every selected row is
   checked (in the layout, file present, not larger than its partition, sector-aligned) before
   the first write, then one `WL <offset / 512> <size / 512> <file>` per row in package-file order (progress
   "Writing boot (5 of 7)", the percentage over all bytes; rows not selected or not in the layout
@@ -985,6 +985,155 @@ fails the next WL with exit 255 and nothing written); a skipped board entering L
 the run (a stop, exit 1, rerun); a concurrent adb user on the PC shows only as Ambiguous /
 ForeignLoader verdicts; Linux (sysfs port keys, the Linux upgrade_tool's `-s` and numbering) is
 tested with fakes only.
+
+### 4.14 Board profiles (v0.8.0)
+
+The Node (RV1106BG2) and the Stacked core (RV1106G2, `port/integration`) share the medium (SPI NOR,
+thunderboot, the same tools) and nothing else that matters to a flash: another partition table,
+another chip tag, another Loader PID, no documented MASKROM entry, a CC1310 that holds the SoC's
+power. `docs/firmware-update/RV1106G2_FACTS.md` is the source (its rows are cited below); nothing
+here is measured, and no stacked fact has run on hardware yet (open questions: FACTS section 3).
+`src/firmware/BoardProfile.h` is the contract.
+
+**The facts** (one static table, `BoardProfiles::all()`; a JSON profile file is not 0.8.0):
+
+| field | Node (`node`) | Stacked (`stacked`) | row |
+|---|---|---|---|
+| name / SoC | Node (RV1106BG2) | Stacked (RV1106G2) | 1 |
+| RKFW chip tag | 110E | 1106 | 20 |
+| U-Boot rockusb (Loader) PID | 0x110e | 0x110c | 32 |
+| ADB gadget product string | rv1106bg2-gc2083 | rv1106g-stacked-gc2083 | 29 |
+| flash layout | `sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),3M(boot),5M(rootfs),3M(userdata)` | `sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),12M(boot),3M(userdata)` | 9, 10 |
+| daily partitions | rootfs | boot (the erofs rootfs lives inside, row 11) | 11 |
+| MASKROM entry | button | unknown (not documented anywhere) | 42 |
+| CC1310 reset cuts the SoC's power | no | yes (DIO8 = SOC_PWR_EN) | 44 |
+| Loader wait (a recommendation only) | 30 s | 45 s | 40, D7 |
+
+The loader partitions (idblock, uboot, env, meta) are the same on both and stay
+`FleetFlasher::bootloaderPartitions()`. The MASKROM (BootROM) PID is not known on either board (row 33).
+
+**Detection** (`BoardProfiles::detectBoard()` / `detectImage()`, each result with its source and
+evidence, `ProfileDetection::text()` the log line). The board: `--profile` / the tab's box (Option) >
+the Loader PID `LD` printed for a device in **Loader** mode (LoaderPid) > the ADB gadget's product
+string (AdbProduct) > the board's flash layout (BoardLayout: the partition *names* in order; sizes
+may change with a build). The image: its RKFW chip tag (ChipTag; `RockchipTool::readRkfwHeader()`, a
+file read - no SFI runs, so the pinned 0.7.0 command lists stay) > its env.img layout once the plan
+exists (ImageLayout). The override never applies to an image (it names the attached board; the image
+says what it is for). A **Maskrom** status hands PID 0 to the detection: its PID is the BootROM's
+(row 33), and `kLdMaskrom`'s 0x110c must not read as the stacked board - else rule 1 would block
+UF, the only recovery route of a bricked board; `DeviceStatus::pid` stays filled for the fleet's port
+check. Where the product string comes from: the USB enumeration on Linux (sysfs `product`); on
+Windows the enumeration names the driver, so SocFlasher step 2 and FirmwareJob's status read
+`adb -s <serial> shell cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product` (the file
+usb_adb.sh writes) once per board and flow / job - only when the board's `/proc/cmdline` layout
+matched no profile (or there is none, open question 6), so no Node list gains a command. Unknown is
+logged (`profile: unknown (...)`) and never guessed: rules 1 and 3 are inert, rule 2 needs both
+layouts, and the 0.7.0 behaviour stays.
+
+**Where the rules run** (single board; `SocFlasher::Private::applyProfileRules()`, the one place):
+before `adb reboot loader` (step 2, after the layout and product reads, with the plan made first in
+**every** case - 0.7.0 only when the board told no layout; the tab and su-fw plan at image selection,
+so no EXF is added there) and before the first WL (step 5) - for **every** PartitionWrites flow,
+with the detection as it stands then: step 4 detects the adopted Loader device again with its PID
+(decision 16), so a G2 that came through step 2 without a readable layout, or through step 3 and a
+session's `reboot loader`, is known right before the first WL. A question is asked at most once per
+rule and flow (its answer is kept). Never later: a refusal after a WL would be a half-written board.
+MASKROM mode applies rule 1 only, before UF (the board has its recovery route by evidence; UF writes
+the whole image). Every refusal ends the flow Failed with no RD (nothing was written).
+
+**The rules** (`ProfileRules`, one wording each, `translate("ProfileRules", ...)`):
+
+1. `imageRefusal()`: an image for the other board - "the image is for another board: its chip tag
+   110E is the Node (RV1106BG2)'s, the board is Stacked (RV1106G2) (from the board's Loader PID
+   0x110c); nothing was written". No override.
+2. `layoutRefusal()`: the image's env.img layout against the board's (step 2's read, the owner's
+   remembered / `--layout`) - replaces 0.5.1's "the image's wins" everywhere (the plan's line now
+   says "... the flash will refuse unless --force-layout (the tab: the question)"). `--force-layout`
+   / the tab's **Write the image's layout** writes it, with the note.
+3. `loaderPartitionRefusal()`: idblock / uboot / env / meta on a profile whose MASKROM entry is
+   unknown (the Stacked core) - `--force-loader-partitions` / **Write them**.
+4. `socPowerRefusal()`: `mcu-update`, `mcu-set-role` and pull-flash's MCU step on a profile whose
+   CC1310 reset cuts the SoC's power - `--confirm-soc-power` / **Proceed**, "once the carrier's
+   CC1310 bootloader is known to hold SOC_PWR_EN (the 14 Oct 2026 build or later)". The job's,
+   before `McuLink::open()`. No minimum CC1310 version is checked (that fact is in no repo, FACTS D6).
+
+Two more refusals keep the flow honest: `overrideRefusal()` - an override that contradicts a Loader
+PID the tool read ("the --profile stacked override contradicts the board's Loader PID 0x110e (the
+Node (RV1106BG2)'s); drop --profile"; step 1, step 4, the fleet at Mapped) - because an override is
+"the attached board when the tool cannot tell it", never a way to overrule its U-Boot; and the
+several-devices refusal (decision 17): when the `LD` of step 1 or a step-4 poll lists more than one
+device in download mode, "several rockusb devices are in download mode (LocationIDs 104, 112): the
+single-board flow writes unaddressed and cannot tell them apart; ..." before EXF or any WL (a check
+on the LD output, no new command; `queryStatus()` keeps 0.7.0's first-device status).
+
+**The fleet's profile gate** (FleetFlasher): the plan's profile (`setPlanProfile()`: the override's,
+else the image's) is logged at the baseline ("plan profile: ..." / "plan profile: unknown; the
+profile gate is off"); step 2 b detects every board from its layout (and the override), logs its
+"profile: ..." line and, before the layout gate, stops the run when a known board profile differs
+from a known plan profile - `mixedBenchStop()`, "mapping stopped: mixed bench: ...; nothing was
+written" with the 0.7.0 stop machinery (mapped boards reset, later boards skipped, exit 1). A stop,
+not a skip: a second profile among the selected boards is a mistake to be told, not worked around
+(one plan per profile is not 0.8.0), and the env exemption of the layout gate never bypasses it. At
+Mapped (step 2 d) the board is detected again with its mapped Loader PID: a G2 named with `--serials`
+whose cmdline carries no mtdparts is stopped there (it IS mapped, so it gets its `-s <id> RD` and
+counts as reset) - and `overrideRefusal()` runs at the same point. Rules 1 (with an override) and 3
+(on the plan's profile) are `FirmwareJob::flashFleet()`'s input checks, before any adb. A dry run
+reads no layout and says so once.
+
+**The Loader wait** stays `waitTimeoutSeconds()` (Preferences): a profile never changes a wait, it
+adds `loaderWaitHint()` to the timeout message ("; on the stacked board the CC1310 may have cut the
+SoC's power: power-cycle it, then retry", D7). `loaderWaitSeconds` is documentation only (a max()
+rule would stretch every fast test and override the user's setting).
+
+**Classes.** `BoardProfile` / `ProfileEvidence` / `ProfileDetection` / `BoardProfiles` /
+`ProfileRules` (BoardProfile.cpp, no QObject). `RockchipTool::readRkfwHeader()` / `RkfwHeader`.
+SocFlasher: `DeviceStatus::pid` / `locationId` (not compared), `setProfileOverride()`,
+`setForceLayout()`, `setForceLoaderPartitions()`, the two handlers, `detectedProfile()`,
+`imageProfile()`, `profileDetected()`. FirmwareJob: the override, the three flags, the three handlers
+(copied before the call; headless default: refuse), `imageHeader()` / `imageProfile()` (the image
+lines "image: update.img, chip tag 110E, built ..." and "image profile: ..." once per image),
+`boardProfile()` (the flow's detection wins from a flash until the next status), `boardProfileChanged()`,
+`maskromInstructions()` per override. FleetFlasher: `setPlanProfile()`, `setProfileOverride()`,
+`FleetBoard::profile` (the JSON's "profile"). su-fw: `--profile` (usage error 2 for an unknown id;
+never read from the tab's setting), `--force-layout`, `--force-loader-partitions`,
+`--confirm-soc-power`; no profile handler, even on a terminal (the flags are the answers); the
+`profile:` line after "Board: ...", `board.profile`, `imageHeader`, `imageProfile`. FirmwareTab: the
+*Board profile* box (`AppSettings::firmwareProfile()`), the profile label, the three questions
+(QMessageBox, default Cancel, closed by the operation's end), the daily partitions as the default
+checks of a new image planned with a known profile; the status line keeps its 0.7.0 text.
+
+**Decisions and why** (the package prompt's list): the image's tag from the RKFW header, never a
+second SFI (a pinned list would break); the override is the board's identity, never the image's, and
+never against a Loader PID; unknown is inert, rule 2 needs both layouts; the rules at exactly two
+points; rule 2 replaces "the image's wins" everywhere but not the fleet's layout gate (env exemption
+as in 0.7.0); MASKROM: rule 1 only and no PID evidence; the mixed bench is a stop at step 2 b (a
+pre-pass would reorder the pinned fleet sequence, a skip would write around a foreign board); rule 4
+is the job's; a profile never changes a wait; the questions are job handlers, answered by the tab
+and headless-refused by su-fw; the product string is read from the board only when its layout tells
+nothing; the tab's status line keeps its text; `--profile` validated at parse time; the fixtures
+carry a real stacked image (six partitions, boot 2 MiB as a stand-in) and every test image an RKFW
+header ("110E" by default); the adopted Loader device is detected again (decision 16); two devices in
+download mode refuse the single-board flow (decision 17); the fleet's gate runs at 2 b and at Mapped
+(decision 18).
+
+**Tests.** `tst_boardprofile` (19: the table, every lookup, the detection order and texts, every
+rule's wording, the override refusal); `tst_firmwaretools` (+17, one replacing
+`soc_layoutMismatchImageWins`: the RKFW header, pid / locationId, each detection source, the rules
+at step 2 / step 5 / before UF, the questions once per flow, the product read, the hint, the plan
+before the reboot, the override against the PID, the PID after the reboot, two devices);
+`tst_fleetflasher` (+8: the gate at 2 b and at Mapped, the override, the env exemption, the JSON, the
+dry run); `tst_firmwarejob` (+8: the image lines, boardProfile() and its signal, the fleet's rules 1
+and 3, rule 4 with flag / question / pull-flash / the product string, the MASKROM text, the handlers);
+`tst_firmwarecli` (+9: `--profile` usage, the status lines and JSON, the image fields, the three flash
+refusals and their flags, rule 4, the mixed bench, the help); `tst_firmwaretab` (+4: the box and
+label, the daily checks, the two dialogs). The 0.7.0 pins (`singleBoardPathUnchanged`,
+`flashAllInLoaderMode`, `flashBoardOnAdbGoesThroughLoader`, `statusAdbBoardReadsTheLayout`,
+`fleetQuestionOnATerminal`) pass unchanged.
+
+**Not in 0.8.0.** One plan per profile in a fleet (a mixed bench stops); the Windows bus-reported
+product string (`DEVPKEY_Device_BusReportedDeviceDesc` in UsbProbe; until then the product is read
+from the board over adb); a JSON profile file; a CC1310 bootloader minimum version for rule 4; a
+per-profile SSH profile / remote folder (FACTS D8).
 
 ## 5. Build, run, test
 

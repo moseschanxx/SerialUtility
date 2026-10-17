@@ -12,6 +12,7 @@
 #include "firmware/McuUpdater.h"
 #include "firmware/SocFlasher.h"
 
+class QCheckBox;
 class QComboBox;
 class QTableWidget;
 class QLineEdit;
@@ -127,6 +128,38 @@ class FirmwareJob;
  * through setToolPaths(), reach every control by the accessors below (object names equal the
  * accessor names, e.g. "pullButton") and drive the pull against TestSshServer by pointing the
  * source target at it.
+ *
+ * Board profiles (v0.8.0, profiles; BoardProfile.h, docs/DESIGN.md 4.14). The SoC section's device
+ * row gains the profile: profileCombo() ("Board profile:" - "Auto-detect" and one entry per
+ * BoardProfiles::all(), by name; remembered in AppSettings::firmwareProfile() and handed to the
+ * job as setProfileOverride() whenever it changes and before every operation) and profileLabel()
+ * (the job's boardProfile() as "Profile: Node (RV1106BG2) - from the board's flash layout (...)" /
+ * "Profile: unknown", refreshed on boardProfileChanged(); the image's profile goes into the image
+ * line's tooltip). socStatusLabel() keeps its 0.7.0 text. The partition table's default checks
+ * follow the profile's dailyPartitions when a new image is planned and the profile is known (the
+ * Node: rootfs; the stacked board: boot; unknown: every row, as before) - "All" / "None" still
+ * rule afterwards. The three questions are the job's handlers answered with a QMessageBox
+ * (Question, the ProfileRules refusal text as the message with its "--force..." sentence
+ * replaced by "Write anyway?" / "Proceed?", buttons "Write the image's layout" / "Write them" /
+ * "Proceed" and "Cancel", default Cancel): setLayoutConflictHandler() (rule 2),
+ * setLoaderPartitionsHandler() (rule 3), setSocPowerHandler() (rule 4); a No ends the operation
+ * with the refusal as its result. A box left on a profile that contradicts the attached board's
+ * Loader PID (a Node in Loader mode under "Stacked (RV1106G2)") is no question: the flash fails
+ * with ProfileRules::overrideRefusal()'s text ("... drop --profile" reads, for the tab, as "set
+ * the Board profile box back to Auto-detect"), shown like any failure; the box is never changed
+ * by the tab. The Loader-wait hint and the MASKROM instructions of the
+ * profile come through the job's lines as before. The tab reads the image's RKFW header through
+ * the job (its own SFI stays for the image line's details).
+ *
+ * Verify after write (v0.8.0, verify-rl): verifyCheckBox() ("Verify after writing", next to Flash
+ * SoC; remembered in AppSettings::firmwareVerifyAfterWrite(), handed to the job as
+ * setVerifyAfterWrite() before every flash and Pull & Flash); the per-row verdicts arrive as log
+ * lines and the progress bar shows "Verifying <name> (k of N)"; a failed verify is the flash's
+ * failure, shown like any other.
+ *
+ * Inventory (v0.8.0, inventory): the tab's job carries an InventoryRecorder (one line in the
+ * constructor; its logLine() goes to appendLog()), so every status and operation of the tab
+ * records its board as su-fw does. The tab shows no inventory table in 0.8.0.
  */
 class FirmwareTab : public QWidget
 {
@@ -182,6 +215,9 @@ public:
     QLabel* imageInfoLabel() const;
     QPushButton* rollbackButton() const;
     QLabel* socStatusLabel() const;
+    QComboBox* profileCombo() const;               ///< (v0.8.0) "Auto-detect" + one item per BoardProfiles::all(); item data = the id ("" for auto)
+    QLabel* profileLabel() const;                  ///< (v0.8.0) "Profile: <name> - <source>" / "Profile: unknown"
+    QCheckBox* verifyCheckBox() const;             ///< (v0.8.0) "Verify after writing"
     QLabel* socImageLabel() const;
     QTableWidget* partitionTable() const;          ///< rows = SocFlasher::partitions(); column 0 = checkbox
     QPushButton* partitionsAllButton() const;

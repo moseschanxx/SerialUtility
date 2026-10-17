@@ -191,7 +191,8 @@ QString FleetBoard::stageText() const
 bool FleetBoard::operator==(const FleetBoard& o) const
 {
     return tag == o.tag && serial == o.serial && adbState == o.adbState && expectedPort == o.expectedPort && port == o.port
-           && locationId == o.locationId && kernel == o.kernel && layout == o.layout && stage == o.stage && result == o.result
+           && locationId == o.locationId && kernel == o.kernel && layout == o.layout && profile == o.profile && stage == o.stage
+           && result == o.result
            && detail == o.detail && written == o.written && retry == o.retry && adbBack == o.adbBack
            && leftInLoader == o.leftInLoader && boardInfo == o.boardInfo && uptime == o.uptime && rfmcu == o.rfmcu
            && seconds == o.seconds && mappingSeconds == o.mappingSeconds && writingSeconds == o.writingSeconds;
@@ -374,6 +375,8 @@ struct FleetFlasher::Private
         bool leftBeforeReset = false;          ///< the pre-RD check failed: the ADB wait decides
         bool resetOk = false;                  ///< a stop's / a cancel's RD answered OK (counted in resetCount)
         quint16 mappedPid = 0;                 ///< the pid its port showed when it was mapped (its Loader mode)
+        ProfileDetection detection;            ///< (v0.8.0) its profile as step 2 b / Mapped detected it (info.profile = its id)
+        bool resetOnly = false;                ///< (v0.8.0) stopped at its Mapped by the profile gate: never to be written, a reset is all it needs
         QString leftEvidenceNow;               ///< "port P shows ...; LD ..." of that check
         QString leftEvidencePast;              ///< the same with "showed"
         QString vanishedPort;                  ///< LoaderNotEnumerated: the port its ADB instance left
@@ -445,6 +448,8 @@ struct FleetFlasher::Private
     LdPolicy policy = LdPolicy::Gate;
     UsbProbe::Enumerator enumerator;
     PortProvider portProvider;
+    ProfileDetection planProfile;              ///< (v0.8.0) known() false = the profile gate is off
+    QString profileOverride;                   ///< (v0.8.0) --profile: every board's profile without detection
 
     // ---- the run ---------------------------------------------------------------------------
     quint64 runId = 0;
@@ -907,6 +912,8 @@ struct FleetFlasher::Private
         setPhase(Phase::Selecting);
         if (dry) {
             log(FleetFlasher::tr("Dry run: the selection, the remembered ports and the plan; no reboot, no write"));
+            // (v0.8.0) It reads no /proc/cmdline and maps nothing: a mixed bench is not told here.
+            log(FleetFlasher::tr("Dry run: the boards' profiles are read before their reboot in a real run"));
         }
         log(fleetLine());
         const quint64 id = runId;
@@ -1283,6 +1290,24 @@ struct FleetFlasher::Private
                 .arg(parts.join(QStringLiteral(", ")))
                 .arg(n)
                 .arg(parallel > 0 ? qMin(parallel, n) : n));
+        // (v0.8.0) The profile the plan is for: the gate of step 2 b and Mapped compares with it.
+        log(planProfile.known() ? FleetFlasher::tr("plan profile: %1 - %2").arg(planProfile.profile.name, planProfile.sourceText())
+                                : FleetFlasher::tr("plan profile: unknown; the profile gate is off"));
+    }
+
+    /// (v0.8.0) The board's detection: logged as its "profile: ..." line when it changed (always
+    /// the first time), FleetBoard::profile = its id.
+    void setBoardProfile(Board& board, const ProfileDetection& detection, bool always)
+    {
+        const bool differs = !(detection == board.detection);
+        board.detection = detection;
+        board.info.profile = detection.known() ? detection.profile.id : QString();
+        if (always || differs) {
+            boardLog(board, detection.text());
+        }
+        if (differs) {
+            changed(board);
+        }
     }
 
     // =========================================================================================
@@ -1384,6 +1409,17 @@ struct FleetFlasher::Private
             if (!alive(id)) {
                 return;
             }
+        }
+        // (v0.8.0) The profile gate, before the layout gate: a board of another profile than the
+        // plan's stops the run (one profile per run; never a skip, never bypassed by env).
+        ProfileEvidence evidence;
+        evidence.overrideId = profileOverride;
+        evidence.layout = found;
+        setBoardProfile(board, BoardProfiles::detectBoard(evidence), /*always=*/true);
+        const QString mixed = ProfileRules::mixedBenchStop(board.info.serial, board.detection, planProfile);
+        if (!mixed.isEmpty()) {
+            stopMapping(index, mixed, {});
+            return;
         }
         const QList<MtdPartition> boardLayout = RockchipTool::parseMtdParts(found);
         if (everyBoard && boardLayout.isEmpty()) {
@@ -1586,9 +1622,26 @@ struct FleetFlasher::Private
                 line += FleetFlasher::tr(" (moved: expected %1)").arg(board.info.expectedPort);
             }
             boardLog(board, line);
-            if (alive(id)) {
-                mapNext();
+            if (!alive(id)) {
+                return;
             }
+            // (v0.8.0) The second run of the profile gate (step 2 d): the board's Loader PID - the
+            // pid its port showed when mapped - confirms its profile, or tells it when its
+            // /proc/cmdline did not. Before the next board is rebooted; nothing was written.
+            ProfileEvidence evidence;
+            evidence.overrideId = profileOverride;
+            evidence.loaderPid = board.mappedPid;
+            evidence.layout = board.info.layout;
+            setBoardProfile(board, BoardProfiles::detectBoard(evidence), /*always=*/false);
+            QString stop = ProfileRules::overrideRefusal(profileOverride, board.mappedPid);
+            if (stop.isEmpty()) {
+                stop = ProfileRules::mixedBenchStop(serial, board.detection, planProfile);
+            }
+            if (!stop.isEmpty()) {
+                stopMapping(index, stop, {});   // this board is mapped: it is reset with the others
+                return;
+            }
+            mapNext();
         });
     }
 
@@ -1605,12 +1658,21 @@ struct FleetFlasher::Private
             addUnattributed(device);
         }
         if (failing >= 0 && !at(failing).ended) {
-            endBoard(failing, FleetBoard::Result::Failed, reason);
+            if (at(failing).info.stage == FleetBoard::Stage::Loader) {
+                // (v0.8.0) Stopped at its Mapped (the profile gate's second run): it is in Loader
+                // mode with an id the run learned, so it gets its RD like every mapped board and
+                // ends Failed with the reason.
+                at(failing).resetOnly = true;
+                resetUnwritten(failing, reason, reason, FleetFlasher::tr("mapping stopped: resetting the board back to ADB"),
+                               FleetBoard::Result::Failed);
+            } else {
+                endBoard(failing, FleetBoard::Result::Failed, reason);
+            }
         }
         const QString skipped = kMappingStopped + reason;
         for (int i = 0; i < count(); ++i) {
             Board& board = at(i);
-            if (board.ended) {
+            if (board.ended || i == failing) {
                 continue;
             }
             if (board.info.stage == FleetBoard::Stage::Loader) {
@@ -1733,8 +1795,10 @@ struct FleetFlasher::Private
 
     /// `-s <id> RD` for a mapped board that was never written (a stop, a cancel): Skipped with
     /// `doneDetail` when the RD answered OK, else `failBase` and what went wrong. Waits for the
-    /// gate's LD when one is in flight.
-    void resetUnwritten(int index, const QString& doneDetail, const QString& failBase, const QString& line)
+    /// gate's LD when one is in flight. (v0.8.0) `result` is Failed for the board a stop was
+    /// decided at its Mapped (the profile gate): it still gets its RD and counts as reset.
+    void resetUnwritten(int index, const QString& doneDetail, const QString& failBase, const QString& line,
+                        FleetBoard::Result result = FleetBoard::Result::Skipped)
     {
         Board& board = at(index);
         board.info.stage = FleetBoard::Stage::Resetting;
@@ -1745,7 +1809,7 @@ struct FleetFlasher::Private
         changed(board);
         boardLog(board, line);
         const quint64 id = runId;
-        whenGateFree([this, id, index, doneDetail, failBase] {
+        whenGateFree([this, id, index, doneDetail, failBase, result] {
             if (!alive(id)) {
                 return;
             }
@@ -1753,7 +1817,7 @@ struct FleetFlasher::Private
             const QString n = b.info.locationId;
             ++inFlightUpgradeTools;
             boardCommand(index, [this, n] { return upgradeTool->resetDeviceOn(n); }, true,
-                         [this, index, doneDetail, failBase, n](const ToolResult& r) {
+                         [this, index, doneDetail, failBase, n, result](const ToolResult& r) {
                              --inFlightUpgradeTools;
                              const QString output = r.outputText();
                              Board& b2 = at(index);
@@ -1762,20 +1826,20 @@ struct FleetFlasher::Private
                                  const PortView view = portView(b2.info.port);
                                  b2.info.leftInLoader = view.pid != 0 && view.pid == b2.mappedPid;
                                  b2.info.retry.clear();
-                                 endBoard(index, FleetBoard::Result::Skipped, failBase + goneHint(n),
+                                 endBoard(index, result, failBase + goneHint(n),
                                           {FleetFlasher::tr("port %1 shows %2").arg(b2.info.port, shownOnPort(view, b2.mappedPid))});
                              } else if (r.started && !r.timedOut && (r.exitCode == 0 || RockchipTool::reportsResetOk(output))) {
                                  ++resetCount;
                                  b2.resetOk = true;
                                  boardLog(b2, FleetFlasher::tr("reset back to ADB; nothing was written"));
-                                 endBoard(index, FleetBoard::Result::Skipped, doneDetail);
+                                 endBoard(index, result, doneDetail);
                              } else {
                                  const QString tail = !r.started  ? r.error
                                                       : r.timedOut ? FleetFlasher::tr("timed out")
                                                                    : RockchipTool::tailForMessage(output);
                                  b2.info.leftInLoader = true;
                                  b2.info.retry = {retryRdLine(n)};
-                                 endBoard(index, FleetBoard::Result::Skipped,
+                                 endBoard(index, result,
                                           FleetFlasher::tr("%1; upgrade_tool RD did not reset it (%2): reset it by hand with `%3`")
                                               .arg(failBase, tail.isEmpty() ? FleetFlasher::tr("no output") : tail, rdHint(n)),
                                           retryLogLines(b2.info.retry));
@@ -2596,7 +2660,7 @@ struct FleetFlasher::Private
         for (int i = 0; i < count(); ++i) {
             Board& board = at(i);
             const FleetBoard::Result result = board.info.result;
-            const bool skipped = result == FleetBoard::Result::Skipped;
+            const bool skipped = result == FleetBoard::Result::Skipped || board.resetOnly;
             const bool candidateResult = result == FleetBoard::Result::Failed || result == FleetBoard::Result::NotBack
                                          || (skipped && !board.info.locationId.isEmpty());
             if (!candidateResult || board.maskrom || board.info.port.isEmpty()) {
@@ -2731,6 +2795,16 @@ void FleetFlasher::setWaitForAdb(bool on) { d->waitAdb = on; }
 bool FleetFlasher::waitForAdb() const { return d->waitAdb; }
 void FleetFlasher::setLdPolicy(LdPolicy policy) { d->policy = policy; }
 FleetFlasher::LdPolicy FleetFlasher::ldPolicy() const { return d->policy; }
+void FleetFlasher::setPlanProfile(const ProfileDetection& profile) { d->planProfile = profile; }
+ProfileDetection FleetFlasher::planProfile() const { return d->planProfile; }
+
+void FleetFlasher::setProfileOverride(const QString& id)
+{
+    const std::optional<BoardProfile> profile = BoardProfiles::byId(id);
+    d->profileOverride = profile ? profile->id : QString();
+}
+
+QString FleetFlasher::profileOverride() const { return d->profileOverride; }
 void FleetFlasher::setUsbEnumerator(UsbProbe::Enumerator enumerator) { d->enumerator = std::move(enumerator); }
 void FleetFlasher::setPortProvider(PortProvider provider) { d->portProvider = std::move(provider); }
 

@@ -11,9 +11,11 @@
 #include <QTimer>
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include "app/Logging.h"
+#include "firmware/FleetFlasher.h"
 
 namespace {
 
@@ -64,6 +66,72 @@ QString layoutUnknownMessage()
                                        "or flash it in MASKROM mode");
 }
 
+/// (v0.8.0) The configfs file usb_adb.sh writes the gadget's product string to (RV1106G2_FACTS.md
+/// row 29): what an ADB board on Windows can tell about its profile besides its layout.
+QString productCommand()
+{
+    return QStringLiteral("cat /sys/kernel/config/usb_gadget/rockchip/strings/0x409/product");
+}
+
+/// The ADB gadget's product string as the USB enumeration reports it: Linux reads the sysfs
+/// `product`; Windows names the driver there (UsbProbe.h), so it is not asked at all - the
+/// enumeration is not run every 2 s on the GUI thread for a string that can never match.
+QString adbGadgetProductFromBus()
+{
+#ifdef Q_OS_LINUX
+    QString product;
+    int gadgets = 0;
+    for (const UsbDeviceInfo& device : UsbProbe::presentDevices()) {
+        if (device.isAdbGadget()) {
+            ++gadgets;
+            product = device.description.trimmed();
+        }
+    }
+    return gadgets == 1 ? product : QString();   // several (or none): no evidence for this board
+#else
+    return QString();
+#endif
+}
+
+/// The first non-empty line of a tool's output, trimmed.
+QString firstLine(const QString& output)
+{
+    const QStringList lines = output.split(QLatin1Char('\n'));
+    for (const QString& line : lines) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.isEmpty()) {
+            return trimmed;
+        }
+    }
+    return QString();
+}
+
+ProfileEvidence boardEvidence(const QString& overrideId, quint16 loaderPid = 0, const QString& product = QString(),
+                              const QString& layout = QString())
+{
+    ProfileEvidence evidence;
+    evidence.overrideId = overrideId;
+    evidence.loaderPid = loaderPid;
+    evidence.adbProduct = product;
+    evidence.layout = layout;
+    return evidence;
+}
+
+/// (v0.8.0) The single-board flow writes unaddressed: with two devices in download mode it cannot
+/// tell which one a WL reaches (SocFlasher.h, "Several devices in download mode").
+QString severalDevicesMessage(const QList<RockusbDevice>& devices)
+{
+    QStringList ids;
+    for (const RockusbDevice& device : devices) {
+        ids << device.locationId;
+    }
+    return QCoreApplication::translate("SocFlasher",
+                                       "several rockusb devices are in download mode (LocationIDs %1): the single-board flow "
+                                       "writes unaddressed and cannot tell them apart; reset the ones that are not this board "
+                                       "with `upgrade_tool -s <id> RD`, or flash them as a fleet with --serials")
+        .arg(ids.join(QStringLiteral(", ")));
+}
+
 } // namespace
 
 /**
@@ -75,15 +143,24 @@ QString layoutUnknownMessage()
  * The plan (planPartitions(), and the flow's step 5 in Loader mode) is `EXF` into the extract
  * folder followed by RockchipTool::planPartitions() against the layout: the image's own when its
  * env.img carries a readable mtdparts (the layout the images were built for; a different board
- * layout is logged as a warning), else mtdParts(). It is kept with its key (image path, image
- * mtime, board layout, folder) and the layout it used: the flow writes from a plan whose key
- * still matches, whose files still have the planned sizes and whose layout would still be the
- * same, re-plans otherwise, and waits for a plan that is already running (the tab starts one
- * whenever its image or layout changes). A plan whose image was unpacked already (only the
- * board layout changed) skips `EXF`. Step 2 makes the plan before `adb reboot loader` when the
- * board told no layout, so a board is never rebooted into a Loader mode nothing can be written
- * in. The partition writes then run one `WL` after the other from a copy of the selected rows,
- * then `RD`.
+ * layout is logged as a warning - and refused by the flow unless forced, rule 2), else
+ * mtdParts(). It is kept with its key (image path, image mtime, board layout, folder) and the
+ * layout it used: the flow writes from a plan whose key still matches, whose files still have
+ * the planned sizes and whose layout would still be the same, re-plans otherwise, and waits for
+ * a plan that is already running (the tab starts one whenever its image or layout changes). A
+ * plan whose image was unpacked already (only the board layout changed) skips `EXF`. Step 2 makes
+ * the plan before `adb reboot loader` in every case (v0.8.0; 0.7.0 only when the board told no
+ * layout), so a board is never rebooted into a Loader mode nothing can be written in, nor for an
+ * image the rules refuse. The partition writes then run one `WL` after the other from a copy of
+ * the selected rows, then `RD`.
+ *
+ * Board profiles (v0.8.0): `boardProfile` is the flow's detection (or the last query's), updated
+ * at step 1, step 2 (the layout, then the product string read once when nothing else told) and
+ * step 4 (the adopted device's PID); setFlowProfile() reports and logs it whenever it changes.
+ * applyProfileRules() is the one place the rules run: step 2 before the reboot, step 5 before the
+ * first WL, and rule 1 alone before UF. A question's answer is kept for the flow (layoutAnswer,
+ * loaderPartitionsAnswer); a handler may run a nested event loop, so the flow checks afterwards
+ * that it (and this object) still exist.
  */
 struct SocFlasher::Private
 {
@@ -182,6 +259,27 @@ struct SocFlasher::Private
     quint64 writeTotal = 0;                    ///< bytes of the whole queue
     quint64 writeDone = 0;                     ///< bytes of the partitions written completely
     QString writeStage;                        ///< "Writing boot (5 of 7)"
+
+    // ---- board profiles (v0.8.0) ---------------------------------------------------------
+    QString profileOverride;                   ///< a BoardProfiles::ids() entry or "" (anything else is stored as "")
+    bool forceLayout = false;
+    bool forceLoaderPartitions = false;
+    LayoutConflictHandler layoutHandler;
+    LoaderPartitionsHandler loaderPartitionsHandler;
+    ProfileDetection boardProfile;             ///< the flow's detection, or the last plain query's
+    bool flowProfileReported = false;          ///< the flow reported its first detection (a new flow always does)
+    bool queryProfileReported = false;         ///< a plain query reported one
+    ProfileDetection loggedImageProfile;
+    bool imageProfileLogged = false;           ///< "image profile: ..." went out in this flow
+    std::optional<bool> layoutAnswer;          ///< rule 2's question of this flow, once answered
+    std::optional<bool> loaderPartitionsAnswer;///< rule 3's question of this flow, once answered
+    bool layoutNoteLogged = false;
+    bool loaderNoteLogged = false;
+    QList<RockusbDevice> lastLdDownload;       ///< the download-mode devices the last query's LD listed
+    QString statusProduct;                     ///< the enumeration's product string of the ADB board the last query picked
+    QString flowProduct;                       ///< the product string read from the board in this flow (step 2)
+    bool productReadTried = false;             ///< step 2 asked the board for it in this flow
+    bool cameThroughStepTwo = false;           ///< the flow read the board's layout over ADB
 
     // ---- helpers -------------------------------------------------------------------------
 
@@ -283,6 +381,9 @@ struct SocFlasher::Private
                             .arg(device.vid, 4, 16, QLatin1Char('0'))
                             .arg(device.pid, 4, 16, QLatin1Char('0'))
                             .arg(device.locationId);
+        // (v0.8.0) Carried along, not compared: the profiles take the PID of a Loader device only.
+        result.pid = device.pid;
+        result.locationId = device.locationId;
         return result;
     }
 
@@ -321,12 +422,17 @@ struct SocFlasher::Private
         } else if (result.timedOut) {
             query.problem = QCoreApplication::translate("SocFlasher", "upgrade_tool LD timed out");
         }
-        // A device in Loader / Maskrom mode wins over everything else (usb_update.sh).
+        // A device in Loader / Maskrom mode wins over everything else (usb_update.sh); the first
+        // one is the status, as in 0.7.0 - the flow refuses when there are several (v0.8.0).
+        lastLdDownload.clear();
         for (const RockusbDevice& device : RockchipTool::parseDeviceList(result.outputText())) {
             if (isDownloadMode(device)) {
-                finishQuery(statusFromRockusb(device));
-                return;
+                lastLdDownload << device;
             }
+        }
+        if (!lastLdDownload.isEmpty()) {
+            finishQuery(statusFromRockusb(lastLdDownload.first()));
+            return;
         }
         if (!query.options.adb) {
             finishQuery(DeviceStatus());
@@ -359,6 +465,7 @@ struct SocFlasher::Private
             found.mode = DeviceStatus::Mode::Adb;
             found.serial = picked;
             found.detail = QStringLiteral("device");
+            statusProduct = adbGadgetProductFromBus();
             finishQuery(found);
             return;
         }
@@ -389,9 +496,228 @@ struct SocFlasher::Private
         auto then = std::move(query.then);
         query.then = nullptr;
         emit q->statusChanged(result);
+        if (!isRunning()) {
+            reportQueryProfile(result);   // a flow reports its own, in its order (overrideRefusal() first)
+        }
         if (then) {
             then(result);
         }
+    }
+
+    // ---- board profiles (v0.8.0) ------------------------------------------------------------
+
+    /// The evidence a status gives (SocFlasher.h "Board profiles"): a Loader device its PID (and the
+    /// owner's layout), an ADB board the enumeration's product string and the layout, a MASKROM
+    /// device - whose PID is the BootROM's - nothing but the override, and no board nothing at all.
+    ProfileEvidence evidenceForStatus(const DeviceStatus& seen) const
+    {
+        switch (seen.mode) {
+        case DeviceStatus::Mode::Loader:
+            return boardEvidence(profileOverride, seen.pid, QString(), mtdParts);
+        case DeviceStatus::Mode::Adb:
+            return boardEvidence(profileOverride, 0, statusProduct, mtdParts);
+        case DeviceStatus::Mode::Maskrom:
+        case DeviceStatus::Mode::NoDriver:
+        case DeviceStatus::Mode::None:
+            break;
+        }
+        return boardEvidence(profileOverride);
+    }
+
+    void reportQueryProfile(const DeviceStatus& seen)
+    {
+        const ProfileDetection detection = BoardProfiles::detectBoard(evidenceForStatus(seen));
+        if (queryProfileReported && detection == boardProfile) {
+            return;
+        }
+        queryProfileReported = true;
+        boardProfile = detection;
+        emit q->profileDetected(detection);
+    }
+
+    /// The flow's detection: reported and logged whenever it differs from the last one of this flow.
+    void setFlowProfile(const ProfileDetection& detection)
+    {
+        if (flowProfileReported && detection == boardProfile) {
+            return;
+        }
+        flowProfileReported = true;
+        boardProfile = detection;
+        log(detection.text());
+        emit q->profileDetected(detection);
+    }
+
+    QString boardProduct() const { return flowProduct.isEmpty() ? statusProduct : flowProduct; }
+
+    /// The image's profile as the rules see it: its RKFW header's chip tag, else the plan's env.img
+    /// layout (when the plan of this image exists and read one).
+    ProfileDetection computeImageProfile() const
+    {
+        const RkfwHeader header = RockchipTool::readRkfwHeader(imagePath);
+        ProfileEvidence evidence;
+        evidence.chipTag = header.valid ? header.chipTag : QString();
+        if (planValid && planKey.image == imagePath && planLayoutFromImage) {
+            evidence.layout = planLayout;
+        }
+        return BoardProfiles::detectImage(evidence);
+    }
+
+    static QString imageProfileLine(const ProfileDetection& image)
+    {
+        if (!image.known()) {
+            return QCoreApplication::translate("SocFlasher", "image profile: unknown (no chip tag or env.img layout matched a profile)");
+        }
+        return QCoreApplication::translate("SocFlasher", "image profile: %1 - %2").arg(image.profile.name, image.sourceText());
+    }
+
+    /// "image profile: ..." once per flow (again only when the plan changed what it says).
+    ProfileDetection imageProfileForRules()
+    {
+        const ProfileDetection image = computeImageProfile();
+        if (!imageProfileLogged || !(image == loggedImageProfile)) {
+            imageProfileLogged = true;
+            loggedImageProfile = image;
+            log(imageProfileLine(image));
+        }
+        return image;
+    }
+
+    /// Ends the flow when the last LD listed several devices in download mode (decision 17).
+    bool refuseSeveralDevices(const QList<RockusbDevice>& download)
+    {
+        if (download.size() <= 1) {
+            return false;
+        }
+        endFlow(Phase::Failed, false, severalDevicesMessage(download));
+        return true;
+    }
+
+    /// The device step 1 met, or the one the step-4 poll adopted: an override that contradicts a
+    /// Loader PID ends the flow; else the detection with the device's PID (a Loader device only).
+    bool adoptDownloadDevice(RockusbDevice::Mode mode, quint16 pid)
+    {
+        if (mode == RockusbDevice::Mode::Loader) {
+            const QString contradiction = ProfileRules::overrideRefusal(profileOverride, pid);
+            if (!contradiction.isEmpty()) {
+                endFlow(Phase::Failed, false, contradiction);
+                return false;
+            }
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, pid, boardProduct(), mtdParts)));
+            return true;
+        }
+        // MASKROM: its PID is the BootROM's (row 33). A board read over ADB in this flow keeps that
+        // evidence; one met in download mode is known by the override only.
+        setFlowProfile(BoardProfiles::detectBoard(
+            boardEvidence(profileOverride, 0, boardProduct(), cameThroughStepTwo ? mtdParts : QString())));
+        return true;
+    }
+
+    enum class RuleGate { Pass, Stop };
+
+    /// Rules 1-3 (ProfileRules), the one place they run: `rows` are the partitions about to be
+    /// written in row order; MASKROM mode (UF) applies rule 1 only. Stop = the flow ended (a
+    /// refusal) or is gone (a question's nested loop outlived it): the caller returns at once.
+    RuleGate applyProfileRules(const QStringList& rows, bool maskromMode)
+    {
+        const quint64 id = flowId;
+        const ProfileDetection image = imageProfileForRules();
+        const QString wrongImage = ProfileRules::imageRefusal(boardProfile, image);
+        if (!wrongImage.isEmpty()) {
+            endFlow(Phase::Failed, false, wrongImage);
+            return RuleGate::Stop;
+        }
+        if (maskromMode) {
+            return RuleGate::Pass;
+        }
+
+        // Rule 2: the image's env.img layout against the board's.
+        const QString imageLayout = planLayoutFromImage ? planLayout : QString();
+        const QString boardLayout = normalizedLayout(mtdParts);
+        const QString layoutText = ProfileRules::layoutRefusal(imageLayout, boardLayout, false);
+        if (!layoutText.isEmpty()) {
+            bool allowed = forceLayout;
+            if (!allowed && !layoutAnswer.has_value()) {
+                const LayoutConflictHandler handler = layoutHandler;   // a copy: the question may run an event loop
+                if (handler) {
+                    const QPointer<SocFlasher> self(q);
+                    const bool yes = handler(imageLayout, boardLayout);
+                    if (!self || id != flowId) {
+                        return RuleGate::Stop;
+                    }
+                    layoutAnswer = yes;
+                }
+            }
+            allowed = allowed || layoutAnswer.value_or(false);
+            if (!allowed) {
+                endFlow(Phase::Failed, false, layoutText);
+                return RuleGate::Stop;
+            }
+            if (!layoutNoteLogged) {
+                layoutNoteLogged = true;
+                QString note;
+                ProfileRules::layoutRefusal(imageLayout, boardLayout, true, &note);
+                qCWarning(lcFirmware).noquote() << note;
+                emit q->logLine(note);
+                if (id != flowId) {
+                    return RuleGate::Stop;
+                }
+            }
+        }
+
+        // Rule 3: idblock / uboot / env / meta on a board without a documented MASKROM entry.
+        const QString loaderText = ProfileRules::loaderPartitionRefusal(boardProfile.profile, rows, false);
+        if (!loaderText.isEmpty()) {
+            bool allowed = forceLoaderPartitions;
+            if (!allowed && !loaderPartitionsAnswer.has_value()) {
+                const LoaderPartitionsHandler handler = loaderPartitionsHandler;
+                if (handler) {
+                    QStringList names;
+                    for (const QString& row : rows) {
+                        if (FleetFlasher::bootloaderPartitions().contains(row) && !names.contains(row)) {
+                            names << row;
+                        }
+                    }
+                    const QPointer<SocFlasher> self(q);
+                    const BoardProfile profile = boardProfile.profile;
+                    const bool yes = handler(profile, names);
+                    if (!self || id != flowId) {
+                        return RuleGate::Stop;
+                    }
+                    loaderPartitionsAnswer = yes;
+                }
+            }
+            allowed = allowed || loaderPartitionsAnswer.value_or(false);
+            if (!allowed) {
+                endFlow(Phase::Failed, false, loaderText);
+                return RuleGate::Stop;
+            }
+            if (!loaderNoteLogged) {
+                loaderNoteLogged = true;
+                QString note;
+                ProfileRules::loaderPartitionRefusal(boardProfile.profile, rows, true, &note);
+                qCWarning(lcFirmware).noquote() << note;
+                emit q->logLine(note);
+                if (id != flowId) {
+                    return RuleGate::Stop;
+                }
+            }
+        }
+        return RuleGate::Pass;
+    }
+
+    /// The rows writePartitions() will write, resolved the same way without its size checks
+    /// (step 2 has the plan but writes nothing yet).
+    QStringList rowsToWrite() const
+    {
+        const bool named = !selectedNames.isEmpty();
+        QStringList names;
+        for (const PartitionImage& row : partitions) {
+            if ((named && !selectedNames.contains(row.name)) || !row.inLayout || !QFileInfo(row.file).isFile()) {
+                continue;
+            }
+            names << row.name;
+        }
+        return names;
     }
 
     // ---- the partition plan --------------------------------------------------------------
@@ -565,16 +891,18 @@ struct SocFlasher::Private
             failPlan(error.isEmpty() ? QCoreApplication::translate("SocFlasher", "the image lists no partition images") : error);
             return;
         }
-        // Where the layout came from, every plan: the image's env.img wins, because the env written
-        // with the partitions makes the board's kernel use that layout from the next boot on.
+        // Where the layout came from, every plan: the image's env.img is the one the rows are placed
+        // in, because the env written with the partitions makes the board's kernel use that layout
+        // from the next boot on. (v0.8.0: a flash over a board laid out differently is refused
+        // unless forced, rule 2; the plan says so.)
         const QList<MtdPartition> board = RockchipTool::parseMtdParts(key.layout);
         if (resolved.fromImage) {
             log(QCoreApplication::translate("SocFlasher", "layout from the image's env.img: %1").arg(resolved.layout));
             if (!board.isEmpty() && board != RockchipTool::parseMtdParts(resolved.layout)) {
                 const QString warning =
                     QCoreApplication::translate("SocFlasher",
-                                                "warning: the image's flash layout differs from the board's; the image's is "
-                                                "used. image: %1; board: %2")
+                                                "warning: the image's flash layout differs from the board's: the flash will refuse "
+                                                "unless --force-layout (the tab: the question). image: %1; board: %2")
                         .arg(resolved.layout, key.layout);
                 qCWarning(lcFirmware).noquote() << warning;
                 emit q->logLine(warning);
@@ -667,7 +995,26 @@ struct SocFlasher::Private
         progressParser = RockchipTool::ProgressParser();
         lineBuffer.clear();
         waitAnyBoard = false;
+        // A new flow: its own detection lines, questions and product read.
+        flowProfileReported = false;
+        imageProfileLogged = false;
+        layoutAnswer.reset();
+        loaderPartitionsAnswer.reset();
+        layoutNoteLogged = false;
+        loaderNoteLogged = false;
+        flowProduct.clear();
+        productReadTried = false;
+        cameThroughStepTwo = false;
         setPhase(Phase::Detecting);
+        // The image's chip tag is a file read (no tool): said at once when it names a profile; else
+        // once the plan has read the image's env.img layout (or before UF).
+        const ProfileDetection image = computeImageProfile();
+        if (image.known()) {
+            imageProfileForRules();
+            if (id != flowId) {
+                return true;   // a slot of logLine() ended it
+            }
+        }
         startQuery({true, true, true}, [this, id](const DeviceStatus& detected) {
             if (id == flowId && phase == Phase::Detecting) {
                 onDetected(detected);
@@ -731,20 +1078,43 @@ struct SocFlasher::Private
     // Step 1 -> 2 / 3 / 4
     void onDetected(const DeviceStatus& detected)
     {
+        // (v0.8.0) Several devices in download mode: nothing of this flow can be addressed to one.
+        if (refuseSeveralDevices(lastLdDownload)) {
+            return;
+        }
+        const quint64 id = flowId;
         switch (detected.mode) {
         case DeviceStatus::Mode::Loader:
         case DeviceStatus::Mode::Maskrom:
+            if (!adoptDownloadDevice(detected.mode == DeviceStatus::Mode::Maskrom ? RockusbDevice::Mode::Maskrom
+                                                                                  : RockusbDevice::Mode::Loader,
+                                     detected.pid)
+                || id != flowId) {
+                return;
+            }
             enterWaitingForLoader(false);
             break;
         case DeviceStatus::Mode::Adb:
+            setFlowProfile(BoardProfiles::detectBoard(evidenceForStatus(detected)));
+            if (id != flowId) {
+                return;
+            }
             adoptSerial(detected);
             rebootToLoader();
             break;
         case DeviceStatus::Mode::NoDriver:
+            setFlowProfile(BoardProfiles::detectBoard(evidenceForStatus(detected)));
+            if (id != flowId) {
+                return;
+            }
             log(detected.hint);
             enterWaitingForLoader(true);
             break;
         case DeviceStatus::Mode::None:
+            setFlowProfile(BoardProfiles::detectBoard(evidenceForStatus(detected)));
+            if (id != flowId) {
+                return;
+            }
             if (!detected.detail.isEmpty()) {
                 // Boards that are there but cannot be used (two ADB boards, an unauthorized one) or
                 // a tool that could not run: said before the MASKROM advice, which does not help then.
@@ -800,22 +1170,56 @@ struct SocFlasher::Private
             } else {
                 log(QCoreApplication::translate("SocFlasher", "the board's /proc/cmdline has no mtdparts"));
             }
-            if (!RockchipTool::parseMtdParts(mtdParts).isEmpty()) {
-                rebootIntoLoader();
+            cameThroughStepTwo = true;
+            // (v0.8.0) The layout may tell the profile now; when nothing tells it yet, the board is
+            // asked for its gadget's product string, once per flow.
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), mtdParts)));
+            if (id != flowId) {
                 return;
             }
-            // No layout from the board: the image may carry its own (env.img). Unpack it now, while
-            // the board still runs its firmware: after `reboot loader` it would be in Loader mode,
-            // where nothing can be written without a layout.
-            ensurePlan([this](bool ok, const QString& message) {
-                if (!ok) {
-                    endFlow(Phase::Failed, false, message);
-                } else if (planLayout.isEmpty()) {
-                    endFlow(Phase::Failed, false, layoutUnknownMessage());
-                } else {
-                    rebootIntoLoader();
-                }
-            });
+            if (!boardProfile.known() && !productReadTried) {
+                readBoardProduct();
+                return;
+            }
+            planThenReboot();
+        });
+    }
+
+    /// Step 2, when the layout told no profile: the product string usb_adb.sh wrote (row 29). A
+    /// failure or an empty answer leaves the profile unknown; the flow goes on either way.
+    void readBoardProduct()
+    {
+        productReadTried = true;
+        const quint64 id = flowId;
+        ToolInvocation* read = tracked(adb->shell(productCommand()));
+        stepInvocation = read;
+        QObject::connect(read, &ToolInvocation::finished, q, [this, id](const ToolResult& result) {
+            if (id != flowId || result.cancelled) {
+                return;
+            }
+            const bool answered = result.started && !result.timedOut && result.exitCode == 0;
+            flowProduct = answered ? firstLine(result.outputText()) : QString();
+            setFlowProfile(BoardProfiles::detectBoard(boardEvidence(profileOverride, 0, boardProduct(), mtdParts)));
+            if (id != flowId) {
+                return;
+            }
+            planThenReboot();
+        });
+    }
+
+    /// Step 2's end: the plan first in every case (the CLI and the tab plan at image selection, so
+    /// it is current there and no EXF runs), then the rules, then `adb reboot loader` - a board is
+    /// never rebooted into a Loader mode nothing can be written in, nor for an image it refuses.
+    void planThenReboot()
+    {
+        ensurePlan([this](bool ok, const QString& message) {
+            if (!ok) {
+                endFlow(Phase::Failed, false, message);
+            } else if (planLayout.isEmpty()) {
+                endFlow(Phase::Failed, false, layoutUnknownMessage());
+            } else if (applyProfileRules(rowsToWrite(), false) == RuleGate::Pass) {
+                rebootIntoLoader();
+            }
         });
     }
 
@@ -864,9 +1268,20 @@ struct SocFlasher::Private
                     return;
                 }
                 if (seen.mode == DeviceStatus::Mode::Loader || seen.mode == DeviceStatus::Mode::Maskrom) {
+                    if (refuseSeveralDevices(lastLdDownload)) {
+                        return;
+                    }
                     log(QCoreApplication::translate("SocFlasher", "board is in download mode"));
-                    startFlash(seen.mode == DeviceStatus::Mode::Maskrom ? RockusbDevice::Mode::Maskrom : RockusbDevice::Mode::Loader);
+                    const RockusbDevice::Mode mode =
+                        seen.mode == DeviceStatus::Mode::Maskrom ? RockusbDevice::Mode::Maskrom : RockusbDevice::Mode::Loader;
+                    if (adoptDownloadDevice(mode, seen.pid) && id == flowId) {
+                        startFlash(mode);
+                    }
                 } else if (seen.mode == DeviceStatus::Mode::Adb) {
+                    setFlowProfile(BoardProfiles::detectBoard(evidenceForStatus(seen)));
+                    if (id != flowId) {
+                        return;
+                    }
                     adoptSerial(seen);
                     rebootToLoader();
                 } else {
@@ -881,12 +1296,24 @@ struct SocFlasher::Private
             if (id != flowId || phase != Phase::WaitingForLoader || result.cancelled) {
                 return;
             }
+            QList<RockusbDevice> download;
             for (const RockusbDevice& device : RockchipTool::parseDeviceList(result.outputText())) {
                 if (isDownloadMode(device)) {
-                    log(QCoreApplication::translate("SocFlasher", "board is in download mode"));
-                    startFlash(device.mode);
-                    return;
+                    download << device;
                 }
+            }
+            if (refuseSeveralDevices(download)) {
+                return;
+            }
+            if (!download.isEmpty()) {
+                const RockusbDevice device = download.first();
+                log(QCoreApplication::translate("SocFlasher", "board is in download mode"));
+                // (v0.8.0) The adopted device is detected again with its PID: a board that came
+                // through step 2 without a readable layout (or through step 3) is known now.
+                if (adoptDownloadDevice(device.mode, device.pid) && id == flowId) {
+                    startFlash(device.mode);
+                }
+                return;
             }
             pollAgain();
         });
@@ -896,9 +1323,13 @@ struct SocFlasher::Private
     {
         if (phase == Phase::WaitingForLoader) {
             if (waitClock.elapsed() >= qint64(waitTimeoutSeconds) * 1000) {
-                endFlow(Phase::Failed, false,
-                        QCoreApplication::translate("SocFlasher", "board did not enter MASKROM/Loader within %1 s")
-                            .arg(waitTimeoutSeconds));
+                // A profile never changes the wait (the configured one); it adds its hint (D7).
+                QString message = QCoreApplication::translate("SocFlasher", "board did not enter MASKROM/Loader within %1 s")
+                                      .arg(waitTimeoutSeconds);
+                if (boardProfile.known()) {
+                    message += boardProfile.profile.loaderWaitHint();
+                }
+                endFlow(Phase::Failed, false, message);
                 return;
             }
         } else if (phase == Phase::WaitingForAdb) {
@@ -929,8 +1360,13 @@ struct SocFlasher::Private
     // Step 5: the method follows from the download mode
     void startFlash(RockusbDevice::Mode mode)
     {
-        setPhase(Phase::Flashing);
         const bool maskrom = mode == RockusbDevice::Mode::Maskrom;
+        // MASKROM mode applies rule 1 alone, before anything is written (UF writes the whole image;
+        // the board has its recovery route by evidence). Loader mode's rules run at step 5.
+        if (maskrom && applyProfileRules({}, true) != RuleGate::Pass) {
+            return;
+        }
+        setPhase(Phase::Flashing);
         // The path as upgrade_tool gets it (RockchipTool: native separators).
         log(QCoreApplication::translate("SocFlasher", "flashing %1 (%2 mode)")
                 .arg(QDir::toNativeSeparators(imagePath), maskrom ? QStringLiteral("Maskrom") : QStringLiteral("Loader")));
@@ -1161,6 +1597,11 @@ struct SocFlasher::Private
         QStringList names;
         for (const PartitionImage& row : std::as_const(queue)) {
             names << row.name;
+        }
+        // (v0.8.0) The rules before the first WL, for every flow, with the detection as it stands
+        // now (a board that came through step 2 gets the same answers and no second question).
+        if (applyProfileRules(names, false) != RuleGate::Pass) {
+            return;
         }
         log(QCoreApplication::translate("SocFlasher", "writing %1 of %2 partitions (%3 bytes): %4")
                 .arg(queue.size())
@@ -1464,6 +1905,39 @@ void SocFlasher::setSelectedPartitions(const QStringList& names)
 }
 
 QStringList SocFlasher::selectedPartitions() const { return d->selectedNames; }
+
+// ---- Board profiles (v0.8.0) -----------------------------------------------------------------
+
+void SocFlasher::setProfileOverride(const QString& id)
+{
+    const std::optional<BoardProfile> profile = BoardProfiles::byId(id);
+    d->profileOverride = profile ? profile->id : QString();
+}
+
+QString SocFlasher::profileOverride() const { return d->profileOverride; }
+void SocFlasher::setForceLayout(bool on) { d->forceLayout = on; }
+bool SocFlasher::forceLayout() const { return d->forceLayout; }
+void SocFlasher::setForceLoaderPartitions(bool on) { d->forceLoaderPartitions = on; }
+bool SocFlasher::forceLoaderPartitions() const { return d->forceLoaderPartitions; }
+void SocFlasher::setLayoutConflictHandler(LayoutConflictHandler handler) { d->layoutHandler = std::move(handler); }
+void SocFlasher::setLoaderPartitionsHandler(LoaderPartitionsHandler handler) { d->loaderPartitionsHandler = std::move(handler); }
+ProfileDetection SocFlasher::detectedProfile() const { return d->boardProfile; }
+ProfileDetection SocFlasher::imageProfile() const { return d->computeImageProfile(); }
+
+// ---- layout-pl / verify-rl (v0.8.0): compile-only placeholders until those packages land -------
+
+SocFlasher::LayoutSource SocFlasher::layoutSource() const { return LayoutSource::None; }
+
+QString SocFlasher::layoutSourceText(LayoutSource source)
+{
+    Q_UNUSED(source);
+    return QString();
+}
+
+void SocFlasher::setVerifyAfterWrite(bool on) { Q_UNUSED(on); }
+bool SocFlasher::verifyAfterWrite() const { return false; }
+QList<ReadBackResult> SocFlasher::verifyResults() const { return {}; }
+
 bool SocFlasher::isRunning() const { return d->isRunning(); }
 SocFlasher::Phase SocFlasher::phase() const { return d->phase; }
 SocFlasher::DeviceStatus SocFlasher::lastStatus() const { return d->status; }

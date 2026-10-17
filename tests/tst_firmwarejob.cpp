@@ -296,7 +296,18 @@ private slots:
     void pullFlashWithoutPackage();
     void pullFlashWritesEveryPartition();
 
+    // ---- Board profiles (v0.8.0) ---------------------------------------------------------------
+    void imageHeaderAndProfile();
+    void boardProfileFromStatusAndLayout();
+    void fleetRefusesWrongImageWithOverride();
+    void fleetRefusesLoaderPartitionsOnStackedPlan();
+    void mcuRefusedOnPowerCutProfile();
+    void maskromInstructionsPerOverride();
+    void handlersReachTheFlasher();
+    void boardProfileIgnoresMaskromPid();
+
 private:
+    void mcuProfileFromProductString();   ///< (v0.8.0) mcuRefusedOnPowerCutProfile()'s variant (decision 3)
     QString tempPath(const QString& name) const { return m_tempDir.filePath(name); }
     QString caseDir(const QString& name) const { return tempPath(QStringLiteral("case%1-%2").arg(m_caseNumber).arg(name)); }
 
@@ -1726,11 +1737,24 @@ void Tst_firmwarejob::layoutFromTheImage()
     QCOMPARE(job->plannedImage(), image);
     QCOMPARE(job->selectedPartitions(), nodeNames());
     Recorder rec(job.get());
+    // (v0.8.0) The remembered board layout differs from the image's: rule 2 refuses the flash
+    // (0.5.1 wrote the image's layout silently), headless - no question, nothing written.
     job->flashSoc();
     QVERIFY(rec.waitForOperation());
+    QVERIFY(!rec.lastOperation().ok);
+    QVERIFY2(rec.lastOperation().message.startsWith(QStringLiteral("the image's flash layout differs from the board's (image: %1; board: %2)")
+                                                         .arg(kNodeMtdParts, older)),
+             qPrintable(rec.lastOperation().message));
+    QCOMPARE(wlCommands(runner).size(), qsizetype(0));
+    // --force-layout: the image's layout is written, with the note.
+    job->setForceLayout(true);
+    job->flashSoc();
+    QVERIFY(rec.waitForOperation(2));
     QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
     QCOMPARE(wlCommands(runner).size(), qsizetype(7));
     QVERIFY(rec.logText().contains(QStringLiteral("flash layout in use (from the image's env.img)")));
+    QVERIFY(rec.logText().contains(QStringLiteral("warning: the image's flash layout differs from the board's; the image's is used "
+                                                  "(--force-layout)")));
 }
 
 void Tst_firmwarejob::refreshStatusSkippedWhileBusy()
@@ -2290,6 +2314,430 @@ void Tst_firmwarejob::pullFlashWritesEveryPartition()
     QVERIFY(job->allPartitionsSelected());
     QVERIFY(job->socFlasher()->selectedPartitions().isEmpty());
     QVERIFY(rec.logText().contains(QStringLiteral("Partitions: every partition of the image")));
+}
+
+// =======================================================================================
+// Board profiles (v0.8.0)
+// =======================================================================================
+
+namespace {
+
+/// The plan of `job` is Ready with `rows` rows.
+bool waitForRows(const FirmwareJob& job, qsizetype rows)
+{
+    return QTest::qWaitFor([&]() { return job.planState() == FirmwareJob::PlanState::Ready && job.partitions().size() == rows; },
+                           kOpTimeoutMs);
+}
+
+SocFlasher::DeviceStatus adbStatus(const QString& serial = QStringLiteral("0225ce3c8d8d6e44"))
+{
+    SocFlasher::DeviceStatus board;
+    board.mode = SocFlasher::DeviceStatus::Mode::Adb;
+    board.serial = serial;
+    board.detail = QStringLiteral("device");
+    return board;
+}
+
+const QString kPowerRefusal = QStringLiteral("the CC1310 of a Stacked (RV1106G2) board holds the SoC's power (SOC_PWR_EN): rebooting it "
+                                             "into its bootloader can switch the SoC off and cut the update; refused until confirmed - "
+                                             "--confirm-soc-power (the tab: confirm the question) once the carrier's CC1310 bootloader is "
+                                             "known to hold SOC_PWR_EN (the 14 Oct 2026 build or later)");
+
+} // namespace
+
+void Tst_firmwarejob::imageHeaderAndProfile()
+{
+    FakeToolRunner runner;
+    scriptSocFlash(runner, kLdLoader);
+    auto job = makeJob(&runner);
+    Recorder rec(job.get());
+    QVERIFY(!job->imageHeader().valid);   // no image yet
+    QVERIFY(!job->imageProfile().known());
+    const QString image = caseDir(QStringLiteral("g2/update.img"));
+    QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+    QVERIFY(job->setImagePath(image));
+    const RkfwHeader header = job->imageHeader();
+    QVERIFY(header.valid);
+    QCOMPARE(header.chipTag, QStringLiteral("1106"));
+    QCOMPARE(header.version, QStringLiteral("0.0.00"));
+    QCOMPARE(header.buildTime, QDateTime(QDate(2026, 10, 13), QTime(21, 45, 50)));
+    QCOMPARE(job->imageProfile().profile.id, QStringLiteral("stacked"));
+    QCOMPARE(job->imageProfile().source, ProfileDetection::Source::ChipTag);
+    const qsizetype using_ = rec.log.indexOf(QStringLiteral("Using the local image ") + QDir::toNativeSeparators(image));
+    const qsizetype headerLine = rec.log.indexOf(QStringLiteral("image: update.img, chip tag 1106, built 2026-10-13 21:45:50"));
+    const qsizetype profileLine = rec.log.indexOf(QStringLiteral("image profile: Stacked (RV1106G2) - from the image's chip tag 1106"));
+    QVERIFY2(using_ >= 0 && headerLine == using_ + 1 && profileLine == headerLine + 1, qPrintable(rec.logText()));
+    job->refreshImage();   // the same image: not described again
+    QCOMPARE(rec.log.count(QStringLiteral("image: update.img, chip tag 1106, built 2026-10-13 21:45:50")), qsizetype(1));
+
+    // An image that is not RKFW is refused as before (no header line of its own) ...
+    const QString wrong = caseDir(QStringLiteral("g2/wrong.img"));
+    QVERIFY(writeFile(wrong, QByteArray("ABCD") + QByteArray(200, '\0')));
+    QVERIFY(!job->setImagePath(wrong));
+    QVERIFY(!rec.logText().contains(QStringLiteral("image: wrong.img")));
+    // ... and an RKFW whose header is cut short is used, the header logged as unreadable.
+    const QString cut = caseDir(QStringLiteral("g2/cut.img"));
+    QVERIFY(writeFile(cut, QByteArray("RKFW") + QByteArray(16, '\0')));
+    QVERIFY(job->setImagePath(cut));
+    QVERIFY(rec.log.contains(QStringLiteral("image: cut.img: RKFW header unreadable (header truncated)")));
+    QVERIFY(!job->imageHeader().valid);
+}
+
+void Tst_firmwarejob::boardProfileFromStatusAndLayout()
+{
+    FakeToolRunner runner;
+    runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), kLdLoaderStacked);
+    auto job = makeJob(&runner);
+    QSignalSpy changed(job.get(), &FirmwareJob::boardProfileChanged);
+    QVERIFY(!job->boardProfile().known());   // before any status
+    const SocFlasher::DeviceStatus board = adbStatus();
+    job->setMtdParts(kStackedMtdParts, board.serial);   // a layout remembered for this board: no read
+    emit job->socFlasher()->statusChanged(board);
+    QCOMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));
+    QCOMPARE(job->boardProfile().source, ProfileDetection::Source::BoardLayout);
+    QCOMPARE(changed.count(), qsizetype(1));
+    QCOMPARE(changed.last().at(0).value<ProfileDetection>(), job->boardProfile());
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("shell"))), 0);
+    job->setProfileOverride(QStringLiteral("node"));
+    QCOMPARE(job->profileOverride(), QStringLiteral("node"));
+    QCOMPARE(job->boardProfile().profile.id, QStringLiteral("node"));
+    QCOMPARE(job->boardProfile().source, ProfileDetection::Source::Option);
+    QCOMPARE(changed.count(), qsizetype(2));
+    QCOMPARE(job->socFlasher()->profileOverride(), QStringLiteral("node"));   // handed on at once
+    job->setProfileOverride(QStringLiteral("nope"));                          // anything else is ""
+    QVERIFY(job->profileOverride().isEmpty());
+    QCOMPARE(job->boardProfile().source, ProfileDetection::Source::BoardLayout);
+    QCOMPARE(changed.count(), qsizetype(3));
+    // A board in Loader mode: its U-Boot's PID.
+    QSignalSpy statuses(job.get(), &FirmwareJob::statusChanged);
+    job->refreshStatus();
+    QTRY_COMPARE(statuses.count(), qsizetype(1));
+    QCOMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));
+    QCOMPARE(job->boardProfile().source, ProfileDetection::Source::LoaderPid);
+    QCOMPARE(job->boardProfile().evidence, QStringLiteral("0x110c"));
+    QCOMPARE(changed.count(), qsizetype(4));
+}
+
+void Tst_firmwarejob::fleetRefusesWrongImageWithOverride()
+{
+    FakeToolRunner runner;
+    scriptSocFlash(runner, kLdLoader);
+    auto job = makeJob(&runner);
+    const QString image = caseDir(QStringLiteral("stacked-withenv/update.img"));
+    QVERIFY(writeFile(image, rkfwBytes(4096, QStringLiteral("1106"))));
+    QVERIFY(job->setImagePath(image));
+    QVERIFY(waitForRows(*job, kStackedPartitionCount));
+    QVERIFY(job->layoutKnown());   // the stacked image carries its layout
+    job->setSelectedPartitions({QStringLiteral("boot")});
+    FirmwareJob::FleetOptions options;
+    options.boards = {{QStringLiteral("A"), QStringLiteral("0225ce3c8d8d6e44")}};
+    job->setFleetOptions(options);
+    job->setProfileOverride(QStringLiteral("node"));
+    Recorder rec(job.get());
+    const int before = static_cast<int>(runner.invocations().size());
+    job->flashFleet();
+    QVERIFY(rec.waitForOperation());
+    QVERIFY(!rec.lastOperation().ok);
+    QCOMPARE(rec.lastOperation().message,
+             QStringLiteral("the image is for another board: its chip tag 1106 is the Stacked (RV1106G2)'s, the board is Node (RV1106BG2) "
+                            "(set by --profile node (or the Board profile box)); nothing was written"));
+    QCOMPARE(static_cast<int>(runner.invocations().size()), before);   // no adb, no upgrade_tool: only the plan's EXF ran
+    QCOMPARE(runner.count(exfPattern()), 1);
+    QVERIFY(job->fleetBoards().isEmpty());
+}
+
+void Tst_firmwarejob::fleetRefusesLoaderPartitionsOnStackedPlan()
+{
+    const QString refusal = QStringLiteral("idblock: loader partition(s) on a Stacked (RV1106G2) board, whose MASKROM entry is not "
+                                           "documented: a bad write could not be recovered; refused until the MASKROM route is known - "
+                                           "--force-loader-partitions (the tab: confirm the question) writes them anyway; nothing was "
+                                           "written");
+    const QRegularExpression adbDevices(QStringLiteral("^adb devices$"));
+    const auto prepare = [this](FakeToolRunner& runner, int caseIndex) {
+        scriptSocFlash(runner, kLdLoader);
+        auto job = makeJob(&runner);
+        const QString image = caseDir(QStringLiteral("stacked-withenv-%1/update.img").arg(caseIndex));
+        writeFile(image, rkfwBytes(4096, QStringLiteral("1106")));
+        job->setImagePath(image);
+        waitForRows(*job, kStackedPartitionCount);
+        job->setSelectedPartitions({QStringLiteral("idblock"), QStringLiteral("boot")});
+        FirmwareJob::FleetOptions options;
+        options.boards = {{QStringLiteral("A"), QStringLiteral("0225ce3c8d8d6e44")}};
+        job->setFleetOptions(options);
+        return job;
+    };
+    {
+        FakeToolRunner runner;
+        auto job = prepare(runner, 1);
+        Recorder rec(job.get());
+        job->flashFleet();
+        QVERIFY(rec.waitForOperation());
+        QCOMPARE(rec.lastOperation().message, refusal);
+        QCOMPARE(runner.count(adbDevices), 0);   // before the fleet starts
+    }
+    {
+        FakeToolRunner runner;   // --force-loader-partitions: the note, and the fleet starts
+        auto job = prepare(runner, 2);
+        job->setForceLoaderPartitions(true);
+        Recorder rec(job.get());
+        job->flashFleet();
+        QVERIFY(rec.waitForOperation());
+        QVERIFY(rec.log.contains(QStringLiteral("warning: writing loader partition(s) idblock on a Stacked (RV1106G2) board without a "
+                                                "documented MASKROM entry (--force-loader-partitions)")));
+        QCOMPARE(runner.count(adbDevices), 1);
+        QCOMPARE(job->fleetFlasher()->planProfile().profile.id, QStringLiteral("stacked"));   // the image's: the plan's profile
+    }
+    for (const bool answer : {true, false}) {
+        FakeToolRunner runner;   // the question (the tab's handler), asked once
+        auto job = prepare(runner, answer ? 3 : 4);
+        int asked = 0;
+        QStringList names;
+        job->setLoaderPartitionsHandler([&](const BoardProfile& profile, const QStringList& rows) {
+            ++asked;
+            names = rows;
+            return answer && profile.id == QLatin1String("stacked");
+        });
+        Recorder rec(job.get());
+        job->flashFleet();
+        QVERIFY(rec.waitForOperation());
+        QCOMPARE(asked, 1);
+        QCOMPARE(names, QStringList{QStringLiteral("idblock")});
+        QCOMPARE(runner.count(adbDevices), answer ? 1 : 0);
+        if (!answer) {
+            QCOMPARE(rec.lastOperation().message, refusal);
+        }
+    }
+}
+
+void Tst_firmwarejob::mcuRefusedOnPowerCutProfile()
+{
+    FakeMcu mcu;
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    const QRegularExpression forward(QStringLiteral("forward tcp:0"));
+    const auto prepare = [&](FakeToolRunner& runner) {
+        scriptMcuBridge(runner, bridge.port());
+        auto job = makeJob(&runner);
+        job->setPackagePath(dataFile("firmware-0.8.1.pkg"));
+        job->setRole(CcProtocol::RoleRx);
+        job->setMtdParts(kStackedMtdParts, QStringLiteral("0225ce3c8d8d6e44"));
+        emit job->socFlasher()->statusChanged(adbStatus());
+        return job;
+    };
+    {
+        FakeToolRunner runner;
+        auto job = prepare(runner);
+        QCOMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));
+        Recorder rec(job.get());
+        job->updateMcu();
+        QVERIFY(rec.waitForOperation());
+        QVERIFY(!rec.lastOperation().ok);
+        QCOMPARE(rec.lastOperation().message, kPowerRefusal);
+        QCOMPARE(runner.count(forward), 0);   // refused before McuLink::open()
+        job->setMcuRole();                    // Set role reboots the CC1310 the same way
+        QVERIFY(rec.waitForOperation(2));
+        QCOMPARE(rec.lastOperation().name, QStringLiteral("set-role"));
+        QCOMPARE(rec.lastOperation().message, kPowerRefusal);
+        QCOMPARE(runner.count(forward), 0);
+    }
+    {
+        FakeToolRunner runner;   // --confirm-soc-power: the note, then the update through the bridge
+        auto job = prepare(runner);
+        job->setConfirmSocPower(true);
+        QVERIFY(job->confirmSocPower());
+        Recorder rec(job.get());
+        job->updateMcu();
+        QVERIFY(rec.waitForOperation(1, kChainTimeoutMs));
+        QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+        QVERIFY(rec.log.contains(QStringLiteral("warning: the CC1310 of a Stacked (RV1106G2) board holds the SoC's power; proceeding as "
+                                                "confirmed (--confirm-soc-power)")));
+        QCOMPARE(runner.count(forward), 1);
+        QTRY_VERIFY(!job->mcuLink()->isOpen());
+    }
+    for (const bool answer : {false, true}) {
+        FakeToolRunner runner;   // the tab's question instead of the flag
+        auto job = prepare(runner);
+        int asked = 0;
+        job->setSocPowerHandler([&asked, answer](const BoardProfile& profile) {
+            ++asked;
+            return answer && profile.cc1310ResetCutsSocPower;
+        });
+        Recorder rec(job.get());
+        job->setMcuRole();
+        QVERIFY(rec.waitForOperation(1, kChainTimeoutMs));
+        QCOMPARE(asked, 1);
+        QCOMPARE(rec.lastOperation().ok, answer);
+        if (!answer) {
+            QCOMPARE(rec.lastOperation().message, kPowerRefusal);
+        }
+        QTRY_VERIFY(!job->mcuLink()->isOpen());
+    }
+    {
+        // Pull & Flash: the MCU step refuses with the same text (a stacked image, the board known by
+        // the override; the MCU runs another version, so an update is due).
+        ChainRig rig;
+        rig.machine.image = rkfwBytes(256 * 1024, QStringLiteral("1106"));
+        *rig.versionReply = "OK version=0.8.0 role=rx\n";
+        QVERIFY(rig.start(caseDir(QStringLiteral("work")), caseDir(QStringLiteral("cache"))));
+        FirmwareJob* job = rig.job.get();
+        QVERIFY(job->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+        job->setProfileOverride(QStringLiteral("stacked"));
+        Recorder rec(job);
+        job->pullAndFlash();
+        QVERIFY(rec.waitForOperation(1, kChainTimeoutMs));
+        QVERIFY(!rec.lastOperation().ok);
+        QCOMPARE(rec.lastOperation().message, QStringLiteral("stopped at Update MCU: ") + kPowerRefusal);
+        QCOMPARE(rig.runner.count(QRegularExpression(QStringLiteral("^upgrade_tool UF "))), 1);   // the SoC was flashed
+        QCOMPARE(rig.runner.count(forward), 0);
+    }
+    mcuProfileFromProductString();
+}
+
+void Tst_firmwarejob::mcuProfileFromProductString()
+{
+    // Decision 3: a G2 whose /proc/cmdline carries no mtdparts is asked for its gadget's product
+    // string once - what makes rule 4 bite on the board it exists for.
+    FakeMcu mcu;
+    FakeMcuServer bridge(&mcu);
+    QVERIFY(bridge.listen());
+    const QRegularExpression cmdline(QStringLiteral("cat /proc/cmdline"));
+    const QRegularExpression forward(QStringLiteral("forward tcp:0"));
+    {
+        FakeToolRunner runner;
+        runner.addScript(cmdline, "console=ttyFIQ0 root=/dev/rd0 rootwait\n");
+        runner.addScript(productPattern(), kProductStacked);
+        scriptMcuBridge(runner, bridge.port());
+        auto job = makeJob(&runner);
+        QVERIFY(job->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+        job->setRole(CcProtocol::RoleRx);
+        QSignalSpy changed(job.get(), &FirmwareJob::boardProfileChanged);
+        QSignalSpy finished(job.get(), &FirmwareJob::layoutReadFinished);
+        emit job->socFlasher()->statusChanged(adbStatus());
+        QTRY_COMPARE(finished.count(), qsizetype(1));   // the read ends after the product string
+        QCOMPARE(finished.first().at(1).toBool(), false);
+        const QStringList commands = runner.invocations();
+        QCOMPARE(commands, (QStringList{QStringLiteral("adb -s 0225ce3c8d8d6e44 shell \"cat /proc/cmdline\""),
+                                        QStringLiteral("adb -s 0225ce3c8d8d6e44 shell \"cat "
+                                                       "/sys/kernel/config/usb_gadget/rockchip/strings/0x409/product\"")}));
+        QCOMPARE(job->boardProfile().profile.id, QStringLiteral("stacked"));
+        QCOMPARE(job->boardProfile().source, ProfileDetection::Source::AdbProduct);
+        QCOMPARE(job->boardProfile().evidence, QStringLiteral("rv1106g-stacked-gc2083"));
+        QVERIFY(changed.count() >= 1);
+        QCOMPARE(changed.last().at(0).value<ProfileDetection>().source, ProfileDetection::Source::AdbProduct);
+        emit job->socFlasher()->statusChanged(adbStatus());   // seen again: neither read runs again
+        QCoreApplication::processEvents();
+        QCOMPARE(runner.invocations().size(), qsizetype(2));
+        Recorder rec(job.get());
+        job->updateMcu();
+        QVERIFY(rec.waitForOperation());
+        QCOMPARE(rec.lastOperation().message, kPowerRefusal);
+        QCOMPARE(runner.count(forward), 0);
+    }
+    {
+        FakeToolRunner runner;   // the product read unhandled (exit 127): unknown, and the 0.7.0 update
+        runner.addScript(cmdline, "console=ttyFIQ0 root=/dev/rd0 rootwait\n");
+        scriptMcuBridge(runner, bridge.port());
+        auto job = makeJob(&runner);
+        QVERIFY(job->setPackagePath(dataFile("firmware-0.8.1.pkg")));
+        job->setRole(CcProtocol::RoleRx);
+        QSignalSpy finished(job.get(), &FirmwareJob::layoutReadFinished);
+        emit job->socFlasher()->statusChanged(adbStatus());
+        QTRY_COMPARE(finished.count(), qsizetype(1));
+        QVERIFY(!job->boardProfile().known());
+        Recorder rec(job.get());
+        job->updateMcu();
+        QVERIFY(rec.waitForOperation(1, kChainTimeoutMs));
+        QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+        QVERIFY(rec.log.contains(QStringLiteral("profile: unknown (no --profile, no Loader PID, product string or flash layout matched a "
+                                                "profile)")));
+        QCOMPARE(runner.count(forward), 1);
+        QTRY_VERIFY(!job->mcuLink()->isOpen());
+    }
+}
+
+void Tst_firmwarejob::maskromInstructionsPerOverride()
+{
+    FakeToolRunner runner;
+    auto job = makeJob(&runner);
+    QCOMPARE(job->maskromInstructions(),
+             QStringLiteral("No board found: hold the MASKROM button while plugging in the USB-C cable (or while power-cycling the board); "
+                            "waiting up to 30 s"));
+    job->setLoaderWaitSeconds(45);
+    job->setProfileOverride(QStringLiteral("stacked"));
+    QCOMPARE(job->maskromInstructions(),
+             QStringLiteral("No board found: the Stacked (RV1106G2) board has no documented MASKROM entry: put it into Loader mode from a "
+                            "running system (adb reboot loader, or \"reboot loader\" on its console); waiting up to 45 s"));
+    job->setProfileOverride(QStringLiteral("node"));
+    QVERIFY(job->maskromInstructions().startsWith(QStringLiteral("No board found: hold the MASKROM button")));
+}
+
+void Tst_firmwarejob::handlersReachTheFlasher()
+{
+    // The board runs an older layout (its /proc/cmdline), the image carries the Node's: rule 2 asks
+    // the job's handler - once, although the rules run at step 2 and again at step 5.
+    const QString older = QStringLiteral("sfc_nor:64K(env),256K@64K(idblock),256K(uboot),384K(meta),4M(boot),5M(rootfs),2M(userdata)");
+    FakeToolRunner runner;
+    auto inLoader = std::make_shared<bool>(false);
+    runner.addHandler(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), [inLoader](FakeToolInvocation* i) {
+        i->emitOutput(*inLoader ? kLdLoader : kLdEmpty);
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("^adb( -s \\S+)? devices$")), kAdbBoard);
+    runner.addHandler(QRegularExpression(QStringLiteral("reboot loader$")), [inLoader](FakeToolInvocation* i) {
+        *inLoader = true;
+        i->finish(0);
+    });
+    runner.addScript(QRegularExpression(QStringLiteral("cat /proc/cmdline")), "console=ttyFIQ0 mtdparts=" + older.toLatin1() + "\n");
+    scriptSocFlash(runner, kLdLoader);
+    auto job = makeJob(&runner);
+    int asked = 0;
+    QStringList seen;
+    job->setLayoutConflictHandler([&](const QString& image, const QString& board) {
+        ++asked;
+        seen = {image, board};
+        return true;
+    });
+    const QString image = tempPath(QStringLiteral("withenv-%1/update.img").arg(m_caseNumber));   // nodeExtractor: "/withenv" gives env.img the layout
+    QVERIFY(writeFile(image, rkfwBytes()));
+    QVERIFY(job->setImagePath(image));
+    QVERIFY(waitForPlan(*job));
+    Recorder rec(job.get());
+    job->flashSoc();
+    QVERIFY(rec.waitForOperation());
+    QVERIFY2(rec.lastOperation().ok, qPrintable(rec.lastOperation().message));
+    QCOMPARE(asked, 1);
+    QCOMPARE(seen, (QStringList{kNodeMtdParts, older}));
+    QCOMPARE(wlCommands(runner).size(), qsizetype(7));
+    QCOMPARE(runner.count(QRegularExpression(QStringLiteral("reboot loader$"))), 1);
+}
+
+void Tst_firmwarejob::boardProfileIgnoresMaskromPid()
+{
+    const auto statusOf = [](const QByteArray& ld, const QString& overrideId) {
+        FakeToolRunner runner;
+        runner.addScript(QRegularExpression(QStringLiteral("^upgrade_tool LD$")), ld);
+        auto job = makeJob(&runner);
+        job->setProfileOverride(overrideId);
+        QSignalSpy statuses(job.get(), &FirmwareJob::statusChanged);
+        job->refreshStatus();
+        if (!QTest::qWaitFor([&statuses]() { return statuses.count() > 0; }, kOpTimeoutMs)) {
+            return std::make_pair(SocFlasher::DeviceStatus(), ProfileDetection());   // no status: every check below fails
+        }
+        return std::make_pair(job->lastStatus(), job->boardProfile());
+    };
+    auto [loader, fromPid] = statusOf(kLdLoaderStacked, QString());
+    QCOMPARE(loader.mode, SocFlasher::DeviceStatus::Mode::Loader);
+    QCOMPARE(fromPid.profile.id, QStringLiteral("stacked"));
+    QCOMPARE(fromPid.source, ProfileDetection::Source::LoaderPid);
+    auto [maskrom, none] = statusOf(kLdMaskrom, QString());
+    QCOMPARE(maskrom.mode, SocFlasher::DeviceStatus::Mode::Maskrom);
+    QCOMPARE(maskrom.pid, quint16(0x110c));   // carried along ...
+    QVERIFY(!none.known());                   // ... but the BootROM's PID is no evidence
+    QCOMPARE(none.source, ProfileDetection::Source::None);
+    auto [maskrom2, byOption] = statusOf(kLdMaskrom, QStringLiteral("node"));
+    QCOMPARE(maskrom2.pid, quint16(0x110c));
+    QCOMPARE(byOption.profile.id, QStringLiteral("node"));
+    QCOMPARE(byOption.source, ProfileDetection::Source::Option);
 }
 
 QTEST_GUILESS_MAIN(Tst_firmwarejob)
