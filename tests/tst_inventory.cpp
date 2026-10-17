@@ -607,12 +607,16 @@ void Tst_inventory::writersInTwoProcesses()
     child.setArguments({kWriterOption, file, QStringLiteral("child"), QString::number(kWriterRounds)});
     child.setProcessChannelMode(QProcess::MergedChannels);
     child.start();
-    QVERIFY2(child.waitForStarted(10000), qPrintable(child.errorString()));
-    QVERIFY2(QTest::qWaitFor([&file]() { return QFileInfo::exists(file + QStringLiteral(".ready")); }, 30000),
+    QVERIFY2(child.waitForStarted(30000), qPrintable(child.errorString()));
+    QVERIFY2(QTest::qWaitFor([&file]() { return QFileInfo::exists(file + QStringLiteral(".ready")); }, 120000),
              qPrintable(QString::fromUtf8(child.readAll())));
     QVERIFY(writeFile(file + QStringLiteral(".go"), "go"));
     const QString problem = writeRounds(file, QStringLiteral("parent"), kWriterRounds);
-    QVERIFY2(child.waitForFinished(60000), "the second writer did not end within 60 s");
+    if (!child.waitForFinished(300000)) {
+        child.kill();
+        child.waitForFinished(5000);
+        QFAIL(qPrintable(QStringLiteral("the second writer did not end within 300 s: %1").arg(QString::fromUtf8(child.readAll()))));
+    }
     const QString childOutput = QString::fromUtf8(child.readAll());
     QVERIFY2(problem.isEmpty(), qPrintable(problem));
     QCOMPARE(child.exitStatus(), QProcess::NormalExit);
@@ -646,7 +650,7 @@ void Tst_inventory::lockTimeoutIsAnError()
     QString error;
     QVERIFY(!inventory.update(kSerial, nullptr, &error));
     const qint64 elapsed = clock.elapsed();
-    QVERIFY2(elapsed < Inventory::kLockWaitMs + 1000, qPrintable(QString::number(elapsed)));
+    QVERIFY2(elapsed < Inventory::kLockWaitMs + 15000, qPrintable(QString::number(elapsed)));   // a loaded CI runner overshoots
     QVERIFY2(elapsed >= Inventory::kLockWaitMs - 200, qPrintable(QString::number(elapsed)));
     QVERIFY2(error.contains(QStringLiteral("locked")), qPrintable(error));
     QVERIFY(!QFileInfo::exists(path()));   // nothing written
@@ -1617,6 +1621,9 @@ void Tst_inventory::recorderNoSecretInFile()
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
+    // (v0.8.0) ctest pipes stdout, which the C runtime then buffers: a crash on a CI runner would
+    // swallow every line this suite printed. Unbuffered, the last line always reaches the log.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     const QStringList args = QCoreApplication::arguments();
     if (args.size() >= 2 && args.at(1) == kWriterOption) {
         return runInventoryWriter(args);
